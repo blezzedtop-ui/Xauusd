@@ -33,7 +33,7 @@ APP_TITLE = os.getenv("APP_TITLE", "Trading SaaS Analytics Platform")
 MARKET_PROVIDER = os.getenv("MARKET_PROVIDER", "auto").lower()
 REALMARKET_API_KEY = os.getenv("REALMARKET_API_KEY", "").strip()
 REALMARKET_API_BASE = os.getenv("REALMARKET_API_BASE", "https://api.realmarketapi.com").strip().rstrip("/")
-TWELVE_DATA_API_KEY = ""  # disabled: RealMarketAPI-only mode
+TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
 FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "").strip()
 TRADING_ECONOMICS_API_KEY = os.getenv("TRADING_ECONOMICS_API_KEY", "").strip()
 CALENDAR_PROVIDER = os.getenv("CALENDAR_PROVIDER", "auto").strip().lower()
@@ -56,7 +56,7 @@ APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8000").strip().rstrip
 REQUIRE_EMAIL_DELIVERY = os.getenv("REQUIRE_EMAIL_DELIVERY", "false").lower() == "true"
 SMTP_USE_STARTTLS = os.getenv("SMTP_USE_STARTTLS", "true").lower() == "true"
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
-AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", "60"))
+AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", "10"))
 CANDLE_LIMIT = max(50, min(int(os.getenv("CANDLE_LIMIT", "220")), 500))
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "12"))
 NODE_MARKET_URL = os.getenv("NODE_MARKET_URL", "http://127.0.0.1:3001").strip().rstrip("/")
@@ -195,7 +195,7 @@ TIMEFRAME_SECONDS = {
 VALID_INTERVALS = tuple(TIMEFRAME_SECONDS.keys())
 AI_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 MARKET_HISTORY_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
-MARKET_HISTORY_CACHE_TTL = int(os.getenv("MARKET_HISTORY_CACHE_TTL", "120"))
+MARKET_HISTORY_CACHE_TTL = int(os.getenv("MARKET_HISTORY_CACHE_TTL", "10"))
 
 
 def db() -> Session:
@@ -815,7 +815,16 @@ async def get_chart_history(symbol: str, interval: str, days: int = 31) -> tuple
             return data, "live", "RealMarketAPI recent candles"
         except MarketDataError as exc:
             errors.append(str(exc))
-    # If the paid/live feed rejects a timeframe because of plan limits or a
+    # Twelve Data is the secondary live market source. RealMarketAPI remains
+    # primary when configured, while Twelve Data fills provider/plan/timeframe
+    # gaps without changing the TradingView chart implementation.
+    if TWELVE_DATA_API_KEY:
+        try:
+            data = await fetch_twelvedata_candles(clean_symbol(symbol), interval, min(CANDLE_LIMIT, 260))
+            return data, "live", "Twelve Data live market feed"
+        except MarketDataError as exc:
+            errors.append(str(exc))
+    # If the paid/live feeds reject a timeframe because of plan limits or a
     # temporary provider validation issue, keep the analysis engine usable with
     # the public gold-futures fallback. This is explicitly marked as a proxy.
     try:
@@ -934,7 +943,7 @@ async def multi_timeframe(symbol: str) -> dict[str, Any]:
     # Never let one unavailable timeframe break the entire analysis page.
     out: dict[str, Any] = {}
     errors: dict[str, str] = {}
-    for tf in ("5min", "15min", "1h", "4h", "1day"):
+    for tf in ("1min", "5min", "15min", "30min", "1h", "4h", "1day"):
         try:
             candles_data, mode, warning = await get_candles(symbol, tf, 80)
             if len(candles_data) < 2:
@@ -1009,9 +1018,9 @@ async def _calendar_forexfactory(days: int = 2) -> dict[str, Any]:
         impact = (get(row, "impact") or "").strip().upper()
         if currency not in {"USD", "US"}:
             continue
-        # Forex Factory export marks impact as High/Medium/Low.
-        if impact and impact != "HIGH":
-            continue
+        # Keep all USD impact levels so the calendar shows the full US schedule.
+        if impact not in {"HIGH","MEDIUM","LOW"}:
+            impact = "LOW" if not impact else impact
         date_value = (get(row, "date") or "").strip()
         time_value = (get(row, "time") or "").strip()
         event_name = (get(row, "event", "title") or "").strip()
@@ -1070,42 +1079,54 @@ async def _calendar_tradingeconomics(days: int = 2) -> dict[str, Any]:
         })
     return {"mode": "live", "provider": "tradingeconomics", "events": events, "warning": None if events else "No USD HIGH IMPACT events found."}
 
-async def economic_calendar(days: int = 2) -> dict[str, Any]:
-    """Economic calendar with provider fallback: Trading Economics/Finnhub key, then public Forex Factory weekly export."""
-    providers = []
-    if CALENDAR_PROVIDER in {"tradingeconomics", "auto"} and TRADING_ECONOMICS_API_KEY:
-        providers.append(_calendar_tradingeconomics)
-    if CALENDAR_PROVIDER in {"finnhub", "auto"} and FINNHUB_API_KEY:
-        providers.append(None)  # handled below to preserve the existing Finnhub implementation
-    if CALENDAR_PROVIDER in {"forexfactory", "auto"}:
-        providers.append(_calendar_forexfactory)
-
-    if CALENDAR_PROVIDER == "finnhub" and FINNHUB_API_KEY:
-        # Original Finnhub path.
-        start = datetime.now(timezone.utc).date()
-        end = start + timedelta(days=days)
-        try:
-            async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
-                response = await client.get("https://finnhub.io/api/v1/calendar/economic", params={"from": start.isoformat(), "to": end.isoformat(), "token": FINNHUB_API_KEY})
-                response.raise_for_status()
-                data = response.json()
-        except Exception as exc:
-            return {"mode": "error", "events": [], "warning": f"Finnhub calendar request failed: {exc}"}
-        events=[]
-        for item in data.get("economicCalendar", []) or []:
-            impact = str(item.get("impact", "")).upper()
-            if item.get("country", "").upper() not in {"UNITED STATES", "US", "USA"} or impact not in {"HIGH", "HIGH IMPACT"}:
-                continue
-            events.append({"time":item.get("time"),"country":item.get("country"),"event":item.get("event"),"impact":"HIGH","estimate":item.get("estimate"),"forecast":item.get("estimate"),"previous":item.get("prev"),"actual":item.get("actual"),"unit":item.get("unit"),"source":"Finnhub"})
-        return {"mode":"live","provider":"finnhub","events":events,"warning":None if events else "No USD HIGH IMPACT events found."}
-
-    for fn in providers:
-        if fn is None:
+async def _calendar_finnhub(days: int) -> dict[str, Any]:
+    start = datetime.now(timezone.utc).date()
+    end = start + timedelta(days=days)
+    try:
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            response = await client.get(
+                "https://finnhub.io/api/v1/calendar/economic",
+                params={"from": start.isoformat(), "to": end.isoformat(), "token": FINNHUB_API_KEY},
+            )
+            response.raise_for_status()
+            data = response.json()
+    except Exception as exc:
+        return {"mode": "error", "events": [], "warning": f"Finnhub calendar request failed: {exc}"}
+    events = []
+    for item in data.get("economicCalendar", []) or []:
+        country = str(item.get("country", "")).upper()
+        if country not in {"UNITED STATES", "US", "USA", "USD"}:
             continue
-        result = await fn(days)
+        impact = str(item.get("impact", "")).upper() or "UNKNOWN"
+        events.append({
+            "time": item.get("time"),
+            "country": item.get("country") or "USD",
+            "event": item.get("event"),
+            "impact": impact,
+            "estimate": item.get("estimate"),
+            "forecast": item.get("estimate"),
+            "previous": item.get("prev"),
+            "actual": item.get("actual"),
+            "unit": item.get("unit"),
+            "source": "Finnhub",
+        })
+    events.sort(key=lambda x: str(x.get("time") or ""))
+    return {"mode": "live", "provider": "finnhub", "events": events, "warning": None if events else "No USA/USD economic events found."}
+
+
+async def economic_calendar(days: int = 2) -> dict[str, Any]:
+    """USA/USD economic calendar. Finnhub is preferred when configured; public Forex Factory is fallback."""
+    if FINNHUB_API_KEY and CALENDAR_PROVIDER in {"auto", "finnhub"}:
+        result = await _calendar_finnhub(days)
+        if result.get("mode") == "live":
+            return result
+        if CALENDAR_PROVIDER == "finnhub":
+            return result
+    if CALENDAR_PROVIDER in {"auto", "forexfactory"}:
+        result = await _calendar_forexfactory(days)
         if result.get("events") or result.get("mode") == "live":
             return result
-    return {"mode": "unavailable", "events": [], "warning": "Economic Calendar source is unavailable. Check internet access or configure a calendar API key."}
+    return {"mode": "unavailable", "events": [], "warning": "Economic Calendar source is unavailable. Configure FINNHUB_API_KEY or check internet access."}
 
 
 def next_candle_close(timestamp: int, interval: str, now_ts: float | None = None) -> int:
@@ -1662,7 +1683,7 @@ market_stream = MarketStream()
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    return {"status":"ok","provider":live_provider() or MARKET_PROVIDER,"realmarket_configured":bool(REALMARKET_API_KEY),"twelvedata_configured":False,"market_api_configured":bool(live_provider()),"calendar_configured":bool(FINNHUB_API_KEY),"ai_configured":bool(OPENAI_API_KEY),"database":DATABASE_URL.split(":",1)[0],"realtime_stream":bool(live_provider()),"allow_demo":ALLOW_DEMO,"timestamp":datetime.now(timezone.utc).isoformat()}
+    return {"status":"ok","provider":live_provider() or MARKET_PROVIDER,"realmarket_configured":bool(REALMARKET_API_KEY),"twelvedata_configured":bool(TWELVE_DATA_API_KEY),"market_api_configured":bool(live_provider()),"calendar_configured":bool(FINNHUB_API_KEY),"ai_configured":bool(OPENAI_API_KEY),"database":DATABASE_URL.split(":",1)[0],"realtime_stream":bool(live_provider()),"allow_demo":ALLOW_DEMO,"timestamp":datetime.now(timezone.utc).isoformat()}
 
 @app.get("/api/market/diagnostics")
 async def market_diagnostics() -> dict[str, Any]:
@@ -1914,6 +1935,13 @@ async def advanced_signals(symbol: str, authorization: str | None = Header(defau
     # Calendar endpoint may not provide an explicit active window; keep signal generation usable and expose calendar separately.
     return await build_advanced_signals(clean_symbol(symbol), news_blocked=blocked)
 
+
+@app.get("/api/v1/signals/live/{symbol:path}")
+async def live_signals(symbol: str) -> dict[str, Any]:
+    # Every request recomputes signals from the current live candle feed.
+    # No demo/static signal data is used.
+    result = await build_advanced_signals(clean_symbol(symbol), news_blocked=False)
+    return {**result, "mode": "live", "source": "RealMarketAPI candle feed"}
 
 @app.post("/api/v1/signals/save-advanced")
 async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
