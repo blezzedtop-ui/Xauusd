@@ -819,7 +819,13 @@ async def get_chart_history(symbol: str, interval: str, days: int = 31) -> tuple
 
 
 async def fetch_realmarket_price(symbol: str) -> float:
-    data = await rm_get("price", {"symbolCode": realmarket_symbol(symbol)})
+    # RealMarketAPI /api/v1/price requires BOTH symbolCode and timeFrame.
+    # The previous build omitted timeFrame, which caused HTTP 400 validation
+    # errors and prevented quote/analysis/signal modules from receiving data.
+    data = await rm_get("price", {
+        "symbolCode": realmarket_symbol(symbol),
+        "timeFrame": "M1",
+    })
     if isinstance(data, dict):
         candidates = [data.get(k) for k in ("price","Price","closePrice","ClosePrice","Close","last","Last","Bid","bid")]
         for value in candidates:
