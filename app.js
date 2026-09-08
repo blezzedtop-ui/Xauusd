@@ -48,7 +48,8 @@ async function loadMain(force=false){
     renderAnalysis(d);
     if(d.current_price!=null) $('price').textContent=fmt(d.current_price);
     countdownData=d.candle||countdownData; updateCountdown();
-    await loadPivots(pivotInterval);
+    // Pivot is independent: never block the main chart/analysis render on it.
+    loadPivots(pivotInterval).catch(()=>{});
     return d;
   }catch(e){
     $('signalReason').textContent='LIVE analysis error: '+(e.message||'unknown');
@@ -130,7 +131,7 @@ async function loadHistory(){if(!token){$('history').innerHTML='<tr><td colspan=
 function componentText(v){if(v==null)return '—';if(typeof v==='object'){if(v.type)return v.type+(v.low!=null?' · '+fmt(v.low)+'–'+fmt(v.high):'');if(v.support!=null)return 'S '+fmt(v.support)+' · R '+fmt(v.resistance);return JSON.stringify(v)}return String(v)}
 function tfName(tf){return ({'1min':'1 MIN','5min':'5 MIN','15min':'15 MIN','30min':'30 MIN','1h':'1 HOUR','4h':'4 HOUR','1day':'1 DAY'})[tf]||tf;}
 function advCard(tf,x){const sig=x.signal||'WAIT', cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait', badge=sig==='BUY'?'badge-buy':sig==='SELL'?'badge-sell':'badge-wait';const c=x.components||{};return `<div class="advanced-card ${cls}"><div class="advanced-head"><div><div class="mini">${tfName(tf)}</div><div class="advanced-signal ${badge}">${sig}</div></div><span class="pill">${x.confidence||0}%</span></div><div class="mini" style="margin-top:4px">Score ${x.score??0} · ${x.setup||'—'}</div><div class="grid4" style="margin-top:9px"><div class="metric"><small>Entry</small><b>${fmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${fmt(x.stop_loss)}</b></div><div class="metric"><small>TP1</small><b>${fmt((x.take_profit||[])[0])}</b></div><div class="metric"><small>TP2</small><b>${fmt((x.take_profit||[])[1])}</b></div></div><div class="component-grid"><div class="component"><small>ICT</small><b>${componentText(c['ICT'])}</b></div><div class="component"><small>SNR</small><b>${componentText(c['SNR'])}</b></div><div class="component"><small>SNR Malaysia</small><b>${componentText(c['SNR Malaysia'])}</b></div><div class="component"><small>Order Block</small><b>${componentText(c['Order Block'])}</b></div><div class="component"><small>FVG</small><b>${componentText(c['FVG'])}</b></div><div class="component"><small>Liquidity</small><b>${componentText(c['Liquidity'])}</b></div><div class="component"><small>Trend Line</small><b>${componentText(c['Trend Line'])}</b></div><div class="component"><small>Global Trend</small><b>${componentText(c['Global Trend Line'])}</b></div><div class="component"><small>BOS</small><b>${componentText(c['BOS'])}</b></div><div class="component"><small>CHOCH</small><b>${componentText(c['CHOCH'])}</b></div><div class="component"><small>Internal</small><b>${componentText(c['Internal Structure'])}</b></div><div class="component"><small>RSI / ATR</small><b>${fmt(x.rsi)} / ${fmt(x.atr)}</b></div></div><div class="advanced-actions"><div class="mini">${x.reason||'—'}</div>${sig==='BUY'||sig==='SELL'?`<button class="btn" data-save-advanced="${tf}">Saqlash</button>`:''}</div></div>`}
-async function loadAdvancedSignals(){if(!token){showToast('Avval tizimga kiring');$('authModal').classList.add('show');return}$('advancedStatus').textContent='7 timeframe hisoblanmoqda…';$('advancedGrid').innerHTML='<div class="card">Signal hisoblanmoqda...</div>';try{const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);const order=['1min','5min','15min','30min','1h','4h','1day'];$('advancedGrid').innerHTML=order.map(tf=>advCard(tf,d.timeframes?.[tf]||{})).join('');$('advancedStatus').textContent=`${symbol} · ${new Date(d.generated_at).toLocaleString()} · har bir timeframe alohida`; }catch(e){$('advancedStatus').textContent=e.message;$('advancedGrid').innerHTML='<div class="card">Signal yuklanmadi.</div>'}}
+async function loadAdvancedSignals(){$('advancedStatus').textContent='7 timeframe hisoblanmoqda…';$('advancedGrid').innerHTML='<div class="card">Signal hisoblanmoqda...</div>';try{const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);const order=['1min','5min','15min','30min','1h','4h','1day'];$('advancedGrid').innerHTML=order.map(tf=>advCard(tf,d.timeframes?.[tf]||{})).join('');$('advancedStatus').textContent=`${symbol} · ${new Date(d.generated_at).toLocaleString()} · har bir timeframe alohida`; }catch(e){$('advancedStatus').textContent=e.message;$('advancedGrid').innerHTML='<div class="card">Signal yuklanmadi.</div>'}}
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-save-advanced]');if(!b)return;const tf=b.dataset.saveAdvanced;b.disabled=true;try{await api(`/api/v1/signals/save-advanced?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}`,{method:'POST'});showToast(tfName(tf)+' signal saqlandi');loadStats();if($('historySection').classList.contains('active'))loadHistory()}catch(err){showToast(err.message)}finally{b.disabled=false}});
 async function loadAutoSignals(){
   try{
@@ -146,7 +147,7 @@ async function loadAutoSignals(){
     if(token){ try{ const saved=await api(`/api/v1/signals/auto-record?symbol=${encodeURIComponent(symbol)}`,{method:'POST'}); if(saved.count) { loadStats(); if($('historySection').classList.contains('active')) loadHistory(); } }catch(_){} }
   }catch(e){$('autoSignalsGrid').innerHTML=`<div class="card">Live Signals error: ${e.message}</div>`}
 }
-function openSection(id){document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));$(id).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',mtfSection:'Multi-Timeframe Analysis',aiSection:'AI Smart Analysis',signalSection:'Signal Lab',signalsSection:'Signals',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',historySection:'Signal History'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>mountTradingView('chart2',interval),50);setTimeout(()=>window.dispatchEvent(new Event('resize')),150);}if(id==='overview'){setTimeout(()=>mountTradingView('chart',interval),50);}if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='aiSection')loadAISmart(aiInterval);if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals()}
+function openSection(id){const target=$(id);if(!target)return;document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',mtfSection:'Multi-Timeframe Analysis',aiSection:'AI Smart Analysis',signalSection:'Signal Lab',signalsSection:'Signals',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',historySection:'Signal History'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>mountTradingView('chart2',interval),50);setTimeout(()=>window.dispatchEvent(new Event('resize')),150);}if(id==='overview'){setTimeout(()=>mountTradingView('chart',interval),50);}if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='aiSection')loadAISmart(aiInterval);if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals()}
 
 document.addEventListener('click',e=>{
   const b=e.target.closest('[data-pivot-interval]');
@@ -238,5 +239,91 @@ function connectMarketStream(){
  }catch(e){showToast('Real-time stream could not start')}
 }
 function setAuth(mode){authMode=mode;$('authTitle').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSubmit').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSwitch').textContent=mode==='login'?'Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish':'Hisobingiz bormi? Kirish';$('email').placeholder=mode==='login'?'Login yoki elektron pochta':'Elektron pochta';$('password').required=mode==='login';$('password').style.display=mode==='login'?'block':'none';$('password').value='';$('authMsg').textContent=mode==='register'?'Email kiriting — login va parol avtomatik yaratiladi.':''}
-$('timeframes').addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b)setTf(b.dataset.interval)});document.querySelectorAll('.tfbar').forEach(bar=>bar.addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b)setTf(b.dataset.interval)}));document.querySelectorAll('.nav button').forEach(b=>b.addEventListener('click',()=>openSection(b.dataset.section)));$('saveSignal').onclick=saveSignal;$('refreshAdvanced').onclick=loadAdvancedSignals;$('refreshStats').onclick=loadStats;$('refreshCalendar').onclick=loadCalendar;$('refreshHistory').onclick=loadHistory;$('authBtn').onclick=()=>{ setAuth('login'); $('authMsg').textContent=''; $('authModal').classList.add('show'); setTimeout(()=>$('email').focus(),50); }; $('authSwitch').onclick=()=>setAuth(authMode==='login'?'register':'login');async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(()=>{});token='';localStorage.removeItem('trading_token');$('plan').textContent='Guest';$('authBtn').textContent='Kirish';loadStats();loadHistory();$('authModal').classList.add('show');$('authMsg').textContent='Tizimdan chiqildi. Qayta kirish talab qilinadi.';showToast('Tizimdan chiqildi')};$('authForm').onsubmit=async e=>{e.preventDefault();$('authMsg').textContent='Tekshirilmoqda…';try{const path=authMode==='login'?'/api/auth/login':'/api/auth/register';const payload=authMode==='login'?{username:$('email').value,password:$('password').value}:{email:$('email').value};const d=await api(path,{method:'POST',body:JSON.stringify(payload)});token=d.token;localStorage.setItem('trading_token',token);$('plan').textContent=d.user?.plan||'free';$('authBtn').textContent='Chiqish'; if(authMode==='register' && d.credentials){ $('authMsg').textContent=(d.email_message||'Hisob yaratildi')+' Login: '+d.credentials.login+' | Parol: '+d.credentials.password; } else { $('authMsg').textContent=''; } $('authModal').classList.remove('show');showToast(authMode==='login'?'Muvaffaqiyatli kirdingiz':'Hisob yaratildi');loadStats();loadHistory()}catch(err){$('authMsg').textContent=err.message}};
-(async()=>{try{if(token){try{const me=await api('/api/auth/me');$('plan').textContent=me.plan||'free';$('authBtn').textContent='Chiqish'}catch(_){token='';localStorage.removeItem('trading_token')}}if(!token){$('authModal').classList.add('show');$('authBtn').textContent='Kirish'}const nd=await nodeMarketHealth(); if(nd?.ok) $('change').textContent='Cloud market gateway ready'; else window.__NODE_MARKET_DISABLED=true; const d=await api('/api/health');try{const md=await api('/api/market/diagnostics');if(md.live_ready){const ok=Object.entries(md.providers||{}).filter(([,v])=>v.ok).map(([k])=>k.toUpperCase()).join(' + ');$('mode').textContent='LIVE '+(ok||'READY');$('mode').style.color='var(--green)'}else{$('mode').textContent=md?.providers?.realmarketapi?.ok?'LIVE CHECK':'MARKET CHECK';$('mode').style.color='var(--amber)';$('change').textContent=Object.entries(md.providers||{}).map(([k,v])=>k+': '+(v.error||'not configured')).join(' | ')}}catch(_){}mountTradingView('chart', interval);await loadMain(true);await Promise.all([loadStats(),loadHistory(),loadSessions(),loadMtf()]);await quoteHeartbeat();setInterval(async()=>{await quoteHeartbeat();if($('historySection').classList.contains('active'))loadHistory();if($('overview').classList.contains('active'))loadStats()},1000);setInterval(async()=>{if(document.visibilityState==='visible'){loadAnalysisOnly().catch(()=>{});if($('mtfSection').classList.contains('active'))loadMtf();if($('signalSection').classList.contains('active'))loadSelectedSignal(signalInterval);if($('signalsSection').classList.contains('active'))loadAutoSignals();if($('calendarSection').classList.contains('active'))loadCalendar()}},10000);setInterval(()=>{if(document.visibilityState==='visible'&&$('aiSection').classList.contains('active'))loadAISmart(aiInterval)},30000);setInterval(loadSessions,30000);setInterval(updateCountdown,250);setInterval(()=>{if($('calendarSection').classList.contains('active'))loadCalendar();if($('signalsSection').classList.contains('active'))loadAutoSignals()},60000);}catch(e){showToast(e.message)}})();
+document.querySelectorAll('.tfbar').forEach(bar=>bar.addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b && bar.contains(b))setTf(b.dataset.interval)}));document.querySelectorAll('.nav button').forEach(b=>b.addEventListener('click',()=>openSection(b.dataset.section)));$('saveSignal').onclick=saveSignal;$('refreshAdvanced').onclick=loadAdvancedSignals;$('refreshStats').onclick=loadStats;$('refreshCalendar').onclick=loadCalendar;$('refreshHistory').onclick=loadHistory;$('authBtn').onclick=()=>{ setAuth('login'); $('authMsg').textContent=''; $('authModal').classList.add('show'); setTimeout(()=>$('email').focus(),50); }; $('authSwitch').onclick=()=>setAuth(authMode==='login'?'register':'login');async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(()=>{});token='';localStorage.removeItem('trading_token');$('plan').textContent='Guest';$('authBtn').textContent='Kirish';loadStats();loadHistory();$('authModal').classList.remove('show');$('authMsg').textContent='';showToast('Tizimdan chiqildi')};$('authForm').onsubmit=async e=>{
+ e.preventDefault();
+ const identity=String($('email').value||'').trim();
+ const password=String($('password').value||'');
+ $('authMsg').textContent='Tekshirilmoqda…';
+ if(!identity || (authMode==='login' && !password)){ $('authMsg').textContent='Login va parolni kiriting.'; return; }
+ try{
+   const path=authMode==='login'?'/api/auth/login':'/api/auth/register';
+   const payload=authMode==='login'?{username:identity,password:password}:{email:identity};
+   const d=await api(path,{method:'POST',body:JSON.stringify(payload)});
+   if(!d || !d.token) throw Error('Server login javobida token qaytarmadi.');
+   token=d.token;
+   localStorage.setItem('trading_token',token);
+   $('plan').textContent=d.user?.plan||'free';
+   $('authBtn').textContent='Chiqish';
+   if(authMode==='register' && d.credentials){
+     $('authMsg').textContent=(d.email_message||'Hisob yaratildi')+' Login: '+d.credentials.login+' | Parol: '+d.credentials.password;
+     return;
+   }
+   $('authMsg').textContent='';
+   $('authModal').classList.remove('show');
+   showToast(authMode==='login'?'Muvaffaqiyatli kirdingiz':'Hisob yaratildi');
+   try{loadStats()}catch(_){}
+   try{loadHistory()}catch(_){}
+ }catch(err){
+   console.error('AUTH ERROR',err);
+   $('authMsg').textContent='Kirish xatosi: '+(err?.message||'Server xatosi');
+ }
+};
+// Auth fallback: keep the login modal usable even if a non-auth dashboard module fails during startup.
+document.addEventListener('click',e=>{
+  const btn=e.target.closest && e.target.closest('#authBtn');
+  if(!btn) return;
+  const modal=$('authModal');
+  if(!modal) return;
+  if(btn.textContent.trim()==='Chiqish'){ return; }
+  try{setAuth('login'); $('authMsg').textContent=''; modal.classList.add('show'); setTimeout(()=>$('email').focus(),50);}catch(err){console.error('AUTH UI ERROR',err);}
+});
+(async()=>{
+  // Stable startup: chart first, then independent data modules. No login modal
+  // may block navigation or public market analysis. Authentication is only
+  // required for saving signals/history.
+  try{
+    mountTradingView('chart', interval);
+    $('mode').textContent='CONNECTING…';
+    try{
+      const md=await api('/api/market/diagnostics');
+      if(md.live_ready){
+        const ok=Object.entries(md.providers||{}).filter(([,v])=>v.ok).map(([k])=>k.toUpperCase()).join(' + ');
+        $('mode').textContent='LIVE '+(ok||'READY');
+        $('mode').style.color='var(--green)';
+      }
+    }catch(_){ $('mode').textContent='LIVE RETRY'; }
+    // Never let one slow/failing module prevent the rest of the dashboard.
+    loadMain(true).catch(e=>{$('signalReason').textContent='Live analysis unavailable: '+(e.message||'server error')});
+    quoteHeartbeat().catch(()=>{});
+    loadSessions().catch(()=>{});
+    if(token){
+      try{const me=await api('/api/auth/me');$('plan').textContent=me.plan||'free';$('authBtn').textContent='Chiqish'}
+      catch(_){token='';localStorage.removeItem('trading_token')}
+      loadStats().catch(()=>{}); loadHistory().catch(()=>{});
+    }
+    // Lightweight quote heartbeat; do not hammer REST APIs.
+    setInterval(()=>quoteHeartbeat().catch(()=>{}),3000);
+    // Main signal/analysis refresh.
+    setInterval(()=>{
+      if(document.visibilityState!=='visible') return;
+      loadAnalysisOnly().catch(()=>{});
+      if($('signalsSection').classList.contains('active')) loadAutoSignals().catch(()=>{});
+      if($('signalSection').classList.contains('active')) loadSelectedSignal(signalInterval).catch(()=>{});
+    },15000);
+    // Expensive modules refresh only while visible.
+    setInterval(()=>{
+      if(document.visibilityState!=='visible') return;
+      if($('mtfSection').classList.contains('active')) loadMtf().catch(()=>{});
+      if($('aiSection').classList.contains('active')) loadAISmart(aiInterval).catch(()=>{});
+      if($('calendarSection').classList.contains('active')) loadCalendar().catch(()=>{});
+      if($('sessionsSection').classList.contains('active')) loadSessions().catch(()=>{});
+      if(token && $('historySection').classList.contains('active')) loadHistory().catch(()=>{});
+    },30000);
+    setInterval(updateCountdown,250);
+  }catch(e){
+    console.error('Dashboard init error',e);
+    $('mode').textContent='UI READY';
+    // Keep the navigation/chart usable even when the backend is temporarily down.
+    try{mountTradingView('chart', interval)}catch(_){}
+  }
+})();;

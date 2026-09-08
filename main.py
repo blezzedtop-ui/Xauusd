@@ -197,6 +197,10 @@ AI_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 MARKET_HISTORY_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 MARKET_HISTORY_CACHE_TTL = int(os.getenv("MARKET_HISTORY_CACHE_TTL", "5"))
 LIVE_PRICE_CACHE: dict[str, tuple[float, float, str]] = {}
+ADVANCED_SIGNAL_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+MTF_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+ADVANCED_CACHE_TTL = float(os.getenv("ADVANCED_CACHE_TTL", "5"))
+MTF_CACHE_TTL = float(os.getenv("MTF_CACHE_TTL", "10"))
 LIVE_PRICE_CACHE_TTL = float(os.getenv("LIVE_PRICE_CACHE_TTL", "1.5"))
 
 
@@ -1003,29 +1007,40 @@ def timeframe_trend(candles: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 async def multi_timeframe(symbol: str) -> dict[str, Any]:
-    # RealMarketAPI plans can expose different subsets of M5/M15/H1/H4/D1.
-    # Never let one unavailable timeframe break the entire analysis page.
-    out: dict[str, Any] = {}
-    errors: dict[str, str] = {}
-    for tf in ("1min", "5min", "15min", "30min", "1h", "4h", "1day"):
+    # Cache the expensive 7-timeframe calculation briefly so mobile clients do
+    # not trigger a burst of provider requests when switching menus.
+    key = clean_symbol(symbol)
+    now = asyncio.get_running_loop().time()
+    cached = MTF_CACHE.get(key)
+    if cached and now - cached[0] < MTF_CACHE_TTL:
+        return cached[1]
+
+    intervals = ("1min", "5min", "15min", "30min", "1h", "4h", "1day")
+    async def one(tf: str):
         try:
-            candles_data, mode, warning = await get_candles(symbol, tf, 80)
+            candles_data, mode, warning = await get_candles(key, tf, 80)
             if len(candles_data) < 2:
                 raise MarketDataError("Not enough candles")
-            out[tf] = {**timeframe_trend(candles_data), "mode": mode, "warning": warning}
+            return tf, {**timeframe_trend(candles_data), "mode": mode, "warning": warning}
         except Exception as exc:
-            errors[tf] = str(exc)
+            return tf, None, str(exc)
+
+    results = await asyncio.gather(*(one(tf) for tf in intervals))
+    out = {tf: data for tf, data, _ in results if data is not None}
+    errors = {tf: err for tf, data, err in results if data is None and err}
     dirs = [x["trend"] for x in out.values() if x.get("trend")]
     score = dirs.count("BULLISH") - dirs.count("BEARISH")
-    overall = "BULLISH" if score >= 2 else "BEARISH" if score <= -2 else "MIXED"
-    return {
+    result = {
         "timeframes": out,
-        "overall": overall,
+        "overall": "BULLISH" if score >= 2 else "BEARISH" if score <= -2 else "MIXED",
         "bullish_count": dirs.count("BULLISH"),
         "bearish_count": dirs.count("BEARISH"),
         "available_count": len(out),
         "errors": errors,
     }
+    MTF_CACHE[key] = (now, result)
+    return result
+
 
 def session_state(name: str, zone: str, now_utc: datetime) -> dict[str, Any]:
     local = now_utc.astimezone(ZoneInfo(zone))
@@ -1815,7 +1830,9 @@ async def login(body: AuthBody, session: Session = Depends(db)) -> dict[str, Any
     else:
         user = session.scalar(select(User).where(User.username == identity))
         if user is None:
-            user = session.scalar(select(User).where(User.email == identity))
+            user = session.scalar(select(User).where(User.username == identity.upper()))
+        if user is None:
+            user = session.scalar(select(User).where(User.email == identity.lower()))
     if not user or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Login yoki parol noto'g'ri")
     plan = user.subscription.plan if user.subscription else "free"
@@ -1976,12 +1993,16 @@ async def get_countdown(interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, An
 
 @app.get("/api/v1/signals/advanced/{symbol:path}")
 async def advanced_signals(symbol: str, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    user = current_user(authorization, session)
-    # Economic calendar blackout is applied globally to all timeframes.
-    cal = await economic_calendar(1)
-    blocked = any(e.get("impact") == "HIGH" for e in cal.get("events", [])[:50]) and False
-    # Calendar endpoint may not provide an explicit active window; keep signal generation usable and expose calendar separately.
-    return await build_advanced_signals(clean_symbol(symbol), news_blocked=blocked)
+    key = clean_symbol(symbol)
+    now = asyncio.get_running_loop().time()
+    cached = ADVANCED_SIGNAL_CACHE.get(key)
+    if cached and now - cached[0] < ADVANCED_CACHE_TTL:
+        return cached[1]
+    # Economic calendar blackout is kept separate from signal calculation here;
+    # the UI must always be able to obtain the latest market-derived signal.
+    result = await build_advanced_signals(key, news_blocked=False)
+    ADVANCED_SIGNAL_CACHE[key] = (now, result)
+    return result
 
 
 @app.post("/api/v1/signals/auto-record")
