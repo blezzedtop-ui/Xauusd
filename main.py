@@ -676,11 +676,11 @@ async def fetch_realmarket_month_candles(symbol: str, interval: str, days: int =
     if interval == "30min":
         base = await fetch_realmarket_month_candles(symbol, "15min", days)
         return aggregate_candles(base, 30 * 60)
-    # Current RealMarketAPI public FAQ documents /api/v1/history as H1 historical
-    # candles. For other timeframes return recent real candles and let the UI show a
-    # precise availability warning instead of a blank chart.
+    # /api/v1/candle returns recent bars. Request enough bars for the local
+    # indicator/signal engine instead of the previous 10-bar shortcut.
+    # 30min is locally aggregated from M15.
     if interval != "1h":
-        return await fetch_realmarket_candles(symbol, interval, 10)
+        return await fetch_realmarket_candles(symbol, interval, 260)
     cache_key = ("realmarket-history", clean_symbol(symbol), interval, days)
     now = asyncio.get_running_loop().time()
     cached = MARKET_HISTORY_CACHE.get(cache_key)
@@ -811,10 +811,18 @@ async def get_chart_history(symbol: str, interval: str, days: int = 31) -> tuple
         except MarketDataError as exc:
             errors.append(str(exc))
         try:
-            data = await fetch_realmarket_candles(symbol, interval, min(CANDLE_LIMIT, 200))
+            data = await fetch_realmarket_candles(symbol, interval, min(CANDLE_LIMIT, 260))
             return data, "live", "RealMarketAPI recent candles"
         except MarketDataError as exc:
             errors.append(str(exc))
+    # If the paid/live feed rejects a timeframe because of plan limits or a
+    # temporary provider validation issue, keep the analysis engine usable with
+    # the public gold-futures fallback. This is explicitly marked as a proxy.
+    try:
+        data = await fetch_yahoo_candles(symbol, interval, min(CANDLE_LIMIT, 500))
+        return data, "live", "Yahoo Finance GC=F gold-futures proxy fallback"
+    except MarketDataError as exc:
+        errors.append(str(exc))
     raise MarketDataError("Live market history unavailable. " + " | ".join(errors))
 
 
@@ -858,18 +866,42 @@ def demo_candles() -> list[dict[str, Any]]:
 
 async def get_candles(symbol: str, interval: str, limit: int) -> tuple[list[dict[str, Any]], str, str | None]:
     interval = validate_interval(interval)
-    data, mode, provider = await get_chart_history(symbol, interval, max(31, 1))
+    data, mode, provider = await get_chart_history(symbol, interval, 31)
     return data[-limit:], mode, provider
 
 
 async def get_pivot_reference(symbol: str) -> tuple[dict[str, float], str | None]:
+    # Prefer the previous completed D1 candle. If D1 is unavailable on the
+    # current API plan, derive a daily reference from recent H1 candles.
     try:
-        data = await fetch_realmarket_candles(symbol, PIVOT_INTERVAL, 3)
-        base = data[-2] if len(data) >= 2 else data[-1]
+        data = await fetch_realmarket_candles(symbol, "1day", 5)
+        if len(data) >= 2:
+            base = data[-2]
+        else:
+            base = data[-1]
         return {"high":base["high"],"low":base["low"],"close":base["close"]}, None
-    except Exception as exc:
-        return {"high":0.0,"low":0.0,"close":0.0}, str(exc)
-
+    except Exception as exc: first_error = str(exc)
+    try:
+        data = await fetch_realmarket_candles(symbol, "1h", 72)
+        if len(data) >= 2:
+            # Use the most recently completed UTC day represented in H1 data.
+            last_day = datetime.fromtimestamp(data[-1]["time"], tz=timezone.utc).date()
+            prior = [c for c in data if datetime.fromtimestamp(c["time"], tz=timezone.utc).date() < last_day]
+            day = prior if prior else data[:-1]
+            if day:
+                return {"high":max(c["high"] for c in day),
+                        "low":min(c["low"] for c in day),
+                        "close":day[-1]["close"]}, "Pivot derived from H1 because D1 was unavailable."
+    except Exception as exc: second_error = str(exc)
+    # Last-resort: derive a rolling reference from the currently available bars.
+    try:
+        data = await fetch_yahoo_candles(symbol, "1h", 72)
+        if data:
+            return {"high":max(c["high"] for c in data),
+                    "low":min(c["low"] for c in data),
+                    "close":data[-1]["close"]}, "Pivot derived from Yahoo GC=F fallback."
+    except Exception as exc: second_error = str(exc)
+    return {"high":0.0,"low":0.0,"close":0.0}, f"Pivot data unavailable: {first_error}"
 
 def timeframe_trend(candles: list[dict[str, Any]]) -> dict[str, Any]:
     closes = [float(c["close"]) for c in candles]
