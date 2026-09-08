@@ -1,4 +1,4 @@
-const symbol='XAU/USD';window.GOLD_APP_VERSION='15';let lwcCharts={}; let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,streamKey='';
+const symbol='XAU/USD';window.GOLD_APP_VERSION='16';let lwcCharts={}; let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,streamKey='';
 const $=id=>document.getElementById(id);const fmt=v=>v==null?'—':Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
 function showToast(m){$('toast').textContent=m;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),2300)}
 
@@ -30,24 +30,40 @@ function applyCurrentPivotToCharts(){
 }
 function mountTradingView(id, tf=interval){
  const el=$(id); if(!el)return;
- el.innerHTML=''; el.style.minHeight=innerWidth<700?'380px':'520px'; el.style.height=innerWidth<700?'380px':'560px';
- const wrap=document.createElement('div'); wrap.className='tradingview-widget-container'; wrap.style.cssText='height:100%;width:100%';
- const host=document.createElement('div'); host.className='tradingview-widget-container__widget'; host.style.cssText='height:calc(100% - 32px);width:100%';
- const note=document.createElement('div'); note.className='tv-data-note'; note.textContent='TradingView chart • Analysis/Signal: same XAUUSD backend candle feed';
- const script=document.createElement('script'); script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js'; script.type='text/javascript'; script.async=true;
- script.textContent=JSON.stringify({autosize:true,symbol:'OANDA:XAUUSD',interval:tvInterval(tf),timezone:'Asia/Tashkent',theme:'dark',style:'1',locale:'en',allow_symbol_change:false,calendar:false,hide_top_toolbar:false,hide_legend:false,save_image:false,withdateranges:true,hide_volume:false,support_host:'https://www.tradingview.com'});
- wrap.appendChild(host); wrap.appendChild(script); el.appendChild(wrap); el.appendChild(note);
+ el.innerHTML='';
+ el.style.position='relative';
+ el.style.width='100%';
+ el.style.height=innerWidth<700?'390px':'560px';
+ el.style.minHeight=innerWidth<700?'390px':'560px';
+ const box=document.createElement('div');
+ box.className='tradingview-widget-container';
+ box.style.cssText='width:100%;height:100%;position:relative;';
+ const host=document.createElement('div');
+ host.className='tradingview-widget-container__widget';
+ host.style.cssText='width:100%;height:100%;';
+ box.appendChild(host);
+ const script=document.createElement('script');
+ script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+ script.type='text/javascript';
+ script.async=true;
+ script.textContent=JSON.stringify({autosize:true,symbol:'OANDA:XAUUSD',interval:tvInterval(tf),timezone:'Asia/Tashkent',theme:'dark',style:'1',locale:'en',allow_symbol_change:false,hide_top_toolbar:false,hide_legend:false,withdateranges:true,save_image:false,calendar:false,support_host:'https://www.tradingview.com'});
+ box.appendChild(script);
+ el.appendChild(box);
+ setTimeout(()=>window.dispatchEvent(new Event('resize')),120);
 }
 function initChart(id){ mountTradingView(id, interval); return {c:null,s:null}; }
 function applyChart(candles,mode){
  const data=(candles||[]).map(x=>({time:Number(x.time),open:+x.open,high:+x.high,low:+x.low,close:+x.close})).filter((x,i,a)=>i===0||x.time>a[i-1].time);
  liveCandle=data[data.length-1]||null;
- if(data.length){const first=data[0].time,last=data[data.length-1].time,days=Math.max(1,Math.round((last-first)/86400));$('change').textContent=`${data.length.toLocaleString()} candles · ${days} days history`;$('historyInfo').textContent=`${days}+ days · ${data.length.toLocaleString()} candles`;}
- Object.values(lwcCharts).forEach(item=>{try{item.series.setData(data);item.chart.timeScale().fitContent()}catch(e){}});
- applyCurrentPivotToCharts();
- $('mode').textContent=mode==='live'?'LIVE MARKET':'LIVE RETRY'; $('mode').style.color=mode==='live'?'var(--green)':'var(--amber)'; $('chartStatus').textContent=mode==='live'?'LIVE MARKET':'RETRYING';
+ if(data.length){
+   const first=data[0].time,last=data[data.length-1].time,days=Math.max(1,Math.round((last-first)/86400));
+   if($('change'))$('change').textContent=`${data.length.toLocaleString()} candles · ${days} days history`;
+   if($('historyInfo'))$('historyInfo').textContent=`${days}+ days · ${data.length.toLocaleString()} candles`;
+ }
+ if($('mode')){$('mode').textContent=mode==='live'?'LIVE MARKET':'LIVE RETRY';$('mode').style.color=mode==='live'?'var(--green)':'var(--amber)';}
+ if($('chartStatus'))$('chartStatus').textContent=mode==='live'?'LIVE MARKET':'RETRYING';
 }
-window.GOLD_APP_VERSION='15';
+window.GOLD_APP_VERSION='16';
 async function loadMain(initial=false){
   const tasks = [
     loadChartHistory().catch(e=>{
@@ -220,7 +236,7 @@ function connectMarketStream(){
    marketWS.onopen=()=>{ $('mode').textContent='LIVE STREAM'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE'; $('change').textContent='WebSocket real-time tick'; };
    marketWS.onmessage=ev=>{
      const m=JSON.parse(ev.data);
-     if(m.type==='tick') updateLiveCandle(+m.price,+m.timestamp); if(m.type==='candle'&&m.candle){ const cc=m.candle; liveCandle=cc; series.update(cc); if(series2) series2.update(cc); $('price').textContent=fmt(+m.price); }
+     if(m.type==='tick') updateLiveCandle(+m.price,+m.timestamp); if(m.type==='candle'&&m.candle){ const cc=m.candle; liveCandle=cc; $('price').textContent=fmt(+m.price); }
      if(m.type==='reconnecting'){ if(Date.now()-lastTickTs>20000){ $('mode').textContent='RECONNECTING'; $('mode').style.color='var(--amber)'; } } if(m.type==='error'){ $('mode').textContent='LIVE ERROR'; showToast(m.message||'Stream error'); }
    };
    marketWS.onclose=()=>{ $('chartStatus').textContent='RECONNECTING'; $('mode').textContent='RECONNECTING'; setTimeout(()=>{if(document.visibilityState!=='hidden')connectMarketStream()},2500)};
