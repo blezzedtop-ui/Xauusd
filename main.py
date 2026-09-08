@@ -195,7 +195,9 @@ TIMEFRAME_SECONDS = {
 VALID_INTERVALS = tuple(TIMEFRAME_SECONDS.keys())
 AI_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 MARKET_HISTORY_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
-MARKET_HISTORY_CACHE_TTL = int(os.getenv("MARKET_HISTORY_CACHE_TTL", "10"))
+MARKET_HISTORY_CACHE_TTL = int(os.getenv("MARKET_HISTORY_CACHE_TTL", "5"))
+LIVE_PRICE_CACHE: dict[str, tuple[float, float, str]] = {}
+LIVE_PRICE_CACHE_TTL = float(os.getenv("LIVE_PRICE_CACHE_TTL", "1.5"))
 
 
 def db() -> Session:
@@ -873,10 +875,72 @@ def demo_candles() -> list[dict[str, Any]]:
     return out
 
 
+async def fetch_live_price_any(symbol: str) -> tuple[float, str]:
+    """Return a fresh shared quote for all analysis modules.
+
+    A tiny cache prevents MTF/Signal/TA/Pivot from making seven identical quote
+    requests at once while still refreshing fast enough for live analysis.
+    """
+    key = clean_symbol(symbol)
+    now_mono = asyncio.get_running_loop().time()
+    cached = LIVE_PRICE_CACHE.get(key)
+    if cached and now_mono - cached[0] < LIVE_PRICE_CACHE_TTL:
+        return cached[1], cached[2]
+    errors = []
+    if REALMARKET_API_KEY:
+        try:
+            price = await fetch_realmarket_price(symbol)
+            LIVE_PRICE_CACHE[key] = (now_mono, price, "RealMarketAPI")
+            return price, "RealMarketAPI"
+        except Exception as exc:
+            errors.append(f"RealMarketAPI: {exc}")
+    if TWELVE_DATA_API_KEY:
+        try:
+            price = await fetch_twelvedata_price(symbol)
+            LIVE_PRICE_CACHE[key] = (now_mono, price, "Twelve Data")
+            return price, "Twelve Data"
+        except Exception as exc:
+            errors.append(f"Twelve Data: {exc}")
+    raise MarketDataError("Fresh live price unavailable. " + " | ".join(errors))
+
+
+def merge_live_price_into_candles(candles: list[dict[str, Any]], interval: str, price: float) -> list[dict[str, Any]]:
+    """Make the analysis candle represent the current live quote.
+
+    TradingView is an embedded iframe, so its internal ticks cannot be read by the
+    surrounding page. We therefore use the same configured live market providers
+    for every analysis module and update the currently forming backend candle with
+    the freshest quote.
+    """
+    if not candles:
+        return candles
+    seconds = TIMEFRAME_SECONDS[validate_interval(interval)]
+    now_ts = int(datetime.now(timezone.utc).timestamp())
+    bucket = (now_ts // seconds) * seconds
+    out = [dict(c) for c in candles]
+    last = out[-1]
+    if int(last.get("time", 0)) == bucket:
+        last["high"] = max(float(last["high"]), price)
+        last["low"] = min(float(last["low"]), price)
+        last["close"] = price
+    elif int(last.get("time", 0)) < bucket:
+        out.append({"time": bucket, "open": price, "high": price, "low": price, "close": price})
+    else:
+        last["close"] = price
+    return out[-max(2, min(len(out), 500)):]
+
+
 async def get_candles(symbol: str, interval: str, limit: int) -> tuple[list[dict[str, Any]], str, str | None]:
     interval = validate_interval(interval)
     data, mode, provider = await get_chart_history(symbol, interval, max(31, min(limit, 260)))
-    return data[-limit:], mode, provider
+    live_note = None
+    try:
+        live_price, live_source = await fetch_live_price_any(symbol)
+        data = merge_live_price_into_candles(data, interval, live_price)
+        live_note = f"Fresh quote: {live_source}"
+    except Exception as exc:
+        live_note = f"Fresh quote unavailable: {exc}"
+    return data[-limit:], mode, " | ".join(x for x in (provider, live_note) if x)
 
 
 async def get_pivot_reference(symbol: str) -> tuple[dict[str, float], str | None]:
@@ -1045,7 +1109,7 @@ async def _calendar_forexfactory(days: int = 2) -> dict[str, Any]:
             "time": dt_iso or f"{date_value} {time_value}".strip(),
             "country": "United States",
             "event": event_name,
-            "impact": "HIGH",
+            "impact": impact,
             "estimate": forecast,
             "forecast": forecast,
             "previous": previous,
@@ -1054,7 +1118,7 @@ async def _calendar_forexfactory(days: int = 2) -> dict[str, Any]:
             "source": "Forex Factory",
         })
     events.sort(key=lambda x: str(x.get("time") or ""))
-    return {"mode": "live", "provider": "forexfactory", "events": events, "warning": None if events else "No USD HIGH IMPACT events found in the selected calendar window."}
+    return {"mode": "live", "provider": "forexfactory", "events": events, "warning": None if events else "No USA/USD economic events found in the selected calendar window."}
 
 async def _calendar_tradingeconomics(days: int = 2) -> dict[str, Any]:
     if not TRADING_ECONOMICS_API_KEY:
@@ -1474,15 +1538,13 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
             confluence=await fetch_rm_confluence(symbol,tf)
             trend_data=await fetch_rm_trend(symbol,tf)
             if confluence:
-                raw=str(confluence.get("signal") or "").upper()
-                mapped={"BUY":"BUY","SELL":"SELL","NEUTRAL":"WAIT"}.get(raw)
-                if mapped:
-                    item["signal"]=mapped
-                    item["confidence"]=int(confluence.get("score") or item.get("confidence") or 0)
-                    item["provider"]="RealMarketAPI Intelligence"
-                    item["provider_strength"]=confluence.get("strength")
-                    item["provider_reasons"]=confluence.get("reasons") or []
-                    item["reason"]="; ".join(map(str, confluence.get("reasons") or [])) or item.get("reason")
+                # Intelligence is supplemental context only. The displayed signal
+                # remains calculated from the same fresh candle feed as the chart
+                # analysis, so an older provider insight cannot overwrite a live signal.
+                item["provider"]="RealMarketAPI Intelligence (context)"
+                item["provider_signal"]=str(confluence.get("signal") or "").upper() or None
+                item["provider_strength"]=confluence.get("strength")
+                item["provider_reasons"]=confluence.get("reasons") or []
             if trend_data:
                 item["provider_trend"]=trend_data.get("trend")
                 item["provider_adx"]=trend_data.get("adx")
@@ -1517,23 +1579,9 @@ async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
     confluence = await fetch_rm_confluence(symbol, interval)
     rm_trend = await fetch_rm_trend(symbol, interval)
     if confluence:
-        raw_signal = str(confluence.get("signal") or "").upper()
-        mapped = {"BUY":"BUY","SELL":"SELL","NEUTRAL":"WAIT","BUY_SIGNAL":"BUY","SELL_SIGNAL":"SELL"}.get(raw_signal)
-        if mapped:
-            setup["signal"] = mapped
-            setup["reason"] = "RealMarketAPI confluence: " + "; ".join(map(str, confluence.get("reasons") or []))
-            if mapped in ("BUY","SELL"):
-                risk = max(float(ta.get("atr") or 0), current * 0.0005)
-                if mapped == "BUY":
-                    setup["entry"] = round(current, 2)
-                    setup["stop_loss"] = round(min(float(levels["pivot"]), current-risk), 2)
-                    setup["take_profit"] = [levels["r1"], levels["r2"]]
-                else:
-                    setup["entry"] = round(current, 2)
-                    setup["stop_loss"] = round(max(float(levels["pivot"]), current+risk), 2)
-                    setup["take_profit"] = [levels["s1"], levels["s2"]]
-            setup["provider_score"] = confluence.get("score")
-            setup["provider_strength"] = confluence.get("strength")
+        setup["provider_confluence_signal"] = str(confluence.get("signal") or "").upper() or None
+        setup["provider_score"] = confluence.get("score")
+        setup["provider_strength"] = confluence.get("strength")
 
     mtf = await multi_timeframe(symbol)
     ai_context = {
@@ -1934,6 +1982,41 @@ async def advanced_signals(symbol: str, authorization: str | None = Header(defau
     blocked = any(e.get("impact") == "HIGH" for e in cal.get("events", [])[:50]) and False
     # Calendar endpoint may not provide an explicit active window; keep signal generation usable and expose calendar separately.
     return await build_advanced_signals(clean_symbol(symbol), news_blocked=blocked)
+
+
+@app.post("/api/v1/signals/auto-record")
+async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    """Automatically journal fresh BUY/SELL paper signals for the logged-in user.
+
+    This is paper/signal mode only. Real broker order execution requires a broker
+    trading API and is intentionally not performed by this endpoint.
+    """
+    user = current_user(authorization, session)
+    result = await build_advanced_signals(clean_symbol(symbol), news_blocked=False)
+    now = datetime.now(timezone.utc)
+    created = []
+    for tf, item in result.get("timeframes", {}).items():
+        direction = item.get("signal")
+        if direction not in ("BUY", "SELL") or item.get("entry") is None:
+            continue
+        recent = session.scalars(select(SignalHistory).where(
+            SignalHistory.user_id == user.id, SignalHistory.symbol == clean_symbol(symbol),
+            SignalHistory.interval == tf, SignalHistory.outcome == "OPEN"
+        ).order_by(SignalHistory.created_at.desc())).first()
+        if recent and (now - recent.created_at.replace(tzinfo=timezone.utc) if recent.created_at.tzinfo is None else now - recent.created_at).total_seconds() < 900 and recent.direction == direction:
+            continue
+        row = SignalHistory(
+            user_id=user.id, symbol=clean_symbol(symbol), interval=tf, direction=direction,
+            headline=f"AUTO {direction} • {tf.upper()} • {item.get('confidence',0)}%",
+            price=float(item["entry"]),
+            payload=json.dumps({"signal":item,"mode":"paper","source":"fresh live candle feed"}),
+            outcome="OPEN", created_at=now
+        )
+        session.add(row); created.append(tf)
+    if created:
+        session.commit()
+    rows = await refresh_signal_outcomes(session, user.id)
+    return {"saved_timeframes":created,"count":len(created),"history_count":len(rows),"mode":"paper"}
 
 
 @app.get("/api/v1/signals/live/{symbol:path}")
