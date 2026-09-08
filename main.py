@@ -1660,6 +1660,20 @@ class MarketStream:
 
 market_stream = MarketStream()
 
+@app.middleware("http")
+async def no_cache_frontend(request: Request, call_next):
+    response = await call_next(request)
+    path = request.url.path
+    if path == "/" or path.endswith(".js") or path.endswith(".css") or path == "/config.js":
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+@app.get("/api/version")
+async def api_version():
+    return {"version":"14","build":"gold-liquid-glass-all-modules-fixed","chart":"realmarketapi-candles"}
+
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     return {"status":"ok","provider":live_provider() or MARKET_PROVIDER,"realmarket_configured":bool(REALMARKET_API_KEY),"twelvedata_configured":False,"market_api_configured":bool(live_provider()),"calendar_configured":bool(FINNHUB_API_KEY),"ai_configured":bool(OPENAI_API_KEY),"database":DATABASE_URL.split(":",1)[0],"realtime_stream":bool(live_provider()),"allow_demo":ALLOW_DEMO,"timestamp":datetime.now(timezone.utc).isoformat()}
