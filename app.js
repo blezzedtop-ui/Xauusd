@@ -1,4 +1,4 @@
-const symbol='XAU/USD';window.GOLD_APP_VERSION='16';let lwcCharts={}; let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,streamKey='';
+const symbol='XAU/USD';let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,streamKey='';
 const $=id=>document.getElementById(id);const fmt=v=>v==null?'—':Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
 function showToast(m){$('toast').textContent=m;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),2300)}
 
@@ -14,81 +14,33 @@ const DISABLE_MARKET_WS=IS_NETLIFY || window.DISABLE_MARKET_WS===true;
 async function nodeMarketHealth(){if(!NODE_MARKET_URL)return null;try{const r=await fetch(`${NODE_MARKET_URL}/health`,{cache:'no-store'});if(!r.ok) return null;return await r.json()}catch{return null}}
 async function api(path,opt={}){const headers={'Content-Type':'application/json',...(opt.headers||{})};if(token)headers.Authorization='Bearer '+token;let last;for(const base of API_CANDIDATES){try{const url=path.startsWith('http')?path:base+path;const r=await fetch(url,{...opt,headers,cache:'no-store'});let d={};try{d=await r.json()}catch{}if(!r.ok)throw Error(d.detail||d.message||'HTTP '+r.status);return d}catch(e){last=e}}if(last instanceof TypeError){throw Error('Cloud backendga ulanib bo‘lmadi. Saytning cloud serveri ulanmagan yoki hozircha ishlamayapti.') }throw last}
 function tvInterval(tf){return ({'1min':'1','5min':'5','15min':'15','30min':'30','1h':'60','4h':'240','1day':'D'})[tf]||'5'}
-const pivotOverlays={};
-function chartTheme(){return {layout:{background:{type:'solid',color:'#07090d'},textColor:'#9aa3af'},grid:{vertLines:{color:'rgba(255,255,255,.055)'},horzLines:{color:'rgba(255,255,255,.055)'}},rightPriceScale:{borderColor:'rgba(255,215,120,.16)',scaleMargins:{top:.08,bottom:.12}},timeScale:{borderColor:'rgba(255,215,120,.12)',timeVisible:true,secondsVisible:false},crosshair:{mode:0}}}
-function clearPivotChart(id){
- const item=lwcCharts[id]; if(!item)return;
- (pivotOverlays[id]?.lines||[]).forEach(line=>{try{item.series.removePriceLine(line)}catch(e){}});
- if(pivotOverlays[id]?.root)pivotOverlays[id].root.remove();
- pivotOverlays[id]=null;
-}
-function positionPivotZones(){return; }
-function drawPivotOnChart(){return; }
-function applyCurrentPivotToCharts(){
- const p=window.__selectedPivot; if(!p)return;
- Object.keys(lwcCharts).forEach(id=>drawPivotOnChart(id,p));
-}
 function mountTradingView(id, tf=interval){
  const el=$(id); if(!el)return;
- el.innerHTML='';
- el.style.position='relative';
- el.style.width='100%';
- el.style.height=innerWidth<700?'390px':'560px';
- el.style.minHeight=innerWidth<700?'390px':'560px';
- const box=document.createElement('div');
- box.className='tradingview-widget-container';
- box.style.cssText='width:100%;height:100%;position:relative;';
- const host=document.createElement('div');
- host.className='tradingview-widget-container__widget';
- host.style.cssText='width:100%;height:100%;';
- box.appendChild(host);
- const script=document.createElement('script');
- script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
- script.type='text/javascript';
- script.async=true;
- script.textContent=JSON.stringify({autosize:true,symbol:'OANDA:XAUUSD',interval:tvInterval(tf),timezone:'Asia/Tashkent',theme:'dark',style:'1',locale:'en',allow_symbol_change:false,hide_top_toolbar:false,hide_legend:false,withdateranges:true,save_image:false,calendar:false,support_host:'https://www.tradingview.com'});
- box.appendChild(script);
- el.appendChild(box);
- setTimeout(()=>window.dispatchEvent(new Event('resize')),120);
+ el.innerHTML=''; el.style.minHeight=innerWidth<700?'420px':'520px'; el.style.height=innerWidth<700?'420px':'560px';
+ const wrap=document.createElement('div'); wrap.className='tradingview-widget-container'; wrap.style.cssText='height:100%;width:100%';
+ const host=document.createElement('div'); host.className='tradingview-widget-container__widget'; host.style.cssText='height:calc(100% - 32px);width:100%';
+ const note=document.createElement('div'); note.className='tv-data-note'; note.textContent='TradingView chart • Analysis/Signal: same XAUUSD backend candle feed';
+ const script=document.createElement('script'); script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js'; script.type='text/javascript'; script.async=true;
+ script.textContent=JSON.stringify({autosize:true,symbol:'OANDA:XAUUSD',interval:tvInterval(tf),timezone:'Asia/Tashkent',theme:'dark',style:'1',locale:'en',allow_symbol_change:false,calendar:false,hide_top_toolbar:false,hide_legend:false,save_image:false,withdateranges:true,hide_volume:false,support_host:'https://www.tradingview.com'});
+ wrap.appendChild(host); wrap.appendChild(script); el.appendChild(wrap); el.appendChild(note);
 }
 function initChart(id){ mountTradingView(id, interval); return {c:null,s:null}; }
 function applyChart(candles,mode){
- const data=(candles||[]).map(x=>({time:Number(x.time),open:+x.open,high:+x.high,low:+x.low,close:+x.close})).filter((x,i,a)=>i===0||x.time>a[i-1].time);
+ const data=(candles||[]).map(x=>({time:x.time,open:+x.open,high:+x.high,low:+x.low,close:+x.close})).filter((x,i,a)=>i===0||x.time>a[i-1].time);
  liveCandle=data[data.length-1]||null;
  if(data.length){
    const first=data[0].time,last=data[data.length-1].time,days=Math.max(1,Math.round((last-first)/86400));
-   if($('change'))$('change').textContent=`${data.length.toLocaleString()} candles · ${days} days history`;
-   if($('historyInfo'))$('historyInfo').textContent=`${days}+ days · ${data.length.toLocaleString()} candles`;
+   $('change').textContent=`${data.length.toLocaleString()} candles · ${days} days history`;
+   $('historyInfo').textContent=`${days}+ days · ${data.length.toLocaleString()} candles`;
  }
- if($('mode')){$('mode').textContent=mode==='live'?'LIVE MARKET':'LIVE RETRY';$('mode').style.color=mode==='live'?'var(--green)':'var(--amber)';}
- if($('chartStatus'))$('chartStatus').textContent=mode==='live'?'LIVE MARKET':'RETRYING';
+ $('mode').textContent=mode==='live'?'LIVE MARKET':'LIVE RETRY'; $('mode').style.color=mode==='live'?'var(--green)':'var(--amber)'; $('chartStatus').textContent=mode==='live'?'LIVE MARKET':'RETRYING';
 }
-window.GOLD_APP_VERSION='16';
-async function loadMain(initial=false){
-  const tasks = [
-    loadChartHistory().catch(e=>{
-      if($('chartStatus')) $('chartStatus').textContent='LIVE DATA ERROR';
-      if($('historyInfo')) $('historyInfo').textContent='RealMarketAPI candle data unavailable';
-      if($('change')) $('change').textContent=e.message||'Real market chart unavailable';
-      return null;
-    }),
-    loadAnalysisOnly().catch(e=>{
-      if($('signalReason')) $('signalReason').textContent='Analysis vaqtincha mavjud emas: '+(e.message||'unknown error');
-      return null;
-    }),
-    loadPivots(pivotInterval).catch(()=>null)
-  ];
-  const results = await Promise.allSettled(tasks);
-  return results;
-}
-window.loadMain=loadMain;
-
 function setTf(v){
  interval=v;
  liveCandle=null;
  document.querySelectorAll('[data-interval]').forEach(b=>b.classList.toggle('active',b.dataset.interval===v));
  if($('tfLabel'))$('tfLabel').textContent=({'1min':'1 MIN','5min':'5 MIN','15min':'15 MIN','30min':'30 MIN','1h':'1 HOUR','4h':'4 HOUR','1day':'1 DAY'})[v]||v;
- mountTradingView('chart', interval); if($('chartSection').classList.contains('active')) setTimeout(()=>mountTradingView('chart2', interval),50); loadMain(true); setTimeout(()=>loadPivots(pivotInterval),250);
+ mountTradingView('chart', interval); if($('chartSection').classList.contains('active')) setTimeout(()=>mountTradingView('chart2', interval),50); loadMain(true);
 }
 async function loadChartHistory(){
  const c=await api(`/api/v1/candles/${encodeURIComponent(symbol)}?interval=${interval}&limit=500`);
@@ -122,7 +74,6 @@ async function loadPivots(tf=pivotInterval){
     $('pivotFilter').textContent=tfName(tf);
     $('pivotSource').textContent=`${tfName(tf)} Pivot · source: ${tfName(p.source_timeframe||tf)}${p.warning?' · '+p.warning:''}`;
     $('levels').innerHTML=[['R3',p.r3,'res'],['R2',p.r2,'res'],['R1',p.r1,'res'],['Pivot',p.pivot,'piv'],['S1',p.s1,'sup'],['S2',p.s2,'sup'],['S3',p.s3,'sup']].map(x=>`<div class="row"><span>${x[0]}</span><b class="${x[2]}">${fmt(x[1])}</b></div>`).join('');
-    window.__selectedPivot=p; applyCurrentPivotToCharts();
   }catch(e){
     $('pivotSource').textContent='Pivot yuklanmadi: '+e.message;
   }
@@ -236,7 +187,7 @@ function connectMarketStream(){
    marketWS.onopen=()=>{ $('mode').textContent='LIVE STREAM'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE'; $('change').textContent='WebSocket real-time tick'; };
    marketWS.onmessage=ev=>{
      const m=JSON.parse(ev.data);
-     if(m.type==='tick') updateLiveCandle(+m.price,+m.timestamp); if(m.type==='candle'&&m.candle){ const cc=m.candle; liveCandle=cc; $('price').textContent=fmt(+m.price); }
+     if(m.type==='tick') updateLiveCandle(+m.price,+m.timestamp); if(m.type==='candle'&&m.candle){ const cc=m.candle; liveCandle=cc; series.update(cc); if(series2) series2.update(cc); $('price').textContent=fmt(+m.price); }
      if(m.type==='reconnecting'){ if(Date.now()-lastTickTs>20000){ $('mode').textContent='RECONNECTING'; $('mode').style.color='var(--amber)'; } } if(m.type==='error'){ $('mode').textContent='LIVE ERROR'; showToast(m.message||'Stream error'); }
    };
    marketWS.onclose=()=>{ $('chartStatus').textContent='RECONNECTING'; $('mode').textContent='RECONNECTING'; setTimeout(()=>{if(document.visibilityState!=='hidden')connectMarketStream()},2500)};

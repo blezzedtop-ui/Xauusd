@@ -11,81 +11,8 @@
 </style>
 <style>.title-shimmer{background:linear-gradient(90deg,#eef3f8 0%,#9fc7ff 35%,#f5c15d 52%,#eef3f8 72%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:titleShimmer 7s linear infinite}@keyframes titleShimmer{to{background-position:-220% 0}}.gold-photo-bg{position:fixed;inset:0;z-index:0;pointer-events:none;background-image:url("assets/gold-trading-bg.png");background-size:cover;background-position:center;background-repeat:no-repeat;filter:saturate(.92) contrast(1.03);opacity:.34;transform:translateZ(0);will-change:transform}.gold-photo-bg:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(3,6,10,.34),rgba(3,7,13,.72) 72%,rgba(2,5,9,.86));}.main{position:relative;z-index:3}.sidebar,.topbar,.card,.toast,.modal{z-index:4}.gold-photo-bg+*{position:relative;z-index:2}@media (max-width:900px){.gold-photo-bg{opacity:.22;background-position:center top}}
 .advanced-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.advanced-card{border:1px solid var(--line);background:rgba(8,14,21,.86);border-radius:12px;padding:12px;box-shadow:0 12px 30px rgba(0,0,0,.16)}.advanced-card.buy{border-color:rgba(48,212,154,.35)}.advanced-card.sell{border-color:rgba(240,105,120,.35)}.advanced-card.wait{border-color:rgba(245,193,93,.25)}.advanced-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.advanced-signal{font-size:22px;font-weight:1000;letter-spacing:.06em}.component-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}.component{padding:7px 8px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.02)}.component small{display:block;color:var(--muted);font-size:9px;margin-bottom:3px}.component b{font-size:11px}.advanced-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px}.badge-buy{color:var(--green)}.badge-sell{color:var(--red)}.badge-wait{color:var(--gold)}@media(max-width:900px){.advanced-grid{grid-template-columns:1fr}}
-</style>
-<style id="pivot-chart-overlay-style">
-.chart{position:relative!important}.pivot-chart-overlay{position:absolute;inset:0;pointer-events:none;z-index:8;overflow:hidden}.pivot-zone{position:absolute;left:0;right:0;border-top:1px solid rgba(245,193,93,.28);border-bottom:1px solid rgba(245,193,93,.18);opacity:.8}.pivot-zone span{position:absolute;left:10px;top:3px;font-size:9px;font-weight:800;letter-spacing:.08em;padding:3px 6px;border-radius:5px;background:rgba(7,9,13,.72);backdrop-filter:blur(4px)}.resistance-zone{background:linear-gradient(90deg,rgba(239,100,113,.10),rgba(245,193,93,.04),rgba(239,100,113,.08));border-color:rgba(239,100,113,.25)}.resistance-zone span{color:#ef7a82}.support-zone{background:linear-gradient(90deg,rgba(48,212,154,.10),rgba(245,193,93,.04),rgba(48,212,154,.08));border-color:rgba(48,212,154,.25)}.support-zone span{color:#6be0b0}.pivot-chart-badge{position:absolute;top:9px;left:10px;z-index:9;padding:5px 8px;border:1px solid rgba(245,193,93,.22);border-radius:7px;background:rgba(8,11,16,.72);color:#f5c15d;font-size:10px;font-weight:800;backdrop-filter:blur(5px)}
-</style>
-<link rel="manifest" href="/manifest.webmanifest">
+</style><link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#0b1220">
-
-<style id="gold-liquid-glass-theme">
-:root{
-  --bg:#07090d;--panel:#0d1117;--panel2:#111720;--line:rgba(255,215,120,.13);
-  --text:#f5f1e8;--muted:#8e929b;--accent:#f2c35f;--gold:#f5c15d;
-  --gold2:#ffe6a1;--gold3:#b8781e;--glass:rgba(17,21,28,.68);
-  --shadow:0 22px 60px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.045)
-}
-html,body{background:#06080c;color:var(--text)}
-body{overflow-x:hidden}
-body:before{content:"";position:fixed;inset:-20%;pointer-events:none;z-index:0;background:radial-gradient(circle at 12% 15%,rgba(245,193,93,.10),transparent 22%),radial-gradient(circle at 86% 12%,rgba(255,218,137,.07),transparent 20%),radial-gradient(circle at 70% 88%,rgba(190,124,28,.07),transparent 25%);animation:liquidDrift 16s ease-in-out infinite alternate}
-@keyframes liquidDrift{from{transform:translate3d(-1%,0,0) scale(1)}to{transform:translate3d(1.5%,1%,0) scale(1.035)}}
-.gold-photo-bg{opacity:.12!important;mix-blend-mode:screen}
-.app{position:relative;z-index:1;grid-template-columns:226px minmax(0,1fr);gap:18px;padding:14px 16px}
-.sidebar{position:sticky;top:14px;height:calc(100vh - 28px);border:1px solid rgba(255,215,120,.16);border-radius:24px;background:linear-gradient(160deg,rgba(22,25,31,.78),rgba(8,11,15,.70));backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);box-shadow:var(--shadow);padding:18px 12px;overflow:hidden}
-.sidebar:before,.card:before,.topbar:before,.modal-card:before{content:"";position:absolute;pointer-events:none;inset:0;border-radius:inherit;background:linear-gradient(120deg,rgba(255,239,194,.10),transparent 28%,transparent 72%,rgba(245,193,93,.07));opacity:.7}
-.sidebar:after{content:"";position:absolute;left:-35%;top:14%;width:170%;height:1px;background:linear-gradient(90deg,transparent,rgba(255,221,142,.35),transparent);transform:rotate(-12deg);animation:glassSweep 9s ease-in-out infinite}
-@keyframes glassSweep{0%,55%{opacity:0;transform:translateX(-30%) rotate(-12deg)}65%,85%{opacity:1}100%{opacity:0;transform:translateX(35%) rotate(-12deg)}}
-.brand{position:relative;padding:8px 10px 18px;border-bottom:1px solid rgba(255,215,120,.12);margin-bottom:15px}
-.brand b,.brand-logo b{color:var(--gold2);text-shadow:0 0 18px rgba(245,193,93,.20)}
-.brand span{color:#8f939b}
-.nav{position:relative;z-index:2;gap:7px}
-.nav button{position:relative;overflow:hidden;border:1px solid transparent;background:transparent;color:#9398a1;text-align:left;padding:12px 12px;border-radius:13px;cursor:pointer;transition:transform .18s ease,background .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease}
-.nav button:before{content:"";position:absolute;inset:0;background:linear-gradient(110deg,rgba(255,226,155,.16),rgba(245,193,93,.04),transparent);opacity:0;transition:.18s}
-.nav button:hover{color:#fff;transform:translateX(2px);border-color:rgba(245,193,93,.12);background:rgba(255,255,255,.035)}
-.nav button:hover:before{opacity:1}
-.nav button.active{color:#fff;border-color:rgba(245,193,93,.28);background:linear-gradient(135deg,rgba(245,193,93,.22),rgba(167,106,19,.10) 48%,rgba(255,255,255,.035));box-shadow:0 10px 26px rgba(245,193,93,.08),inset 0 1px 0 rgba(255,239,194,.15)}
-.nav button.active:after{content:"";position:absolute;left:0;top:20%;bottom:20%;width:3px;border-radius:4px;background:linear-gradient(180deg,#ffe8a8,#c88829);box-shadow:0 0 12px rgba(245,193,93,.65)}
-.main{padding:8px 4px 28px;max-width:1700px}
-.topbar{position:relative;overflow:hidden;padding:16px 18px;border:1px solid rgba(255,215,120,.14);border-radius:20px;background:linear-gradient(135deg,rgba(20,24,31,.76),rgba(9,12,17,.64));backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);box-shadow:var(--shadow);margin-bottom:16px}
-.topbar h1{color:#f6e5bd;font-size:20px;letter-spacing:.01em}.topbar p{color:#858b95}
-.pill{border-color:rgba(245,193,93,.15);background:rgba(255,255,255,.035);color:#a6aab1;box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
-.btn,.tf{position:relative;overflow:hidden;border-color:rgba(245,193,93,.16);background:linear-gradient(135deg,rgba(255,255,255,.055),rgba(245,193,93,.035));color:#d7d9dd;box-shadow:inset 0 1px 0 rgba(255,255,255,.045);transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease,background .18s ease}
-.btn:hover,.tf:hover{transform:translateY(-1px);border-color:rgba(245,193,93,.35);box-shadow:0 8px 22px rgba(245,193,93,.08)}
-.btn.primary{background:linear-gradient(135deg,#ffe19a 0%,#e4aa3c 45%,#9d6419 100%);border-color:#f6cd78;color:#19140a;font-weight:800;box-shadow:0 8px 25px rgba(245,193,93,.18),inset 0 1px 0 rgba(255,255,255,.45)}
-.tf.active{background:linear-gradient(135deg,#ffe7a6,#d99b31 52%,#8f5a17);border-color:#f1c565;color:#171208;box-shadow:0 7px 20px rgba(245,193,93,.16),inset 0 1px 0 rgba(255,255,255,.5)}
-.dashboard{gap:16px}
-.card{position:relative;overflow:hidden;background:linear-gradient(145deg,rgba(20,24,31,.72),rgba(8,11,16,.70));border:1px solid rgba(255,215,120,.13);border-radius:20px;padding:15px;box-shadow:var(--shadow);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
-.card:after{content:"";position:absolute;top:-70px;right:-70px;width:180px;height:180px;border-radius:50%;background:radial-gradient(circle,rgba(245,193,93,.10),transparent 68%);pointer-events:none}
-.card+.card{margin-top:16px}
-.section-head h2,.section-head h3{color:#f1dfb5}
-.metric,.signal-box,.advanced-card,.component,.session,.calendar-item{position:relative;background:linear-gradient(145deg,rgba(255,255,255,.045),rgba(255,255,255,.018));border-color:rgba(255,215,120,.10);box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
-.metric{border-radius:13px}.metric b{color:#eee4cd}.metric small{color:#878d97}
-.signal-box{border-radius:15px}
-.advanced-card{border-radius:17px}
-.advanced-card.buy{border-color:rgba(48,212,154,.28)}.advanced-card.sell{border-color:rgba(240,105,120,.28)}.advanced-card.wait{border-color:rgba(245,193,93,.26)}
-.chart{border-color:rgba(255,215,120,.14);border-radius:15px;background:#07090c;box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}
-.history-note b,.countdown,.piv{color:#f5ca72;text-shadow:0 0 12px rgba(245,193,93,.12)}
-.dot{box-shadow:0 0 12px rgba(48,212,154,.65)}
-.sidebar-bottom{position:relative;z-index:2;padding:10px;border:1px solid rgba(255,215,120,.08);border-radius:13px;background:rgba(255,255,255,.025)}
-.modal{background:rgba(2,4,7,.72);backdrop-filter:blur(14px)}
-.modal-card{position:relative;overflow:hidden;background:linear-gradient(145deg,rgba(22,26,33,.92),rgba(8,11,16,.92));border-color:rgba(255,215,120,.20);box-shadow:0 30px 90px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.05)}
-.input{background:rgba(5,8,12,.72);border-color:rgba(255,215,120,.14)}.input:focus{outline:none;border-color:rgba(245,193,93,.55);box-shadow:0 0 0 3px rgba(245,193,93,.08)}
-@media(max-width:1050px){.app{grid-template-columns:1fr;gap:10px;padding:8px}.sidebar{position:relative;top:auto;height:auto;min-height:0;border-radius:18px;padding:12px}.brand{padding:5px 8px 11px;margin-bottom:10px}.nav{flex-direction:row;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}.nav::-webkit-scrollbar{display:none}.nav button{white-space:nowrap;padding:10px 12px}.nav button.active:after{left:15%;right:15%;top:auto;bottom:0;width:auto;height:2px}.sidebar-bottom{display:none}.main{padding:2px 2px 22px}.topbar{border-radius:17px}.dashboard{grid-template-columns:1fr}}
-@media(max-width:620px){.app{padding:6px}.topbar{padding:13px;border-radius:16px}.topbar h1{font-size:17px}.card{border-radius:17px;padding:12px}.metric{padding:9px}.price{font-size:29px}.btn,.tf{min-height:38px}.chart{height:430px}}
-@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
-</style>
-<style id="mobile-compact-fix">
-.chart-loading,.chart-fallback-badge{position:absolute;z-index:12;left:10px;top:10px;padding:6px 9px;border-radius:8px;background:rgba(7,9,13,.78);border:1px solid rgba(245,193,93,.18);color:#d8d0bd;font-size:10px;backdrop-filter:blur(8px);pointer-events:none}.chart-fallback-badge{top:auto;bottom:8px;color:#f5c15d}
-.tradingview-widget-container,.tradingview-widget-container__widget{width:100%;height:100%;min-height:inherit}
-@media(max-width:620px){
- body{font-size:13px}.app{display:block;padding:4px}.sidebar{margin:0 0 6px;padding:8px 9px;border-radius:14px}.brand{display:flex;align-items:center;gap:8px;padding:3px 5px 7px;margin-bottom:7px}.brand span{display:none}.brand b{font-size:15px}.nav{gap:4px}.nav button{font-size:11px;padding:8px 9px;border-radius:9px}.main{padding:0 1px 16px}.topbar{padding:10px;border-radius:13px;margin-bottom:7px}.topbar h1{font-size:15px}.topbar p{font-size:10px}.tools{gap:5px}.tools .btn,.tools .pill{font-size:10px;padding:7px 8px}.dashboard{gap:7px}.card{padding:9px;border-radius:13px}.card+.card{margin-top:7px}.hero{gap:7px}.symbol{font-size:18px}.price{font-size:25px}.countdown-box{margin-top:5px;gap:6px}.countdown{font-size:14px}.tfbar{gap:4px;margin:8px 0;overflow-x:auto;flex-wrap:nowrap;padding-bottom:2px;scrollbar-width:none}.tfbar::-webkit-scrollbar{display:none}.tf{flex:0 0 auto;min-height:32px;padding:6px 8px;border-radius:7px;font-size:11px}.chart{height:350px!important;min-height:350px!important;border-radius:11px}.grid4{gap:5px}.grid2{gap:5px}.metric{padding:7px;border-radius:9px}.metric small{font-size:9px}.metric b{font-size:15px;margin-top:4px}.section-head{margin-bottom:7px}.section-head h2,.section-head h3{font-size:13px}.mini{font-size:10px;line-height:1.45}.advanced-grid{gap:7px}.advanced-card{padding:9px;border-radius:12px}.advanced-signal{font-size:19px}.component-grid{gap:5px}.component{padding:6px;border-radius:7px}.component b{font-size:10px}.btn{padding:7px 9px;font-size:11px}.signal-main{font-size:19px}.levels .row{padding:7px 0}.history-note{font-size:9px}.sessions{gap:5px}.session{padding:7px}.session .sub{font-size:9px}
-}
-</style>
-
-<style>
-.chart-error{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:24px;text-align:center;color:#f5c15d;background:rgba(7,9,13,.94);border-radius:14px;z-index:5}.chart-error small{color:#9aa3af;max-width:90%;word-break:break-word}.chart-loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#f5c15d;background:rgba(7,9,13,.7);z-index:4;border-radius:14px}
-@media(max-width:700px){body{overflow-x:hidden}.container,.main,.content{width:100%;max-width:100%;padding-left:8px;padding-right:8px}.nav{overflow-x:auto;white-space:nowrap;gap:6px;padding-bottom:4px}.nav button{flex:0 0 auto;font-size:11px;padding:7px 9px}.card{border-radius:16px;padding:12px}.section-head h2{font-size:18px}.tfbar{display:flex;overflow-x:auto;gap:6px;scrollbar-width:none}.tfbar::-webkit-scrollbar{display:none}.tf{flex:0 0 auto;min-width:48px}.chart{height:360px!important;min-height:360px!important}.grid4{grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}.grid2{grid-template-columns:1fr 1fr;gap:7px}.metric{padding:9px}.metric small{font-size:10px}.metric b{font-size:14px}.advanced-grid{grid-template-columns:1fr!important}.btn{min-height:40px}}
-</style>
 </head>
 <body>
 <div class="gold-photo-bg" aria-hidden="true"></div>
@@ -135,8 +62,205 @@ body:before{content:"";position:fixed;inset:-20%;pointer-events:none;z-index:0;b
 </main></div>
 <div class="toast" id="toast"></div>
 <div class="modal auth-required" id="authModal"><div class="modal-card"><div class="auth-brand">GOLD <span>TRADING</span></div><div class="section-head"><div><h3 id="authTitle">Kirish</h3><div class="mini">Trading terminalga kirish uchun login va parolingizni kiriting.</div></div></div><form id="authForm"><input class="input" id="email" type="text" required placeholder="Login yoki elektron pochta"><input class="input" id="password" type="password" minlength="3" placeholder="Parol"><div class="mini" id="authMsg"></div><button class="btn primary" style="width:100%" type="submit" id="authSubmit">Kirish</button></form><div class="link" id="authSwitch">Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish</div></div></div>
-<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
-<script src="/config.js?v=14"></script>
-<script src="/app.js?v=14"></script>
+<script src="/config.js"></script>
+<script>const symbol='XAU/USD';let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,streamKey='';
+const $=id=>document.getElementById(id);const fmt=v=>v==null?'—':Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
+function showToast(m){$('toast').textContent=m;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),2300)}
 
+// Cloud deployment: when the frontend and FastAPI are on the same Railway service, leave API_BASE_URL empty.
+// When hosted separately on Netlify, set window.API_BASE_URL to the public FastAPI URL.
+const CONFIGURED_API=(window.API_BASE_URL||document.querySelector('meta[name=api-base]')?.content||'').trim().replace(/\/$/,'');
+const LOCAL_API=(location.protocol==='http:'||location.protocol==='https:') ? location.origin.replace(/\/$/,'') : '';
+const API_BASE=CONFIGURED_API || ((location.protocol==='http:'||location.protocol==='https:') ? location.origin : (LOCAL_API || 'http://127.0.0.1:8000'));
+const API_CANDIDATES=[API_BASE].filter(Boolean);
+const NODE_MARKET_URL=(window.NODE_MARKET_URL||'').replace(/\/$/,'');
+const IS_NETLIFY=/netlify\.app$|netlify\.com$/i.test(location.hostname);
+const DISABLE_MARKET_WS=IS_NETLIFY || window.DISABLE_MARKET_WS===true;
+async function nodeMarketHealth(){if(!NODE_MARKET_URL)return null;try{const r=await fetch(`${NODE_MARKET_URL}/health`,{cache:'no-store'});if(!r.ok) return null;return await r.json()}catch{return null}}
+async function api(path,opt={}){const headers={'Content-Type':'application/json',...(opt.headers||{})};if(token)headers.Authorization='Bearer '+token;let last;for(const base of API_CANDIDATES){try{const url=path.startsWith('http')?path:base+path;const r=await fetch(url,{...opt,headers,cache:'no-store'});let d={};try{d=await r.json()}catch{}if(!r.ok)throw Error(d.detail||d.message||'HTTP '+r.status);return d}catch(e){last=e}}if(last instanceof TypeError){throw Error('Cloud backendga ulanib bo‘lmadi. Saytning cloud serveri ulanmagan yoki hozircha ishlamayapti.') }throw last}
+function tvInterval(tf){return ({'1min':'1','5min':'5','15min':'15','30min':'30','1h':'60','4h':'240','1day':'D'})[tf]||'5'}
+function mountTradingView(id, tf=interval){
+ const el=$(id); if(!el)return;
+ el.innerHTML=''; el.style.minHeight=innerWidth<700?'420px':'520px'; el.style.height=innerWidth<700?'420px':'560px';
+ const wrap=document.createElement('div'); wrap.className='tradingview-widget-container'; wrap.style.cssText='height:100%;width:100%';
+ const host=document.createElement('div'); host.className='tradingview-widget-container__widget'; host.style.cssText='height:calc(100% - 32px);width:100%';
+ const note=document.createElement('div'); note.className='tv-data-note'; note.textContent='TradingView chart • Analysis/Signal: same XAUUSD backend candle feed';
+ const script=document.createElement('script'); script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js'; script.type='text/javascript'; script.async=true;
+ script.textContent=JSON.stringify({autosize:true,symbol:'OANDA:XAUUSD',interval:tvInterval(tf),timezone:'Asia/Tashkent',theme:'dark',style:'1',locale:'en',allow_symbol_change:false,calendar:false,hide_top_toolbar:false,hide_legend:false,save_image:false,withdateranges:true,hide_volume:false,support_host:'https://www.tradingview.com'});
+ wrap.appendChild(host); wrap.appendChild(script); el.appendChild(wrap); el.appendChild(note);
+}
+function initChart(id){ mountTradingView(id, interval); return {c:null,s:null}; }
+function applyChart(candles,mode){
+ const data=(candles||[]).map(x=>({time:x.time,open:+x.open,high:+x.high,low:+x.low,close:+x.close})).filter((x,i,a)=>i===0||x.time>a[i-1].time);
+ liveCandle=data[data.length-1]||null;
+ if(data.length){
+   const first=data[0].time,last=data[data.length-1].time,days=Math.max(1,Math.round((last-first)/86400));
+   $('change').textContent=`${data.length.toLocaleString()} candles · ${days} days history`;
+   $('historyInfo').textContent=`${days}+ days · ${data.length.toLocaleString()} candles`;
+ }
+ $('mode').textContent=mode==='live'?'LIVE MARKET':'LIVE RETRY'; $('mode').style.color=mode==='live'?'var(--green)':'var(--amber)'; $('chartStatus').textContent=mode==='live'?'LIVE MARKET':'RETRYING';
+}
+function setTf(v){
+ interval=v;
+ liveCandle=null;
+ document.querySelectorAll('[data-interval]').forEach(b=>b.classList.toggle('active',b.dataset.interval===v));
+ if($('tfLabel'))$('tfLabel').textContent=({'1min':'1 MIN','5min':'5 MIN','15min':'15 MIN','30min':'30 MIN','1h':'1 HOUR','4h':'4 HOUR','1day':'1 DAY'})[v]||v;
+ mountTradingView('chart', interval); if($('chartSection').classList.contains('active')) setTimeout(()=>mountTradingView('chart2', interval),50); loadMain(true);
+}
+async function loadChartHistory(){
+ const c=await api(`/api/v1/candles/${encodeURIComponent(symbol)}?interval=${interval}&limit=500`);
+ if(c.mode!=='live') throw Error(c.warning||'LIVE market data unavailable');
+ applyChart(c.candles,c.mode);
+ countdownData=c.candle;
+ updateCountdown();
+}
+async function loadAnalysisOnly(){
+  try{
+    const d=await api(`/api/v1/analysis/${encodeURIComponent(symbol)}?interval=${interval}`);
+    renderAnalysis(d);
+    await loadPivots(pivotInterval);
+    if(d.ok===false){
+      $('signalReason').textContent='Analysis xatosi: '+(d.error||d.headline||'unknown error');
+      $('mode').textContent='LIVE ERROR'; $('mode').style.color='var(--amber)';
+    } else if(d.mode==='live'){
+      $('mode').textContent='LIVE DATA'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
+    }
+    countdownData=d.candle||countdownData; updateCountdown(); return d;
+  }catch(e){
+    $('signalReason').textContent='Analysis vaqtincha mavjud emas: '+(e.message||'unknown error');
+    throw e;
+  }
+}
+async function loadPivots(tf=pivotInterval){
+  pivotInterval=tf;
+  try{
+    const d=await api(`/api/v1/pivots/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`);
+    const p=d.timeframes?.[tf]||{};
+    $('pivotFilter').textContent=tfName(tf);
+    $('pivotSource').textContent=`${tfName(tf)} Pivot · source: ${tfName(p.source_timeframe||tf)}${p.warning?' · '+p.warning:''}`;
+    $('levels').innerHTML=[['R3',p.r3,'res'],['R2',p.r2,'res'],['R1',p.r1,'res'],['Pivot',p.pivot,'piv'],['S1',p.s1,'sup'],['S2',p.s2,'sup'],['S3',p.s3,'sup']].map(x=>`<div class="row"><span>${x[0]}</span><b class="${x[2]}">${fmt(x[1])}</b></div>`).join('');
+  }catch(e){
+    $('pivotSource').textContent='Pivot yuklanmadi: '+e.message;
+  }
+}
+async function loadAISmart(tf=aiInterval){
+  aiInterval=tf;
+  $('aiSummary').textContent='AI tahlil yuklanmoqda...';
+  try{
+    const d=await api(`/api/v1/ai-smart-analysis/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`);
+    const ai=d.ai_smart||d.ai||{};
+    $('aiMode').textContent=ai.mode||'fallback';
+    $('aiSummary').textContent=ai.summary||d.error||'—';
+    $('confidence').textContent=ai.confidence!=null?ai.confidence+'%':'—';
+    $('aiBias').textContent=ai.bias||'—';
+    $('aiAdvice').textContent=ai.advice||'—';
+  }catch(e){
+    $('aiMode').textContent='ERROR';
+    $('aiSummary').textContent=e.message||'AI Smart Analysis ishlamadi';
+  }
+}
+function renderAnalysis(d){const s=d.setup||{},ta=d.technical||{};$('signalMain').textContent=d.direction||'WAIT';$('signalMain').className='signal-main '+((d.direction||'WAIT').toLowerCase()==='buy'?'buy':(d.direction||'').toLowerCase()==='sell'?'sell':'wait');$('signalReason').textContent=d.headline||s.reason||'—';$('entry').textContent=fmt(s.entry);$('sl').textContent=fmt(s.stop_loss);$('tp1').textContent=fmt((s.take_profit||[])[0]);$('tp2').textContent=fmt((s.take_profit||[])[1]);$('bias').textContent=d.levels?.bias||s.pivot_filter||'—';$('pivotFilter').textContent=d.levels?.bias||'—';const p=d.levels||{};$('levels').innerHTML=[['R3',p.r3,'res'],['R2',p.r2,'res'],['R1',p.r1,'res'],['Pivot',p.pivot,'piv'],['S1',p.s1,'sup'],['S2',p.s2,'sup'],['S3',p.s3,'sup']].map(x=>`<div class="row"><span>${x[0]}</span><b class="${x[2]}">${fmt(x[1])}</b></div>`).join('');$('rsi').textContent=fmt(ta.rsi);$('atr').textContent=fmt(ta.atr);$('rsiState').textContent=ta.rsi_state||'—';$('taTrend').textContent=ta.trend||'—';$('taState').textContent=d.interval?.toUpperCase()||interval;$('taSummary').textContent=ta.summary||'—';const ai=d.ai||{};$('aiMode').textContent=ai.mode||'—';$('aiSummary').textContent=ai.summary||'—';$('confidence').textContent=ai.confidence!=null?ai.confidence+'%':'—';$('aiBias').textContent=ai.bias||'—';$('aiAdvice').textContent=ai.advice||'—';}
+function updateCountdown(){const ts=countdownData?.close_timestamp; if(!ts)return;$('countdown').textContent=fmtDuration(Math.max(0,ts*1000-Date.now())); const close=new Date(ts*1000); $('closeTime').textContent='Close time: '+close.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});}function fmtDuration(ms){let s=Math.floor(ms/1000),h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);s%=60;return h?`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`}
+async function loadSessions(){try{const d=await api('/api/v1/sessions');const html=d.sessions.map(x=>`<div class="session ${x.open?'open':''}"><b>${x.name}</b><div class="sub">${x.local_time||''}</div><div class="status ${x.open?'up':'muted'}">${x.open?'OPEN':'CLOSED'}</div></div>`).join('');$('sessions').innerHTML=html;$('sessions2').innerHTML=html;$('sessionClock').textContent=d.utc_time||'—';$('sessionClock2').textContent=d.utc_time||'—'}catch(e){}}
+async function loadCalendar(){try{const d=await api('/api/v1/calendar?days=7');const source=d.provider?` · Source: ${d.provider}`:'';if(!d.events?.length){$('calendar').innerHTML=`<div class="mini">${d.warning||'HIGH IMPACT eventlar topilmadi.'}</div>`;return}$('calendar').innerHTML=`<div class="mini" style="margin-bottom:8px">USD · HIGH IMPACT${source} · ${d.events.length} event</div>`+d.events.map(x=>`<div class="calendar-item"><div><span class="tag">HIGH IMPACT</span> · ${x.country||'USD'} · ${x.time||''}</div><b>${x.event||'Economic event'}</b><div class="mini">Forecast: ${x.forecast??x.estimate??'—'} · Previous: ${x.previous??'—'} · Actual: ${x.actual??'—'}</div></div>`).join('')}catch(e){$('calendar').innerHTML=`<div class="mini">Calendar ma’lumoti hozircha mavjud emas: ${e.message}</div>`}}
+async function loadMtf(){try{const d=await api(`/api/v1/multi-timeframe/${encodeURIComponent(symbol)}`);$('mtfOverall').textContent=d.overall||'—';$('mtfGrid').innerHTML=(d.frames||[]).map(x=>`<div class="metric"><small>${x.interval}</small><b class="${(x.trend||'').toLowerCase()==='bullish'?'buy':(x.trend||'').toLowerCase()==='bearish'?'sell':''}">${x.trend||'—'}</b><div class="mini">RSI ${x.rsi!=null?fmt(x.rsi):'—'}</div></div>`).join('')}catch(e){}}
+async function loadStats(){if(!token){$('totalSignals').textContent='0';$('completedSignals').textContent='0';$('wins').textContent='0';$('losses').textContent='0';$('winrate').textContent='0%';return}try{const d=await api('/api/v1/signals/analytics');$('totalSignals').textContent=d.total_signals;$('completedSignals').textContent=d.completed_trades;$('wins').textContent=d.wins;$('losses').textContent=d.losses;$('winrate').textContent=d.winrate+'%'}catch(e){}}
+async function loadHistory(){if(!token){$('history').innerHTML='<tr><td colspan="7">Kirish kerak.</td></tr>';return}try{const d=await api('/api/v1/signals/history?limit=50');$('history').innerHTML=(d.items||[]).map(x=>`<tr><td>${new Date(x.created_at).toLocaleString()}</td><td>${x.interval}</td><td class="${x.direction==='BUY'?'buy':x.direction==='SELL'?'sell':''}">${x.direction}</td><td>${fmt(x.entry)}</td><td>${(x.tp||[]).map(fmt).join(' / ')||'—'}</td><td>${fmt(x.sl)}</td><td class="outcome-${x.outcome==='TP HIT'?'tp':x.outcome==='SL HIT'?'sl':x.outcome==='OPEN'?'open':'amb'}">${x.outcome}</td></tr>`).join('')||'<tr><td colspan="7">Signal yo‘q.</td></tr>'}catch(e){$('history').innerHTML='<tr><td colspan="7">History yuklanmadi.</td></tr>'}}
+function componentText(v){if(v==null)return '—';if(typeof v==='object'){if(v.type)return v.type+(v.low!=null?' · '+fmt(v.low)+'–'+fmt(v.high):'');if(v.support!=null)return 'S '+fmt(v.support)+' · R '+fmt(v.resistance);return JSON.stringify(v)}return String(v)}
+function tfName(tf){return ({'1min':'1 MIN','5min':'5 MIN','15min':'15 MIN','30min':'30 MIN','1h':'1 HOUR','4h':'4 HOUR','1day':'1 DAY'})[tf]||tf;}
+function advCard(tf,x){const sig=x.signal||'WAIT', cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait', badge=sig==='BUY'?'badge-buy':sig==='SELL'?'badge-sell':'badge-wait';const c=x.components||{};return `<div class="advanced-card ${cls}"><div class="advanced-head"><div><div class="mini">${tfName(tf)}</div><div class="advanced-signal ${badge}">${sig}</div></div><span class="pill">${x.confidence||0}%</span></div><div class="mini" style="margin-top:4px">Score ${x.score??0} · ${x.setup||'—'}</div><div class="grid4" style="margin-top:9px"><div class="metric"><small>Entry</small><b>${fmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${fmt(x.stop_loss)}</b></div><div class="metric"><small>TP1</small><b>${fmt((x.take_profit||[])[0])}</b></div><div class="metric"><small>TP2</small><b>${fmt((x.take_profit||[])[1])}</b></div></div><div class="component-grid"><div class="component"><small>ICT</small><b>${componentText(c['ICT'])}</b></div><div class="component"><small>SNR</small><b>${componentText(c['SNR'])}</b></div><div class="component"><small>SNR Malaysia</small><b>${componentText(c['SNR Malaysia'])}</b></div><div class="component"><small>Order Block</small><b>${componentText(c['Order Block'])}</b></div><div class="component"><small>FVG</small><b>${componentText(c['FVG'])}</b></div><div class="component"><small>Liquidity</small><b>${componentText(c['Liquidity'])}</b></div><div class="component"><small>Trend Line</small><b>${componentText(c['Trend Line'])}</b></div><div class="component"><small>Global Trend</small><b>${componentText(c['Global Trend Line'])}</b></div><div class="component"><small>BOS</small><b>${componentText(c['BOS'])}</b></div><div class="component"><small>CHOCH</small><b>${componentText(c['CHOCH'])}</b></div><div class="component"><small>Internal</small><b>${componentText(c['Internal Structure'])}</b></div><div class="component"><small>RSI / ATR</small><b>${fmt(x.rsi)} / ${fmt(x.atr)}</b></div></div><div class="advanced-actions"><div class="mini">${x.reason||'—'}</div>${sig==='BUY'||sig==='SELL'?`<button class="btn" data-save-advanced="${tf}">Saqlash</button>`:''}</div></div>`}
+async function loadAdvancedSignals(){if(!token){showToast('Avval tizimga kiring');$('authModal').classList.add('show');return}$('advancedStatus').textContent='7 timeframe hisoblanmoqda…';$('advancedGrid').innerHTML='<div class="card">Signal hisoblanmoqda...</div>';try{const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);const order=['1min','5min','15min','30min','1h','4h','1day'];$('advancedGrid').innerHTML=order.map(tf=>advCard(tf,d.timeframes?.[tf]||{})).join('');$('advancedStatus').textContent=`${symbol} · ${new Date(d.generated_at).toLocaleString()} · har bir timeframe alohida`; }catch(e){$('advancedStatus').textContent=e.message;$('advancedGrid').innerHTML='<div class="card">Signal yuklanmadi.</div>'}}
+document.addEventListener('click',async e=>{const b=e.target.closest('[data-save-advanced]');if(!b)return;const tf=b.dataset.saveAdvanced;b.disabled=true;try{await api(`/api/v1/signals/save-advanced?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}`,{method:'POST'});showToast(tfName(tf)+' signal saqlandi');loadStats();if($('historySection').classList.contains('active'))loadHistory()}catch(err){showToast(err.message)}finally{b.disabled=false}});
+function openSection(id){document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));$(id).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',mtfSection:'Multi-Timeframe Analysis',aiSection:'AI Smart Analysis',signalSection:'Signal Lab',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',historySection:'Signal History'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>mountTradingView('chart2',interval),50);setTimeout(()=>window.dispatchEvent(new Event('resize')),150);}if(id==='overview'){setTimeout(()=>mountTradingView('chart',interval),50);}if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='aiSection')loadAISmart(aiInterval);if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory()}
+
+document.addEventListener('click',e=>{
+  const b=e.target.closest('[data-pivot-interval]');
+  if(b){
+    document.querySelectorAll('[data-pivot-interval]').forEach(x=>x.classList.toggle('active',x===b));
+    loadPivots(b.dataset.pivotInterval);
+  }
+  const a=e.target.closest('[data-ai-interval]');
+  if(a){
+    document.querySelectorAll('[data-ai-interval]').forEach(x=>x.classList.toggle('active',x===a));
+    loadAISmart(a.dataset.aiInterval);
+  }
+  const s=e.target.closest('[data-signal-interval]');
+  if(s){
+    document.querySelectorAll('[data-signal-interval]').forEach(x=>x.classList.toggle('active',x===s));
+    signalInterval=s.dataset.signalInterval;
+    loadSelectedSignal(signalInterval);
+  }
+});
+async function loadSelectedSignal(tf){
+  try{
+    const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);
+    const x=d.timeframes?.[tf]||{};
+    $('advancedStatus').textContent=`${tfName(tf)} signal · ${x.provider||'local engine'} · ${x.confidence||0}%`;
+    $('advancedGrid').innerHTML=advCard(tf,x);
+  }catch(e){
+    $('advancedStatus').textContent=e.message;
+    $('advancedGrid').innerHTML='<div class="card">Signal yuklanmadi.</div>';
+  }
+}
+async function saveSignal(){if(!token){showToast('Avval tizimga kiring');$('authModal').classList.add('show');return}try{await api(`/api/v1/signals/save?symbol=${encodeURIComponent(symbol)}&interval=${interval}`,{method:'POST'});showToast('Signal saqlandi');loadStats();loadHistory()}catch(e){showToast(e.message)}}
+
+function bucketStart(ts, secs){return Math.floor(ts/secs)*secs}
+function currentIntervalSeconds(){return ({'1min':60,'5min':300,'15min':900,'30min':1800,'1h':3600,'4h':14400,'1day':86400})[interval]||300}
+function updateLiveCandle(price, ts){
+  const secs=currentIntervalSeconds(), bucket=bucketStart(ts,secs);
+  if(!liveCandle || liveCandle.time!==bucket){
+    liveCandle={time:bucket,open:price,high:price,low:price,close:price};
+  } else {
+    liveCandle.high=Math.max(liveCandle.high,price);liveCandle.low=Math.min(liveCandle.low,price);liveCandle.close=price;
+  }
+  $('price').textContent=fmt(price); $('change').textContent='Real-time tick'; $('change').className='change up';
+  lastTickTs=Date.now();
+}
+function closeMarketStream(){try{marketWS?.close()}catch(e){} marketWS=null;streamKey=''}
+async function quoteHeartbeat(){
+  // When Node.js WS is healthy, do not poll Twelve Data REST every few seconds.
+  // That was causing 429 responses and flipping the UI into LIVE RETRY.
+  const wsFresh = marketWS && marketWS.readyState===WebSocket.OPEN && (Date.now()-lastTickTs < 20000);
+  if(wsFresh){
+    $('mode').textContent='LIVE STREAM'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
+    return true;
+  }
+  try{
+    const q=await api(`/api/v1/quote/${encodeURIComponent(symbol)}`);
+    if(q?.mode==='live' && q.price!=null){
+      const price=+q.price; $('price').textContent=fmt(price);
+      $('mode').textContent=marketWS&&marketWS.readyState===WebSocket.OPEN?'LIVE STREAM':'LIVE REST'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
+      updateLiveCandle(price,Math.floor(Date.parse(q.timestamp)/1000)||Math.floor(Date.now()/1000));
+      return true;
+    }
+    throw Error(q?.warning||'Live quote unavailable');
+  }catch(e){
+    if(!marketWS||marketWS.readyState!==WebSocket.OPEN){ $('mode').textContent='LIVE RETRY'; $('mode').style.color='var(--amber)'; $('chartStatus').textContent='RETRYING'; }
+    $('change').textContent=e.message||'Live quote unavailable';
+    return false;
+  }
+}
+
+function connectMarketStream(){
+ if(DISABLE_MARKET_WS) return;
+ closeMarketStream();
+ const wsBase=API_BASE.replace(/^http/,'ws');
+ const nodeWsBase=NODE_MARKET_URL.replace(/^http/,'ws');
+ const wsUrl=wsBase+`/api/v1/ws/market/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}`;
+ try{
+   streamKey=symbol+'|'+interval; marketWS=new WebSocket(wsUrl);
+   marketWS.onopen=()=>{ $('mode').textContent='LIVE STREAM'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE'; $('change').textContent='WebSocket real-time tick'; };
+   marketWS.onmessage=ev=>{
+     const m=JSON.parse(ev.data);
+     if(m.type==='tick') updateLiveCandle(+m.price,+m.timestamp); if(m.type==='candle'&&m.candle){ const cc=m.candle; liveCandle=cc; series.update(cc); if(series2) series2.update(cc); $('price').textContent=fmt(+m.price); }
+     if(m.type==='reconnecting'){ if(Date.now()-lastTickTs>20000){ $('mode').textContent='RECONNECTING'; $('mode').style.color='var(--amber)'; } } if(m.type==='error'){ $('mode').textContent='LIVE ERROR'; showToast(m.message||'Stream error'); }
+   };
+   marketWS.onclose=()=>{ $('chartStatus').textContent='RECONNECTING'; $('mode').textContent='RECONNECTING'; setTimeout(()=>{if(document.visibilityState!=='hidden')connectMarketStream()},2500)};
+   marketWS.onerror=()=>{ $('chartStatus').textContent='STREAM ERROR'; try{marketWS.close()}catch{} setTimeout(()=>{if(document.visibilityState!=='hidden')connectMarketStream()},1200) };
+ }catch(e){showToast('Real-time stream could not start')}
+}
+function setAuth(mode){authMode=mode;$('authTitle').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSubmit').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSwitch').textContent=mode==='login'?'Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish':'Hisobingiz bormi? Kirish';$('email').placeholder=mode==='login'?'Login yoki elektron pochta':'Elektron pochta';$('password').required=mode==='login';$('password').style.display=mode==='login'?'block':'none';$('password').value='';$('authMsg').textContent=mode==='register'?'Email kiriting — login va parol avtomatik yaratiladi.':''}
+$('timeframes').addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b)setTf(b.dataset.interval)});document.querySelectorAll('.tfbar').forEach(bar=>bar.addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b)setTf(b.dataset.interval)}));document.querySelectorAll('.nav button').forEach(b=>b.addEventListener('click',()=>openSection(b.dataset.section)));$('saveSignal').onclick=saveSignal;$('refreshAdvanced').onclick=loadAdvancedSignals;$('refreshStats').onclick=loadStats;$('refreshCalendar').onclick=loadCalendar;$('refreshHistory').onclick=loadHistory;$('authBtn').onclick=()=>{ setAuth('login'); $('authMsg').textContent=''; $('authModal').classList.add('show'); setTimeout(()=>$('email').focus(),50); }; $('authSwitch').onclick=()=>setAuth(authMode==='login'?'register':'login');async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(()=>{});token='';localStorage.removeItem('trading_token');$('plan').textContent='Guest';$('authBtn').textContent='Kirish';loadStats();loadHistory();$('authModal').classList.add('show');$('authMsg').textContent='Tizimdan chiqildi. Qayta kirish talab qilinadi.';showToast('Tizimdan chiqildi')};$('authForm').onsubmit=async e=>{e.preventDefault();$('authMsg').textContent='Tekshirilmoqda…';try{const path=authMode==='login'?'/api/auth/login':'/api/auth/register';const payload=authMode==='login'?{username:$('email').value,password:$('password').value}:{email:$('email').value};const d=await api(path,{method:'POST',body:JSON.stringify(payload)});token=d.token;localStorage.setItem('trading_token',token);$('plan').textContent=d.user?.plan||'free';$('authBtn').textContent='Chiqish'; if(authMode==='register' && d.credentials){ $('authMsg').textContent=(d.email_message||'Hisob yaratildi')+' Login: '+d.credentials.login+' | Parol: '+d.credentials.password; } else { $('authMsg').textContent=''; } $('authModal').classList.remove('show');showToast(authMode==='login'?'Muvaffaqiyatli kirdingiz':'Hisob yaratildi');loadStats();loadHistory()}catch(err){$('authMsg').textContent=err.message}};
+(async()=>{try{if(token){try{const me=await api('/api/auth/me');$('plan').textContent=me.plan||'free';$('authBtn').textContent='Chiqish'}catch(_){token='';localStorage.removeItem('trading_token')}}if(!token){$('authModal').classList.add('show');$('authBtn').textContent='Kirish'}const nd=await nodeMarketHealth(); if(nd?.ok) $('change').textContent='Cloud market gateway ready'; else window.__NODE_MARKET_DISABLED=true; const d=await api('/api/health');try{const md=await api('/api/market/diagnostics');if(md.live_ready){const ok=Object.entries(md.providers||{}).filter(([,v])=>v.ok).map(([k])=>k.toUpperCase()).join(' + ');$('mode').textContent='LIVE '+(ok||'READY');$('mode').style.color='var(--green)'}else{$('mode').textContent=md?.providers?.realmarketapi?.ok?'LIVE CHECK':'MARKET CHECK';$('mode').style.color='var(--amber)';$('change').textContent=Object.entries(md.providers||{}).map(([k,v])=>k+': '+(v.error||'not configured')).join(' | ')}}catch(_){}mountTradingView('chart', interval);await loadMain(true);await Promise.all([loadStats(),loadHistory(),loadSessions(),loadMtf()]);await quoteHeartbeat();setInterval(async()=>{await quoteHeartbeat();if($('historySection').classList.contains('active'))loadHistory();if($('overview').classList.contains('active'))loadStats()},8000);setInterval(async()=>{loadAnalysisOnly().catch(()=>{})},15000);setInterval(loadSessions,30000);setInterval(updateCountdown,250);setInterval(()=>{if($('calendarSection').classList.contains('active'))loadCalendar()},60000);}catch(e){showToast(e.message)}})();
+</script>
 </body></html>
