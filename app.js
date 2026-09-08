@@ -59,18 +59,44 @@ function applyCurrentPivotToCharts(){
 function mountTradingView(id, tf=interval){
  const el=$(id); if(!el)return;
  if(lwcCharts[id]){try{lwcCharts[id].chart.remove()}catch(e){} delete lwcCharts[id];}
- el.innerHTML=''; el.style.minHeight=innerWidth<700?'420px':'520px'; el.style.height=innerWidth<700?'420px':'560px'; el.style.position='relative';
- const ch=LightweightCharts.createChart(el,{...chartTheme(),width:el.clientWidth,height:el.clientHeight,localization:{priceFormatter:p=>Number(p).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}});
+ clearPivotChart(id);
+ el.innerHTML=''; el.style.minHeight=innerWidth<700?'360px':'520px'; el.style.height=innerWidth<700?'360px':'560px'; el.style.position='relative';
+ const rect=el.getBoundingClientRect();
+ const width=Math.max(280,Math.floor(rect.width||el.clientWidth||320));
+ const height=Math.max(320,Math.floor(rect.height||el.clientHeight||360));
+ if(typeof LightweightCharts==='undefined') return mountTradingViewFallback(id,tf,'Chart library yuklanmadi');
+ const ch=LightweightCharts.createChart(el,{...chartTheme(),width,height,autoSize:false,handleScroll:{mouseWheel:true,pressedMouseMove:true,horzTouchDrag:true,vertTouchDrag:true},handleScale:{mouseWheel:true,pinch:true,axisPressedMouseMove:true},localization:{priceFormatter:p=>Number(p).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}});
  const ser=ch.addCandlestickSeries({upColor:'#2fd49a',downColor:'#ef6471',borderVisible:false,wickUpColor:'#2fd49a',wickDownColor:'#ef6471'});
  lwcCharts[id]={chart:ch,series:ser,el,tf};
  if(id==='chart'){window.chart=ch;window.series=ser;chart=ch;series=ser;} else {window.chart2=ch;window.series2=ser;chart2=ch;series2=ser;}
- new ResizeObserver(()=>{try{ch.applyOptions({width:el.clientWidth,height:el.clientHeight});positionPivotZones(id)}catch(e){}}).observe(el);
- if(window.__selectedPivot) setTimeout(()=>drawPivotOnChart(id,window.__selectedPivot),50);
- api(`/api/v1/candles/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}&limit=500`).then(d=>{if(d.candles) applyChart(d.candles,d.mode||'live')}).catch(e=>{if(id==='chart')showToast(e.message||'Chart data unavailable')});
+ const resize=()=>{try{const r=el.getBoundingClientRect();ch.applyOptions({width:Math.max(280,Math.floor(r.width||el.clientWidth||320)),height:Math.max(320,Math.floor(r.height||el.clientHeight||360))});positionPivotZones(id)}catch(e){}};
+ if(window.ResizeObserver){const ro=new ResizeObserver(resize);ro.observe(el);lwcCharts[id].ro=ro;} else window.addEventListener('resize',resize);
+ resize();
+ const loading=document.createElement('div'); loading.className='chart-loading'; loading.textContent='Real market chart yuklanmoqda…'; el.appendChild(loading);
+ api(`/api/v1/candles/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}&limit=500`).then(d=>{
+   loading.remove();
+   if(!d.candles?.length) throw Error(d.warning||'Real market candle ma’lumoti mavjud emas');
+   applyChart(d.candles,d.mode||'live');
+ }).catch(e=>{
+   loading.remove();
+   if(id==='chart') showToast(e.message||'Chart data unavailable');
+   mountTradingViewFallback(id,tf,e.message||'Real candle data unavailable');
+ });
+}
+function mountTradingViewFallback(id,tf,reason){
+ const el=$(id); if(!el)return;
+ el.innerHTML=''; el.style.position='relative'; el.style.minHeight=innerWidth<700?'360px':'520px'; el.style.height=innerWidth<700?'360px':'560px';
+ const wrap=document.createElement('div'); wrap.className='tradingview-widget-container'; wrap.style.width='100%'; wrap.style.height='100%';
+ const widget=document.createElement('div'); widget.className='tradingview-widget-container__widget'; widget.style.width='100%'; widget.style.height='100%'; wrap.appendChild(widget); el.appendChild(wrap);
+ const script=document.createElement('script'); script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js'; script.type='text/javascript'; script.async=true;
+ script.textContent=JSON.stringify({autosize:true,symbol:'OANDA:XAUUSD',interval:tvInterval(tf),timezone:'Asia/Tashkent',theme:'dark',style:'1',locale:'en',allow_symbol_change:false,calendar:false,hide_top_toolbar:false,hide_legend:false,save_image:false,withdateranges:true,hide_volume:false,support_host:'https://www.tradingview.com'});
+ wrap.appendChild(script);
+ const badge=document.createElement('div'); badge.className='chart-fallback-badge'; badge.textContent='TradingView live chart'; el.appendChild(badge);
+ if(reason) setTimeout(()=>{if($('chartStatus'))$('chartStatus').textContent='LIVE CHART';},0);
 }
 function initChart(id){mountTradingView(id, interval); return {c:lwcCharts[id]?.chart||null,s:lwcCharts[id]?.series||null};}
 function applyChart(candles,mode){
- const data=(candles||[]).map(x=>({time:Number(x.time),open:+x.open,high:+x.high,low:+x.low,close:+x.close})).filter((x,i,a)=>i===0||x.time>a[i-1].time);
+ const raw=(candles||[]).map(x=>({time:Number(x.time),open:+x.open,high:+x.high,low:+x.low,close:+x.close})).filter(x=>Number.isFinite(x.time)&&Number.isFinite(x.open)&&Number.isFinite(x.high)&&Number.isFinite(x.low)&&Number.isFinite(x.close)&&x.high>=Math.max(x.open,x.close)&&x.low<=Math.min(x.open,x.close)); const data=raw.filter((x,i,a)=>i===0||x.time>a[i-1].time);
  liveCandle=data[data.length-1]||null;
  if(data.length){const first=data[0].time,last=data[data.length-1].time,days=Math.max(1,Math.round((last-first)/86400));$('change').textContent=`${data.length.toLocaleString()} candles · ${days} days history`;$('historyInfo').textContent=`${days}+ days · ${data.length.toLocaleString()} candles`;}
  Object.values(lwcCharts).forEach(item=>{try{item.series.setData(data);item.chart.timeScale().fitContent()}catch(e){}});
