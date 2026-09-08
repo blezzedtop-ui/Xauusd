@@ -25,3 +25,9 @@ Then open:
 - `/api/market/diagnostics`
 
 `/api/market/diagnostics` should show `realmarketapi.configured=true` and `ok=true`.
+
+
+## V7 fixes
+- Multi-timeframe analysis no longer fails when one RealMarketAPI timeframe is unavailable.
+- Analysis endpoint returns visible structured errors instead of blank Signal/Pivot fields.
+- Pivot has an M5 fallback.

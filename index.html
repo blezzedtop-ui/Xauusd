@@ -11,8 +11,69 @@
 </style>
 <style>.title-shimmer{background:linear-gradient(90deg,#eef3f8 0%,#9fc7ff 35%,#f5c15d 52%,#eef3f8 72%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:titleShimmer 7s linear infinite}@keyframes titleShimmer{to{background-position:-220% 0}}.gold-photo-bg{position:fixed;inset:0;z-index:0;pointer-events:none;background-image:url("assets/gold-trading-bg.png");background-size:cover;background-position:center;background-repeat:no-repeat;filter:saturate(.92) contrast(1.03);opacity:.34;transform:translateZ(0);will-change:transform}.gold-photo-bg:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(3,6,10,.34),rgba(3,7,13,.72) 72%,rgba(2,5,9,.86));}.main{position:relative;z-index:3}.sidebar,.topbar,.card,.toast,.modal{z-index:4}.gold-photo-bg+*{position:relative;z-index:2}@media (max-width:900px){.gold-photo-bg{opacity:.22;background-position:center top}}
 .advanced-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.advanced-card{border:1px solid var(--line);background:rgba(8,14,21,.86);border-radius:12px;padding:12px;box-shadow:0 12px 30px rgba(0,0,0,.16)}.advanced-card.buy{border-color:rgba(48,212,154,.35)}.advanced-card.sell{border-color:rgba(240,105,120,.35)}.advanced-card.wait{border-color:rgba(245,193,93,.25)}.advanced-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.advanced-signal{font-size:22px;font-weight:1000;letter-spacing:.06em}.component-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}.component{padding:7px 8px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.02)}.component small{display:block;color:var(--muted);font-size:9px;margin-bottom:3px}.component b{font-size:11px}.advanced-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px}.badge-buy{color:var(--green)}.badge-sell{color:var(--red)}.badge-wait{color:var(--gold)}@media(max-width:900px){.advanced-grid{grid-template-columns:1fr}}
-</style><link rel="manifest" href="/manifest.webmanifest">
+</style>
+<style id="pivot-chart-overlay-style">
+.chart{position:relative!important}.pivot-chart-overlay{position:absolute;inset:0;pointer-events:none;z-index:8;overflow:hidden}.pivot-zone{position:absolute;left:0;right:0;border-top:1px solid rgba(245,193,93,.28);border-bottom:1px solid rgba(245,193,93,.18);opacity:.8}.pivot-zone span{position:absolute;left:10px;top:3px;font-size:9px;font-weight:800;letter-spacing:.08em;padding:3px 6px;border-radius:5px;background:rgba(7,9,13,.72);backdrop-filter:blur(4px)}.resistance-zone{background:linear-gradient(90deg,rgba(239,100,113,.10),rgba(245,193,93,.04),rgba(239,100,113,.08));border-color:rgba(239,100,113,.25)}.resistance-zone span{color:#ef7a82}.support-zone{background:linear-gradient(90deg,rgba(48,212,154,.10),rgba(245,193,93,.04),rgba(48,212,154,.08));border-color:rgba(48,212,154,.25)}.support-zone span{color:#6be0b0}.pivot-chart-badge{position:absolute;top:9px;left:10px;z-index:9;padding:5px 8px;border:1px solid rgba(245,193,93,.22);border-radius:7px;background:rgba(8,11,16,.72);color:#f5c15d;font-size:10px;font-weight:800;backdrop-filter:blur(5px)}
+</style>
+<link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#0b1220">
+
+<style id="gold-liquid-glass-theme">
+:root{
+  --bg:#07090d;--panel:#0d1117;--panel2:#111720;--line:rgba(255,215,120,.13);
+  --text:#f5f1e8;--muted:#8e929b;--accent:#f2c35f;--gold:#f5c15d;
+  --gold2:#ffe6a1;--gold3:#b8781e;--glass:rgba(17,21,28,.68);
+  --shadow:0 22px 60px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.045)
+}
+html,body{background:#06080c;color:var(--text)}
+body{overflow-x:hidden}
+body:before{content:"";position:fixed;inset:-20%;pointer-events:none;z-index:0;background:radial-gradient(circle at 12% 15%,rgba(245,193,93,.10),transparent 22%),radial-gradient(circle at 86% 12%,rgba(255,218,137,.07),transparent 20%),radial-gradient(circle at 70% 88%,rgba(190,124,28,.07),transparent 25%);animation:liquidDrift 16s ease-in-out infinite alternate}
+@keyframes liquidDrift{from{transform:translate3d(-1%,0,0) scale(1)}to{transform:translate3d(1.5%,1%,0) scale(1.035)}}
+.gold-photo-bg{opacity:.12!important;mix-blend-mode:screen}
+.app{position:relative;z-index:1;grid-template-columns:226px minmax(0,1fr);gap:18px;padding:14px 16px}
+.sidebar{position:sticky;top:14px;height:calc(100vh - 28px);border:1px solid rgba(255,215,120,.16);border-radius:24px;background:linear-gradient(160deg,rgba(22,25,31,.78),rgba(8,11,15,.70));backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);box-shadow:var(--shadow);padding:18px 12px;overflow:hidden}
+.sidebar:before,.card:before,.topbar:before,.modal-card:before{content:"";position:absolute;pointer-events:none;inset:0;border-radius:inherit;background:linear-gradient(120deg,rgba(255,239,194,.10),transparent 28%,transparent 72%,rgba(245,193,93,.07));opacity:.7}
+.sidebar:after{content:"";position:absolute;left:-35%;top:14%;width:170%;height:1px;background:linear-gradient(90deg,transparent,rgba(255,221,142,.35),transparent);transform:rotate(-12deg);animation:glassSweep 9s ease-in-out infinite}
+@keyframes glassSweep{0%,55%{opacity:0;transform:translateX(-30%) rotate(-12deg)}65%,85%{opacity:1}100%{opacity:0;transform:translateX(35%) rotate(-12deg)}}
+.brand{position:relative;padding:8px 10px 18px;border-bottom:1px solid rgba(255,215,120,.12);margin-bottom:15px}
+.brand b,.brand-logo b{color:var(--gold2);text-shadow:0 0 18px rgba(245,193,93,.20)}
+.brand span{color:#8f939b}
+.nav{position:relative;z-index:2;gap:7px}
+.nav button{position:relative;overflow:hidden;border:1px solid transparent;background:transparent;color:#9398a1;text-align:left;padding:12px 12px;border-radius:13px;cursor:pointer;transition:transform .18s ease,background .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease}
+.nav button:before{content:"";position:absolute;inset:0;background:linear-gradient(110deg,rgba(255,226,155,.16),rgba(245,193,93,.04),transparent);opacity:0;transition:.18s}
+.nav button:hover{color:#fff;transform:translateX(2px);border-color:rgba(245,193,93,.12);background:rgba(255,255,255,.035)}
+.nav button:hover:before{opacity:1}
+.nav button.active{color:#fff;border-color:rgba(245,193,93,.28);background:linear-gradient(135deg,rgba(245,193,93,.22),rgba(167,106,19,.10) 48%,rgba(255,255,255,.035));box-shadow:0 10px 26px rgba(245,193,93,.08),inset 0 1px 0 rgba(255,239,194,.15)}
+.nav button.active:after{content:"";position:absolute;left:0;top:20%;bottom:20%;width:3px;border-radius:4px;background:linear-gradient(180deg,#ffe8a8,#c88829);box-shadow:0 0 12px rgba(245,193,93,.65)}
+.main{padding:8px 4px 28px;max-width:1700px}
+.topbar{position:relative;overflow:hidden;padding:16px 18px;border:1px solid rgba(255,215,120,.14);border-radius:20px;background:linear-gradient(135deg,rgba(20,24,31,.76),rgba(9,12,17,.64));backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);box-shadow:var(--shadow);margin-bottom:16px}
+.topbar h1{color:#f6e5bd;font-size:20px;letter-spacing:.01em}.topbar p{color:#858b95}
+.pill{border-color:rgba(245,193,93,.15);background:rgba(255,255,255,.035);color:#a6aab1;box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.btn,.tf{position:relative;overflow:hidden;border-color:rgba(245,193,93,.16);background:linear-gradient(135deg,rgba(255,255,255,.055),rgba(245,193,93,.035));color:#d7d9dd;box-shadow:inset 0 1px 0 rgba(255,255,255,.045);transition:transform .18s ease,border-color .18s ease,box-shadow .18s ease,background .18s ease}
+.btn:hover,.tf:hover{transform:translateY(-1px);border-color:rgba(245,193,93,.35);box-shadow:0 8px 22px rgba(245,193,93,.08)}
+.btn.primary{background:linear-gradient(135deg,#ffe19a 0%,#e4aa3c 45%,#9d6419 100%);border-color:#f6cd78;color:#19140a;font-weight:800;box-shadow:0 8px 25px rgba(245,193,93,.18),inset 0 1px 0 rgba(255,255,255,.45)}
+.tf.active{background:linear-gradient(135deg,#ffe7a6,#d99b31 52%,#8f5a17);border-color:#f1c565;color:#171208;box-shadow:0 7px 20px rgba(245,193,93,.16),inset 0 1px 0 rgba(255,255,255,.5)}
+.dashboard{gap:16px}
+.card{position:relative;overflow:hidden;background:linear-gradient(145deg,rgba(20,24,31,.72),rgba(8,11,16,.70));border:1px solid rgba(255,215,120,.13);border-radius:20px;padding:15px;box-shadow:var(--shadow);backdrop-filter:blur(18px);-webkit-backdrop-filter:blur(18px)}
+.card:after{content:"";position:absolute;top:-70px;right:-70px;width:180px;height:180px;border-radius:50%;background:radial-gradient(circle,rgba(245,193,93,.10),transparent 68%);pointer-events:none}
+.card+.card{margin-top:16px}
+.section-head h2,.section-head h3{color:#f1dfb5}
+.metric,.signal-box,.advanced-card,.component,.session,.calendar-item{position:relative;background:linear-gradient(145deg,rgba(255,255,255,.045),rgba(255,255,255,.018));border-color:rgba(255,215,120,.10);box-shadow:inset 0 1px 0 rgba(255,255,255,.035)}
+.metric{border-radius:13px}.metric b{color:#eee4cd}.metric small{color:#878d97}
+.signal-box{border-radius:15px}
+.advanced-card{border-radius:17px}
+.advanced-card.buy{border-color:rgba(48,212,154,.28)}.advanced-card.sell{border-color:rgba(240,105,120,.28)}.advanced-card.wait{border-color:rgba(245,193,93,.26)}
+.chart{border-color:rgba(255,215,120,.14);border-radius:15px;background:#07090c;box-shadow:inset 0 1px 0 rgba(255,255,255,.03)}
+.history-note b,.countdown,.piv{color:#f5ca72;text-shadow:0 0 12px rgba(245,193,93,.12)}
+.dot{box-shadow:0 0 12px rgba(48,212,154,.65)}
+.sidebar-bottom{position:relative;z-index:2;padding:10px;border:1px solid rgba(255,215,120,.08);border-radius:13px;background:rgba(255,255,255,.025)}
+.modal{background:rgba(2,4,7,.72);backdrop-filter:blur(14px)}
+.modal-card{position:relative;overflow:hidden;background:linear-gradient(145deg,rgba(22,26,33,.92),rgba(8,11,16,.92));border-color:rgba(255,215,120,.20);box-shadow:0 30px 90px rgba(0,0,0,.6),inset 0 1px 0 rgba(255,255,255,.05)}
+.input{background:rgba(5,8,12,.72);border-color:rgba(255,215,120,.14)}.input:focus{outline:none;border-color:rgba(245,193,93,.55);box-shadow:0 0 0 3px rgba(245,193,93,.08)}
+@media(max-width:1050px){.app{grid-template-columns:1fr;gap:10px;padding:8px}.sidebar{position:relative;top:auto;height:auto;min-height:0;border-radius:18px;padding:12px}.brand{padding:5px 8px 11px;margin-bottom:10px}.nav{flex-direction:row;overflow-x:auto;padding-bottom:2px;scrollbar-width:none}.nav::-webkit-scrollbar{display:none}.nav button{white-space:nowrap;padding:10px 12px}.nav button.active:after{left:15%;right:15%;top:auto;bottom:0;width:auto;height:2px}.sidebar-bottom{display:none}.main{padding:2px 2px 22px}.topbar{border-radius:17px}.dashboard{grid-template-columns:1fr}}
+@media(max-width:620px){.app{padding:6px}.topbar{padding:13px;border-radius:16px}.topbar h1{font-size:17px}.card{border-radius:17px;padding:12px}.metric{padding:9px}.price{font-size:29px}.btn,.tf{min-height:38px}.chart{height:430px}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+</style>
 </head>
 <body>
 <div class="gold-photo-bg" aria-hidden="true"></div>
@@ -44,7 +105,7 @@
         <div class="card"><div class="section-head"><h3>Signal Engine</h3><span class="pill" id="bias">—</span></div><div class="signal-box"><div class="signal-main wait" id="signalMain">WAIT</div><div class="mini" id="signalReason">—</div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Entry</small><b id="entry">—</b></div><div class="metric"><small>SL</small><b id="sl">—</b></div><div class="metric"><small>TP1</small><b id="tp1">—</b></div><div class="metric"><small>TP2</small><b id="tp2">—</b></div></div></div><div style="margin-top:10px"><button class="btn primary" id="saveSignal">Signalni saqlash</button></div></div>
       </div>
       <aside>
-        <div class="card"><div class="section-head"><h3>Pivot / Key Levels</h3><span class="pill" id="pivotFilter">—</span></div><div class="levels" id="levels"></div></div>
+        <div class="card"><div class="section-head"><h3>Pivot / Key Levels</h3><span class="pill" id="pivotFilter">5 MIN</span></div><div class="tfbar pivot-tfbar" id="pivotTfBar"><button class="tf" data-pivot-interval="1min">1M</button><button class="tf active" data-pivot-interval="5min">5M</button><button class="tf" data-pivot-interval="15min">15M</button><button class="tf" data-pivot-interval="30min">30M</button><button class="tf" data-pivot-interval="1h">1H</button><button class="tf" data-pivot-interval="4h">4H</button><button class="tf" data-pivot-interval="1day">1D</button></div><div class="levels" id="levels"></div><div class="mini" id="pivotSource" style="margin-top:8px">Selected timeframe Pivot</div></div>
         <div class="card"><div class="section-head"><h3>Performance</h3><button class="btn" id="refreshStats">↻</button></div><div class="grid2"><div class="metric"><small>Total</small><b id="totalSignals">0</b></div><div class="metric"><small>Completed</small><b id="completedSignals">0</b></div><div class="metric"><small>Wins</small><b id="wins">0</b></div><div class="metric"><small>Losses</small><b id="losses">0</b></div></div><div class="metric" style="margin-top:8px"><small>Winrate (TP HIT / TP HIT + SL HIT)</small><b id="winrate">0%</b></div></div>
         <div class="card"><div class="section-head"><h3>Market Sessions</h3><span class="pill" id="sessionClock">—</span></div><div class="sessions" id="sessions"></div></div>
       </aside>
@@ -52,19 +113,19 @@
   </section>
 
   <section class="section" id="chartSection"><div class="card"><div class="section-head"><h2>Live Chart</h2><span class="pill" id="chartStatus">—</span></div><div class="tfbar"><button class="tf" data-interval="1min">1M</button><button class="tf" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div><div class="chart" id="chart2"></div></div></section>
-  <section class="section" id="signalSection"><div class="card"><div class="section-head"><div><h2>Signal Lab</h2><div class="mini">ICT + SNR + SNR Malaysia + Order Block + FVG + Liquidity + Trend Lines + BOS/CHOCH + Internal Structure</div></div><button class="btn primary" id="refreshAdvanced">↻ Barcha timeframe signal</button></div><div class="mini" id="advancedStatus">Har bir timeframe uchun alohida confluence hisoblanadi.</div><div class="advanced-grid" id="advancedGrid" style="margin-top:12px"></div></div></section>
+  <section class="section" id="signalSection"><div class="card"><div class="section-head"><div><h2>Signal Lab</h2><div class="mini">ICT + SNR + SNR Malaysia + Order Block + FVG + Liquidity + Trend Lines + BOS/CHOCH + Internal Structure</div></div><button class="btn primary" id="refreshAdvanced">↻ Barcha timeframe signal</button></div><div class="tfbar"><button class="tf" data-signal-interval="1min">1M</button><button class="tf active" data-signal-interval="5min">5M</button><button class="tf" data-signal-interval="15min">15M</button><button class="tf" data-signal-interval="30min">30M</button><button class="tf" data-signal-interval="1h">1H</button><button class="tf" data-signal-interval="4h">4H</button><button class="tf" data-signal-interval="1day">1D</button></div><div class="mini" id="advancedStatus">Tanlangan timeframe signali va barcha timeframe signal kartalari alohida hisoblanadi.</div><div class="advanced-grid" id="advancedGrid" style="margin-top:12px"></div></div></section>
 <section class="section" id="analysisSection"><div class="card"><div class="section-head"><h2>Technical Analysis</h2><span class="pill" id="taState">—</span></div><div class="grid4"><div class="metric"><small>RSI</small><b id="rsi">—</b></div><div class="metric"><small>RSI State</small><b id="rsiState">—</b></div><div class="metric"><small>ATR</small><b id="atr">—</b></div><div class="metric"><small>Trend</small><b id="taTrend">—</b></div></div><p class="mini" id="taSummary">—</p></div></section>
   <section class="section" id="mtfSection"><div class="card"><div class="section-head"><h2>Multi-Timeframe Analysis</h2><span class="pill" id="mtfOverall">—</span></div><div class="grid4" id="mtfGrid"></div></div></section>
-  <section class="section" id="aiSection"><div class="card"><div class="section-head"><h2>AI Smart Analysis</h2><span class="pill" id="aiMode">—</span></div><div class="signal-box"><div id="aiSummary">—</div><div class="grid2" style="margin-top:10px"><div class="metric"><small>Confidence</small><b id="confidence">—</b></div><div class="metric"><small>AI Bias</small><b id="aiBias">—</b></div></div><p class="mini" id="aiAdvice">—</p></div></div></section>
+  <section class="section" id="aiSection"><div class="card"><div class="section-head"><div><h2>AI Smart Analysis</h2><div class="mini">Tanlangan timeframe bo‘yicha alohida AI tahlil</div></div><span class="pill" id="aiMode">—</span></div><div class="tfbar"><button class="tf" data-ai-interval="1min">1M</button><button class="tf active" data-ai-interval="5min">5M</button><button class="tf" data-ai-interval="15min">15M</button><button class="tf" data-ai-interval="30min">30M</button><button class="tf" data-ai-interval="1h">1H</button><button class="tf" data-ai-interval="4h">4H</button><button class="tf" data-ai-interval="1day">1D</button></div><div class="signal-box"><div id="aiSummary">Tahlil yuklanmoqda...</div><div class="grid2" style="margin-top:10px"><div class="metric"><small>Confidence</small><b id="confidence">—</b></div><div class="metric"><small>AI Bias</small><b id="aiBias">—</b></div></div><p class="mini" id="aiAdvice">—</p></div></div></section>
   <section class="section" id="calendarSection"><div class="card"><div class="section-head"><h2>Economic Calendar</h2><button class="btn" id="refreshCalendar">↻ Yangilash</button></div><div id="calendar"></div></div></section>
   <section class="section" id="sessionsSection"><div class="card"><div class="section-head"><h2>Market Sessions</h2><span class="pill" id="sessionClock2">—</span></div><div class="sessions" id="sessions2"></div></div></section>
   <section class="section" id="historySection"><div class="card"><div class="section-head"><h2>Signal History</h2><button class="btn" id="refreshHistory">↻ Yangilash</button></div><div class="scroll"><table class="history"><thead><tr><th>Time</th><th>TF</th><th>Type</th><th>Entry</th><th>TP</th><th>SL</th><th>Result</th></tr></thead><tbody id="history"></tbody></table></div></div></section>
 </main></div>
 <div class="toast" id="toast"></div>
 <div class="modal auth-required" id="authModal"><div class="modal-card"><div class="auth-brand">GOLD <span>TRADING</span></div><div class="section-head"><div><h3 id="authTitle">Kirish</h3><div class="mini">Trading terminalga kirish uchun login va parolingizni kiriting.</div></div></div><form id="authForm"><input class="input" id="email" type="text" required placeholder="Login yoki elektron pochta"><input class="input" id="password" type="password" minlength="3" placeholder="Parol"><div class="mini" id="authMsg"></div><button class="btn primary" style="width:100%" type="submit" id="authSubmit">Kirish</button></form><div class="link" id="authSwitch">Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish</div></div></div>
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
 <script src="/config.js"></script>
-<script>
-const symbol='XAU/USD';let interval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,streamKey='';
+<script>const symbol='XAU/USD';let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,streamKey='';
 const $=id=>document.getElementById(id);const fmt=v=>v==null?'—':Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
 function showToast(m){$('toast').textContent=m;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),2300)}
 
@@ -80,33 +141,75 @@ const DISABLE_MARKET_WS=IS_NETLIFY || window.DISABLE_MARKET_WS===true;
 async function nodeMarketHealth(){if(!NODE_MARKET_URL)return null;try{const r=await fetch(`${NODE_MARKET_URL}/health`,{cache:'no-store'});if(!r.ok) return null;return await r.json()}catch{return null}}
 async function api(path,opt={}){const headers={'Content-Type':'application/json',...(opt.headers||{})};if(token)headers.Authorization='Bearer '+token;let last;for(const base of API_CANDIDATES){try{const url=path.startsWith('http')?path:base+path;const r=await fetch(url,{...opt,headers,cache:'no-store'});let d={};try{d=await r.json()}catch{}if(!r.ok)throw Error(d.detail||d.message||'HTTP '+r.status);return d}catch(e){last=e}}if(last instanceof TypeError){throw Error('Cloud backendga ulanib bo‘lmadi. Saytning cloud serveri ulanmagan yoki hozircha ishlamayapti.') }throw last}
 function tvInterval(tf){return ({'1min':'1','5min':'5','15min':'15','30min':'30','1h':'60','4h':'240','1day':'D'})[tf]||'5'}
+const lwcCharts={};
+const pivotOverlays={};
+function chartTheme(){return {layout:{background:{type:'solid',color:'#07090d'},textColor:'#9aa3af'},grid:{vertLines:{color:'rgba(255,255,255,.055)'},horzLines:{color:'rgba(255,255,255,.055)'}},rightPriceScale:{borderColor:'rgba(255,215,120,.16)',scaleMargins:{top:.08,bottom:.12}},timeScale:{borderColor:'rgba(255,215,120,.12)',timeVisible:true,secondsVisible:false},crosshair:{mode:0}}}
+function clearPivotChart(id){
+ const item=lwcCharts[id]; if(!item)return;
+ (pivotOverlays[id]?.lines||[]).forEach(line=>{try{item.series.removePriceLine(line)}catch(e){}});
+ if(pivotOverlays[id]?.root)pivotOverlays[id].root.remove();
+ pivotOverlays[id]=null;
+}
+function positionPivotZones(id){
+ const item=lwcCharts[id], ov=pivotOverlays[id]; if(!item||!ov)return;
+ const root=ov.root, h=root.clientHeight;
+ const zones=ov.zones||[];
+ zones.forEach(z=>{
+   const y1=item.series.priceToCoordinate(z.top), y2=item.series.priceToCoordinate(z.bottom);
+   if(y1==null||y2==null){z.el.style.display='none';return}
+   const top=Math.max(0,Math.min(y1,y2)), height=Math.min(h,Math.abs(y2-y1));
+   z.el.style.display='block'; z.el.style.top=top+'px'; z.el.style.height=Math.max(2,height)+'px';
+ });
+}
+function drawPivotOnChart(id,p){
+ const item=lwcCharts[id]; if(!item||!p||p.pivot==null)return;
+ clearPivotChart(id);
+ const colors={R3:'#e85d68',R2:'#ef7a82',R1:'#f29aa0',Pivot:'#f5c15d',S1:'#6be0b0',S2:'#45cf99',S3:'#2eb983'};
+ const vals=[['R3',p.r3],['R2',p.r2],['R1',p.r1],['Pivot',p.pivot],['S1',p.s1],['S2',p.s2],['S3',p.s3]].filter(([,v])=>Number.isFinite(Number(v)));
+ const lines=vals.map(([name,v])=>item.series.createPriceLine({price:Number(v),color:colors[name],lineWidth:name==='Pivot'?2:1,lineStyle:name==='Pivot'?0:2,axisLabelVisible:true,title:name}));
+ const root=document.createElement('div'); root.className='pivot-chart-overlay'; item.el.appendChild(root);
+ const zones=[];
+ if(Number.isFinite(+p.r1)&&Number.isFinite(+p.r2)){
+   const el=document.createElement('div'); el.className='pivot-zone resistance-zone'; el.innerHTML='<span>RESISTANCE R1–R2</span>'; root.appendChild(el); zones.push({el,top:Math.max(+p.r1,+p.r2),bottom:Math.min(+p.r1,+p.r2)});
+ }
+ if(Number.isFinite(+p.s1)&&Number.isFinite(+p.s2)){
+   const el=document.createElement('div'); el.className='pivot-zone support-zone'; el.innerHTML='<span>SUPPORT S1–S2</span>'; root.appendChild(el); zones.push({el,top:Math.max(+p.s1,+p.s2),bottom:Math.min(+p.s1,+p.s2)});
+ }
+ pivotOverlays[id]={root,lines,zones,p};
+ positionPivotZones(id);
+ item.chart.timeScale().subscribeVisibleLogicalRangeChange(()=>positionPivotZones(id));
+}
+function applyCurrentPivotToCharts(){
+ const p=window.__selectedPivot; if(!p)return;
+ Object.keys(lwcCharts).forEach(id=>drawPivotOnChart(id,p));
+}
 function mountTradingView(id, tf=interval){
  const el=$(id); if(!el)return;
- el.innerHTML=''; el.style.minHeight=innerWidth<700?'420px':'520px'; el.style.height=innerWidth<700?'420px':'560px';
- const wrap=document.createElement('div'); wrap.className='tradingview-widget-container'; wrap.style.cssText='height:100%;width:100%';
- const host=document.createElement('div'); host.className='tradingview-widget-container__widget'; host.style.cssText='height:calc(100% - 32px);width:100%';
- const note=document.createElement('div'); note.className='tv-data-note'; note.textContent='TradingView chart • Analysis/Signal: same XAUUSD backend candle feed';
- const script=document.createElement('script'); script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js'; script.type='text/javascript'; script.async=true;
- script.textContent=JSON.stringify({autosize:true,symbol:'OANDA:XAUUSD',interval:tvInterval(tf),timezone:'Asia/Tashkent',theme:'dark',style:'1',locale:'en',allow_symbol_change:false,calendar:false,hide_top_toolbar:false,hide_legend:false,save_image:false,withdateranges:true,hide_volume:false,support_host:'https://www.tradingview.com'});
- wrap.appendChild(host); wrap.appendChild(script); el.appendChild(wrap); el.appendChild(note);
+ if(lwcCharts[id]){try{lwcCharts[id].chart.remove()}catch(e){} delete lwcCharts[id];}
+ el.innerHTML=''; el.style.minHeight=innerWidth<700?'420px':'520px'; el.style.height=innerWidth<700?'420px':'560px'; el.style.position='relative';
+ const ch=LightweightCharts.createChart(el,{...chartTheme(),width:el.clientWidth,height:el.clientHeight,localization:{priceFormatter:p=>Number(p).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}});
+ const ser=ch.addCandlestickSeries({upColor:'#2fd49a',downColor:'#ef6471',borderVisible:false,wickUpColor:'#2fd49a',wickDownColor:'#ef6471'});
+ lwcCharts[id]={chart:ch,series:ser,el,tf};
+ if(id==='chart'){window.chart=ch;window.series=ser;chart=ch;series=ser;} else {window.chart2=ch;window.series2=ser;chart2=ch;series2=ser;}
+ new ResizeObserver(()=>{try{ch.applyOptions({width:el.clientWidth,height:el.clientHeight});positionPivotZones(id)}catch(e){}}).observe(el);
+ if(window.__selectedPivot) setTimeout(()=>drawPivotOnChart(id,window.__selectedPivot),50);
+ api(`/api/v1/candles/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}&limit=500`).then(d=>{if(d.candles) applyChart(d.candles,d.mode||'live')}).catch(e=>{if(id==='chart')showToast(e.message||'Chart data unavailable')});
 }
-function initChart(id){ mountTradingView(id, interval); return {c:null,s:null}; }
+function initChart(id){mountTradingView(id, interval); return {c:lwcCharts[id]?.chart||null,s:lwcCharts[id]?.series||null};}
 function applyChart(candles,mode){
- const data=(candles||[]).map(x=>({time:x.time,open:+x.open,high:+x.high,low:+x.low,close:+x.close})).filter((x,i,a)=>i===0||x.time>a[i-1].time);
+ const data=(candles||[]).map(x=>({time:Number(x.time),open:+x.open,high:+x.high,low:+x.low,close:+x.close})).filter((x,i,a)=>i===0||x.time>a[i-1].time);
  liveCandle=data[data.length-1]||null;
- if(data.length){
-   const first=data[0].time,last=data[data.length-1].time,days=Math.max(1,Math.round((last-first)/86400));
-   $('change').textContent=`${data.length.toLocaleString()} candles · ${days} days history`;
-   $('historyInfo').textContent=`${days}+ days · ${data.length.toLocaleString()} candles`;
- }
+ if(data.length){const first=data[0].time,last=data[data.length-1].time,days=Math.max(1,Math.round((last-first)/86400));$('change').textContent=`${data.length.toLocaleString()} candles · ${days} days history`;$('historyInfo').textContent=`${days}+ days · ${data.length.toLocaleString()} candles`;}
+ Object.values(lwcCharts).forEach(item=>{try{item.series.setData(data);item.chart.timeScale().fitContent()}catch(e){}});
+ applyCurrentPivotToCharts();
  $('mode').textContent=mode==='live'?'LIVE MARKET':'LIVE RETRY'; $('mode').style.color=mode==='live'?'var(--green)':'var(--amber)'; $('chartStatus').textContent=mode==='live'?'LIVE MARKET':'RETRYING';
 }
 function setTf(v){
  interval=v;
  liveCandle=null;
  document.querySelectorAll('[data-interval]').forEach(b=>b.classList.toggle('active',b.dataset.interval===v));
- $('tfLabel').textContent=({'1min':'1 MIN','5min':'5 MIN','15min':'15 MIN','30min':'30 MIN','1h':'1 HOUR','4h':'4 HOUR','1day':'1 DAY'})[v]||v;
- mountTradingView('chart', interval); if($('chartSection').classList.contains('active')) setTimeout(()=>mountTradingView('chart2', interval),50); loadMain(true);
+ if($('tfLabel'))$('tfLabel').textContent=({'1min':'1 MIN','5min':'5 MIN','15min':'15 MIN','30min':'30 MIN','1h':'1 HOUR','4h':'4 HOUR','1day':'1 DAY'})[v]||v;
+ mountTradingView('chart', interval); if($('chartSection').classList.contains('active')) setTimeout(()=>mountTradingView('chart2', interval),50); loadMain(true); setTimeout(()=>loadPivots(pivotInterval),250);
 }
 async function loadChartHistory(){
  const c=await api(`/api/v1/candles/${encodeURIComponent(symbol)}?interval=${interval}&limit=500`);
@@ -116,29 +219,52 @@ async function loadChartHistory(){
  updateCountdown();
 }
 async function loadAnalysisOnly(){
- try{
-  const d=await api(`/api/v1/analysis/${encodeURIComponent(symbol)}?interval=${interval}`);
-  renderAnalysis(d);
-  if(d.mode==='live'){ $('mode').textContent='LIVE DATA'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE'; }
-  countdownData=d.candle||countdownData; updateCountdown();
-  return d;
- }catch(e){
-  $('signalReason').textContent='Analysis vaqtincha mavjud emas: '+(e.message||'unknown error');
-  throw e;
- }
+  try{
+    const d=await api(`/api/v1/analysis/${encodeURIComponent(symbol)}?interval=${interval}`);
+    renderAnalysis(d);
+    await loadPivots(pivotInterval);
+    if(d.ok===false){
+      $('signalReason').textContent='Analysis xatosi: '+(d.error||d.headline||'unknown error');
+      $('mode').textContent='LIVE ERROR'; $('mode').style.color='var(--amber)';
+    } else if(d.mode==='live'){
+      $('mode').textContent='LIVE DATA'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
+    }
+    countdownData=d.candle||countdownData; updateCountdown(); return d;
+  }catch(e){
+    $('signalReason').textContent='Analysis vaqtincha mavjud emas: '+(e.message||'unknown error');
+    throw e;
+  }
 }
-async function loadMain(forceHistory=false){
- try{
-   if(forceHistory || !liveCandle){ await loadChartHistory(); }
-   $('mode').textContent='LIVE READY'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
-   loadAnalysisOnly().catch(()=>{});
-   quoteHeartbeat();
-   if(streamKey!==symbol+'|'+interval || !marketWS || marketWS.readyState!==WebSocket.OPEN) connectMarketStream();
- }catch(e){
-   $('mode').textContent='LIVE RETRY';$('mode').style.color='var(--amber)';$('chartStatus').textContent='RETRYING';$('change').textContent=e.message||'Live market history unavailable';showToast(e.message||'Live market data unavailable');
- }
+async function loadPivots(tf=pivotInterval){
+  pivotInterval=tf;
+  try{
+    const d=await api(`/api/v1/pivots/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`);
+    const p=d.timeframes?.[tf]||{};
+    $('pivotFilter').textContent=tfName(tf);
+    $('pivotSource').textContent=`${tfName(tf)} Pivot · source: ${tfName(p.source_timeframe||tf)}${p.warning?' · '+p.warning:''}`;
+    $('levels').innerHTML=[['R3',p.r3,'res'],['R2',p.r2,'res'],['R1',p.r1,'res'],['Pivot',p.pivot,'piv'],['S1',p.s1,'sup'],['S2',p.s2,'sup'],['S3',p.s3,'sup']].map(x=>`<div class="row"><span>${x[0]}</span><b class="${x[2]}">${fmt(x[1])}</b></div>`).join('');
+    window.__selectedPivot=p; applyCurrentPivotToCharts();
+  }catch(e){
+    $('pivotSource').textContent='Pivot yuklanmadi: '+e.message;
+  }
 }
-function renderAnalysis(d){if(d&&d.ok===false){$('signalMain').textContent='UNAVAILABLE';$('signalReason').textContent=d.error||'Market data unavailable';$('levels').innerHTML='<div class="mini">'+(d.error||'Market data unavailable')+'</div>';return}const s=d.setup||{},ta=d.technical||{};$('signalMain').textContent=d.direction||'WAIT';$('signalMain').className='signal-main '+((d.direction||'WAIT').toLowerCase()==='buy'?'buy':(d.direction||'').toLowerCase()==='sell'?'sell':'wait');$('signalReason').textContent=d.headline||s.reason||'—';$('entry').textContent=fmt(s.entry);$('sl').textContent=fmt(s.stop_loss);$('tp1').textContent=fmt((s.take_profit||[])[0]);$('tp2').textContent=fmt((s.take_profit||[])[1]);$('bias').textContent=d.levels?.bias||s.pivot_filter||'—';$('pivotFilter').textContent=d.levels?.bias||'—';const p=d.levels||{};$('levels').innerHTML=[['R3',p.r3,'res'],['R2',p.r2,'res'],['R1',p.r1,'res'],['Pivot',p.pivot,'piv'],['S1',p.s1,'sup'],['S2',p.s2,'sup'],['S3',p.s3,'sup']].map(x=>`<div class="row"><span>${x[0]}</span><b class="${x[2]}">${fmt(x[1])}</b></div>`).join('');$('rsi').textContent=fmt(ta.rsi);$('atr').textContent=fmt(ta.atr);$('rsiState').textContent=ta.rsi_state||'—';$('taTrend').textContent=ta.trend||'—';$('taState').textContent=d.interval?.toUpperCase()||interval;$('taSummary').textContent=ta.summary||'—';const ai=d.ai||{};$('aiMode').textContent=ai.mode||'—';$('aiSummary').textContent=ai.summary||'—';$('confidence').textContent=ai.confidence!=null?ai.confidence+'%':'—';$('aiBias').textContent=ai.bias||'—';$('aiAdvice').textContent=ai.advice||'—';}
+async function loadAISmart(tf=aiInterval){
+  aiInterval=tf;
+  $('aiSummary').textContent='AI tahlil yuklanmoqda...';
+  try{
+    const d=await api(`/api/v1/ai-smart-analysis/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`);
+    const ai=d.ai_smart||d.ai||{};
+    $('aiMode').textContent=ai.mode||'fallback';
+    $('aiSummary').textContent=ai.summary||d.error||'—';
+    $('confidence').textContent=ai.confidence!=null?ai.confidence+'%':'—';
+    $('aiBias').textContent=ai.bias||'—';
+    $('aiAdvice').textContent=ai.advice||'—';
+  }catch(e){
+    $('aiMode').textContent='ERROR';
+    $('aiSummary').textContent=e.message||'AI Smart Analysis ishlamadi';
+  }
+}
+function renderAnalysis(d){const s=d.setup||{},ta=d.technical||{};$('signalMain').textContent=d.direction||'WAIT';$('signalMain').className='signal-main '+((d.direction||'WAIT').toLowerCase()==='buy'?'buy':(d.direction||'').toLowerCase()==='sell'?'sell':'wait');$('signalReason').textContent=d.headline||s.reason||'—';$('entry').textContent=fmt(s.entry);$('sl').textContent=fmt(s.stop_loss);$('tp1').textContent=fmt((s.take_profit||[])[0]);$('tp2').textContent=fmt((s.take_profit||[])[1]);$('bias').textContent=d.levels?.bias||s.pivot_filter||'—';$('pivotFilter').textContent=d.levels?.bias||'—';const p=d.levels||{};$('levels').innerHTML=[['R3',p.r3,'res'],['R2',p.r2,'res'],['R1',p.r1,'res'],['Pivot',p.pivot,'piv'],['S1',p.s1,'sup'],['S2',p.s2,'sup'],['S3',p.s3,'sup']].map(x=>`<div class="row"><span>${x[0]}</span><b class="${x[2]}">${fmt(x[1])}</b></div>`).join('');$('rsi').textContent=fmt(ta.rsi);$('atr').textContent=fmt(ta.atr);$('rsiState').textContent=ta.rsi_state||'—';$('taTrend').textContent=ta.trend||'—';$('taState').textContent=d.interval?.toUpperCase()||interval;$('taSummary').textContent=ta.summary||'—';const ai=d.ai||{};$('aiMode').textContent=ai.mode||'—';$('aiSummary').textContent=ai.summary||'—';$('confidence').textContent=ai.confidence!=null?ai.confidence+'%':'—';$('aiBias').textContent=ai.bias||'—';$('aiAdvice').textContent=ai.advice||'—';}
 function updateCountdown(){const ts=countdownData?.close_timestamp; if(!ts)return;$('countdown').textContent=fmtDuration(Math.max(0,ts*1000-Date.now())); const close=new Date(ts*1000); $('closeTime').textContent='Close time: '+close.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});}function fmtDuration(ms){let s=Math.floor(ms/1000),h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);s%=60;return h?`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`}
 async function loadSessions(){try{const d=await api('/api/v1/sessions');const html=d.sessions.map(x=>`<div class="session ${x.open?'open':''}"><b>${x.name}</b><div class="sub">${x.local_time||''}</div><div class="status ${x.open?'up':'muted'}">${x.open?'OPEN':'CLOSED'}</div></div>`).join('');$('sessions').innerHTML=html;$('sessions2').innerHTML=html;$('sessionClock').textContent=d.utc_time||'—';$('sessionClock2').textContent=d.utc_time||'—'}catch(e){}}
 async function loadCalendar(){try{const d=await api('/api/v1/calendar?days=7');const source=d.provider?` · Source: ${d.provider}`:'';if(!d.events?.length){$('calendar').innerHTML=`<div class="mini">${d.warning||'HIGH IMPACT eventlar topilmadi.'}</div>`;return}$('calendar').innerHTML=`<div class="mini" style="margin-bottom:8px">USD · HIGH IMPACT${source} · ${d.events.length} event</div>`+d.events.map(x=>`<div class="calendar-item"><div><span class="tag">HIGH IMPACT</span> · ${x.country||'USD'} · ${x.time||''}</div><b>${x.event||'Economic event'}</b><div class="mini">Forecast: ${x.forecast??x.estimate??'—'} · Previous: ${x.previous??'—'} · Actual: ${x.actual??'—'}</div></div>`).join('')}catch(e){$('calendar').innerHTML=`<div class="mini">Calendar ma’lumoti hozircha mavjud emas: ${e.message}</div>`}}
@@ -150,7 +276,37 @@ function tfName(tf){return ({'1min':'1 MIN','5min':'5 MIN','15min':'15 MIN','30m
 function advCard(tf,x){const sig=x.signal||'WAIT', cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait', badge=sig==='BUY'?'badge-buy':sig==='SELL'?'badge-sell':'badge-wait';const c=x.components||{};return `<div class="advanced-card ${cls}"><div class="advanced-head"><div><div class="mini">${tfName(tf)}</div><div class="advanced-signal ${badge}">${sig}</div></div><span class="pill">${x.confidence||0}%</span></div><div class="mini" style="margin-top:4px">Score ${x.score??0} · ${x.setup||'—'}</div><div class="grid4" style="margin-top:9px"><div class="metric"><small>Entry</small><b>${fmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${fmt(x.stop_loss)}</b></div><div class="metric"><small>TP1</small><b>${fmt((x.take_profit||[])[0])}</b></div><div class="metric"><small>TP2</small><b>${fmt((x.take_profit||[])[1])}</b></div></div><div class="component-grid"><div class="component"><small>ICT</small><b>${componentText(c['ICT'])}</b></div><div class="component"><small>SNR</small><b>${componentText(c['SNR'])}</b></div><div class="component"><small>SNR Malaysia</small><b>${componentText(c['SNR Malaysia'])}</b></div><div class="component"><small>Order Block</small><b>${componentText(c['Order Block'])}</b></div><div class="component"><small>FVG</small><b>${componentText(c['FVG'])}</b></div><div class="component"><small>Liquidity</small><b>${componentText(c['Liquidity'])}</b></div><div class="component"><small>Trend Line</small><b>${componentText(c['Trend Line'])}</b></div><div class="component"><small>Global Trend</small><b>${componentText(c['Global Trend Line'])}</b></div><div class="component"><small>BOS</small><b>${componentText(c['BOS'])}</b></div><div class="component"><small>CHOCH</small><b>${componentText(c['CHOCH'])}</b></div><div class="component"><small>Internal</small><b>${componentText(c['Internal Structure'])}</b></div><div class="component"><small>RSI / ATR</small><b>${fmt(x.rsi)} / ${fmt(x.atr)}</b></div></div><div class="advanced-actions"><div class="mini">${x.reason||'—'}</div>${sig==='BUY'||sig==='SELL'?`<button class="btn" data-save-advanced="${tf}">Saqlash</button>`:''}</div></div>`}
 async function loadAdvancedSignals(){if(!token){showToast('Avval tizimga kiring');$('authModal').classList.add('show');return}$('advancedStatus').textContent='7 timeframe hisoblanmoqda…';$('advancedGrid').innerHTML='<div class="card">Signal hisoblanmoqda...</div>';try{const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);const order=['1min','5min','15min','30min','1h','4h','1day'];$('advancedGrid').innerHTML=order.map(tf=>advCard(tf,d.timeframes?.[tf]||{})).join('');$('advancedStatus').textContent=`${symbol} · ${new Date(d.generated_at).toLocaleString()} · har bir timeframe alohida`; }catch(e){$('advancedStatus').textContent=e.message;$('advancedGrid').innerHTML='<div class="card">Signal yuklanmadi.</div>'}}
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-save-advanced]');if(!b)return;const tf=b.dataset.saveAdvanced;b.disabled=true;try{await api(`/api/v1/signals/save-advanced?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}`,{method:'POST'});showToast(tfName(tf)+' signal saqlandi');loadStats();if($('historySection').classList.contains('active'))loadHistory()}catch(err){showToast(err.message)}finally{b.disabled=false}});
-function openSection(id){document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));$(id).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',mtfSection:'Multi-Timeframe Analysis',aiSection:'AI Smart Analysis',signalSection:'Signal Lab',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',historySection:'Signal History'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>mountTradingView('chart2',interval),50);setTimeout(()=>window.dispatchEvent(new Event('resize')),150);}if(id==='overview'){setTimeout(()=>mountTradingView('chart',interval),50);}if(id==='analysisSection'||id==='aiSection')loadAnalysisOnly().catch(()=>{});if(id==='signalSection')loadAdvancedSignals();if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory()}
+function openSection(id){document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));$(id).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',mtfSection:'Multi-Timeframe Analysis',aiSection:'AI Smart Analysis',signalSection:'Signal Lab',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',historySection:'Signal History'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>mountTradingView('chart2',interval),50);setTimeout(()=>window.dispatchEvent(new Event('resize')),150);}if(id==='overview'){setTimeout(()=>mountTradingView('chart',interval),50);}if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='aiSection')loadAISmart(aiInterval);if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory()}
+
+document.addEventListener('click',e=>{
+  const b=e.target.closest('[data-pivot-interval]');
+  if(b){
+    document.querySelectorAll('[data-pivot-interval]').forEach(x=>x.classList.toggle('active',x===b));
+    loadPivots(b.dataset.pivotInterval);
+  }
+  const a=e.target.closest('[data-ai-interval]');
+  if(a){
+    document.querySelectorAll('[data-ai-interval]').forEach(x=>x.classList.toggle('active',x===a));
+    loadAISmart(a.dataset.aiInterval);
+  }
+  const s=e.target.closest('[data-signal-interval]');
+  if(s){
+    document.querySelectorAll('[data-signal-interval]').forEach(x=>x.classList.toggle('active',x===s));
+    signalInterval=s.dataset.signalInterval;
+    loadSelectedSignal(signalInterval);
+  }
+});
+async function loadSelectedSignal(tf){
+  try{
+    const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);
+    const x=d.timeframes?.[tf]||{};
+    $('advancedStatus').textContent=`${tfName(tf)} signal · ${x.provider||'local engine'} · ${x.confidence||0}%`;
+    $('advancedGrid').innerHTML=advCard(tf,x);
+  }catch(e){
+    $('advancedStatus').textContent=e.message;
+    $('advancedGrid').innerHTML='<div class="card">Signal yuklanmadi.</div>';
+  }
+}
 async function saveSignal(){if(!token){showToast('Avval tizimga kiring');$('authModal').classList.add('show');return}try{await api(`/api/v1/signals/save?symbol=${encodeURIComponent(symbol)}&interval=${interval}`,{method:'POST'});showToast('Signal saqlandi');loadStats();loadHistory()}catch(e){showToast(e.message)}}
 
 function bucketStart(ts, secs){return Math.floor(ts/secs)*secs}

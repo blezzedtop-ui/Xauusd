@@ -866,7 +866,7 @@ def demo_candles() -> list[dict[str, Any]]:
 
 async def get_candles(symbol: str, interval: str, limit: int) -> tuple[list[dict[str, Any]], str, str | None]:
     interval = validate_interval(interval)
-    data, mode, provider = await get_chart_history(symbol, interval, 31)
+    data, mode, provider = await get_chart_history(symbol, interval, max(31, min(limit, 260)))
     return data[-limit:], mode, provider
 
 
@@ -901,6 +901,17 @@ async def get_pivot_reference(symbol: str) -> tuple[dict[str, float], str | None
                     "low":min(c["low"] for c in data),
                     "close":data[-1]["close"]}, "Pivot derived from Yahoo GC=F fallback."
     except Exception as exc: second_error = str(exc)
+    try:
+        data = await fetch_realmarket_candles(symbol, "5min", 100)
+        if data:
+            recent = data[-min(len(data), 100):]
+            return {
+                "high": max(c["high"] for c in recent),
+                "low": min(c["low"] for c in recent),
+                "close": recent[-1]["close"],
+            }, "Pivot derived from recent M5 candles because D1/H1 were unavailable."
+    except Exception:
+        pass
     return {"high":0.0,"low":0.0,"close":0.0}, f"Pivot data unavailable: {first_error}"
 
 def timeframe_trend(candles: list[dict[str, Any]]) -> dict[str, Any]:
@@ -919,15 +930,29 @@ def timeframe_trend(candles: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 async def multi_timeframe(symbol: str) -> dict[str, Any]:
+    # RealMarketAPI plans can expose different subsets of M5/M15/H1/H4/D1.
+    # Never let one unavailable timeframe break the entire analysis page.
     out: dict[str, Any] = {}
-    for tf in ("15min", "1h", "4h", "1day"):
-        candles_data, mode, warning = await get_candles(symbol, tf, 80)
-        out[tf] = {**timeframe_trend(candles_data), "mode": mode, "warning": warning}
-    dirs = [out[x]["trend"] for x in out]
+    errors: dict[str, str] = {}
+    for tf in ("5min", "15min", "1h", "4h", "1day"):
+        try:
+            candles_data, mode, warning = await get_candles(symbol, tf, 80)
+            if len(candles_data) < 2:
+                raise MarketDataError("Not enough candles")
+            out[tf] = {**timeframe_trend(candles_data), "mode": mode, "warning": warning}
+        except Exception as exc:
+            errors[tf] = str(exc)
+    dirs = [x["trend"] for x in out.values() if x.get("trend")]
     score = dirs.count("BULLISH") - dirs.count("BEARISH")
     overall = "BULLISH" if score >= 2 else "BEARISH" if score <= -2 else "MIXED"
-    return {"timeframes": out, "overall": overall, "bullish_count": dirs.count("BULLISH"), "bearish_count": dirs.count("BEARISH")}
-
+    return {
+        "timeframes": out,
+        "overall": overall,
+        "bullish_count": dirs.count("BULLISH"),
+        "bearish_count": dirs.count("BEARISH"),
+        "available_count": len(out),
+        "errors": errors,
+    }
 
 def session_state(name: str, zone: str, now_utc: datetime) -> dict[str, Any]:
     local = now_utc.astimezone(ZoneInfo(zone))
@@ -1137,6 +1162,66 @@ def technical_analysis(candles_data: list[dict[str, Any]], levels: dict[str, Any
         "summary": f"RSI {r:.1f} ({rsi_state}); Pivot {levels['pivot']:.2f}; trend {levels['bias']}; setup {setup['setup']}.",
     }
 
+
+
+async def fetch_rm_confluence(symbol: str, interval: str) -> dict[str, Any] | None:
+    """Use RealMarketAPI's server-side confluence when the account plan exposes it.
+    Falls back silently to the local engine for plans without Intelligence API.
+    """
+    if not REALMARKET_API_KEY:
+        return None
+    try:
+        tf = realmarket_timeframe(interval)
+        data = await rm_get("api/v1/insight/confluence", {
+            "SymbolCode": realmarket_symbol(symbol),
+            "TimeFrame": tf,
+        })
+        if isinstance(data, dict):
+            return data
+    except Exception:
+        return None
+    return None
+
+async def fetch_rm_trend(symbol: str, interval: str) -> dict[str, Any] | None:
+    if not REALMARKET_API_KEY:
+        return None
+    try:
+        tf = realmarket_timeframe(interval)
+        data = await rm_get("api/v1/insight/trend", {
+            "SymbolCode": realmarket_symbol(symbol),
+            "TimeFrame": tf,
+        })
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict[str, Any], str | None]:
+    """Classic Pivot levels based on the previous completed candle of the selected timeframe.
+    This intentionally does NOT force D1 for every timeframe.
+    """
+    interval = validate_interval(interval)
+    source_interval = interval
+    warning = None
+    try:
+        data, _, _ = await get_candles(symbol, interval, 80)
+    except Exception as exc:
+        # M30 is locally built from M15. If a very short timeframe is unavailable,
+        # use M5 as an explicitly labelled fallback rather than returning empty levels.
+        source_interval = "5min" if interval in {"1min", "30min"} else "1h"
+        data, _, _ = await get_candles(symbol, source_interval, 80)
+        warning = f"{interval} Pivot {source_interval} ma'lumotidan hisoblandi: {exc}"
+    if interval == "30min" and source_interval == "30min":
+        pass
+    if len(data) < 2:
+        raise MarketDataError(f"{interval} uchun Pivot hisoblashga yetarli candle yo'q")
+    ref = data[-2]
+    current = float(data[-1]["close"])
+    levels = calculate_pivot_levels(float(ref["high"]), float(ref["low"]), float(ref["close"]), current)
+    levels["timeframe"] = interval
+    levels["source_timeframe"] = source_interval
+    levels["reference_time"] = ref.get("time")
+    levels["warning"] = warning
+    return levels, warning
 
 async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
     cache_key = json.dumps(analysis_context, sort_keys=True, default=str)
@@ -1359,47 +1444,103 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
 
 
 async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[str, Any]:
+    # RealMarketAPI's documented analysis timeframes. M30 is built locally from M15.
     intervals=["1min","5min","15min","30min","1h","4h","1day"]
     async def one(tf: str):
         try:
             candles_data,mode,warning=await get_candles(symbol,tf,260)
-            return tf, {**build_advanced_signal(candles_data,tf,news_blocked=news_blocked),"mode":mode,"warning":warning}
+            item=build_advanced_signal(candles_data,tf,news_blocked=news_blocked)
+            confluence=await fetch_rm_confluence(symbol,tf)
+            trend_data=await fetch_rm_trend(symbol,tf)
+            if confluence:
+                raw=str(confluence.get("signal") or "").upper()
+                mapped={"BUY":"BUY","SELL":"SELL","NEUTRAL":"WAIT"}.get(raw)
+                if mapped:
+                    item["signal"]=mapped
+                    item["confidence"]=int(confluence.get("score") or item.get("confidence") or 0)
+                    item["provider"]="RealMarketAPI Intelligence"
+                    item["provider_strength"]=confluence.get("strength")
+                    item["provider_reasons"]=confluence.get("reasons") or []
+                    item["reason"]="; ".join(map(str, confluence.get("reasons") or [])) or item.get("reason")
+            if trend_data:
+                item["provider_trend"]=trend_data.get("trend")
+                item["provider_adx"]=trend_data.get("adx")
+            return tf,{**item,"mode":mode,"warning":warning}
         except Exception as exc:
-            return tf, {"interval":tf,"signal":"UNAVAILABLE","entry":None,"stop_loss":None,"take_profit":[],"confidence":0,"score":0,"setup":"ERROR","components":{},"reason":str(exc),"mode":"error","warning":str(exc)}
+            return tf,{"interval":tf,"signal":"UNAVAILABLE","entry":None,"stop_loss":None,"take_profit":[],
+                       "confidence":0,"score":0,"setup":"ERROR","components":{},
+                       "reason":str(exc),"mode":"error","warning":str(exc)}
     pairs=await asyncio.gather(*(one(tf) for tf in intervals))
-    items={tf:data for tf,data in pairs}
-    return {"symbol":clean_symbol(symbol),"timeframes":items,"generated_at":datetime.now(timezone.utc).isoformat()}
+    return {"symbol":clean_symbol(symbol),"timeframes":{tf:data for tf,data in pairs},
+            "generated_at":datetime.now(timezone.utc).isoformat()}
+
 
 
 async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
     symbol = clean_symbol(symbol)
     interval = validate_interval(interval)
     candles_data, mode, warning = await get_candles(symbol, interval, 160)
+    if len(candles_data) < 2:
+        raise MarketDataError(f"{interval} uchun yetarli candle mavjud emas")
     current = candles_data[-1]["close"]
     previous_close = candles_data[-2]["close"] if len(candles_data) > 1 else current
     change_pct = ((current - previous_close) / previous_close * 100) if previous_close else 0
-    reference, pivot_warning = await get_pivot_reference(symbol)
-    levels = calculate_pivot_levels(reference["high"], reference["low"], reference["close"], current)
+
+    levels, pivot_warning = await calculate_pivot_for_interval(symbol, interval)
     calendar = await economic_calendar(2)
     blocked, news_reason = news_blackout(calendar.get("events", []))
     setup = build_key_level_signal(candles_data, levels, news_blocked=blocked)
     ta = technical_analysis(candles_data, levels, setup)
+
+    # Prefer RealMarketAPI Intelligence when the user's plan exposes it.
+    confluence = await fetch_rm_confluence(symbol, interval)
+    rm_trend = await fetch_rm_trend(symbol, interval)
+    if confluence:
+        raw_signal = str(confluence.get("signal") or "").upper()
+        mapped = {"BUY":"BUY","SELL":"SELL","NEUTRAL":"WAIT","BUY_SIGNAL":"BUY","SELL_SIGNAL":"SELL"}.get(raw_signal)
+        if mapped:
+            setup["signal"] = mapped
+            setup["reason"] = "RealMarketAPI confluence: " + "; ".join(map(str, confluence.get("reasons") or []))
+            if mapped in ("BUY","SELL"):
+                risk = max(float(ta.get("atr") or 0), current * 0.0005)
+                if mapped == "BUY":
+                    setup["entry"] = round(current, 2)
+                    setup["stop_loss"] = round(min(float(levels["pivot"]), current-risk), 2)
+                    setup["take_profit"] = [levels["r1"], levels["r2"]]
+                else:
+                    setup["entry"] = round(current, 2)
+                    setup["stop_loss"] = round(max(float(levels["pivot"]), current+risk), 2)
+                    setup["take_profit"] = [levels["s1"], levels["s2"]]
+            setup["provider_score"] = confluence.get("score")
+            setup["provider_strength"] = confluence.get("strength")
+
     mtf = await multi_timeframe(symbol)
-    ai_context = {"bias": levels["bias"], "signal": setup["signal"], "setup": setup["setup"], "rsi": ta["rsi"], "mtf_overall": mtf["overall"], "levels": levels}
+    ai_context = {
+        "bias": levels["bias"], "signal": setup["signal"], "setup": setup["setup"],
+        "rsi": ta["rsi"], "mtf_overall": mtf["overall"], "levels": levels,
+        "timeframe": interval, "provider_confluence": confluence or {}, "provider_trend": rm_trend or {},
+    }
     ai = await ai_smart_analysis(ai_context)
     if setup["signal"] == "SELL":
-        headline = f"SELL • Target {levels['s1']:.2f}"
+        headline = f"SELL • {interval.upper()} • Target {levels['s1']:.2f}"
     elif setup["signal"] == "BUY":
-        headline = f"BUY • Target {levels['r1']:.2f}"
+        headline = f"BUY • {interval.upper()} • Target {levels['r1']:.2f}"
     else:
-        headline = f"WAIT • {levels['bias']} bias"
-    combined_warning = " | ".join(x for x in [warning, pivot_warning, calendar.get("warning"), news_reason] if x)
+        headline = f"WAIT • {interval.upper()} • {levels['bias']} bias"
+
+    combined_warning = " | ".join(x for x in [
+        warning, pivot_warning, calendar.get("warning"), news_reason,
+        confluence.get("warning") if confluence else None
+    ] if x)
     return {
-        "symbol": symbol, "current_price": round(current, 4), "change_pct": round(change_pct, 3),
-        "headline": headline, "direction": setup["signal"], "bias": levels["bias"], "preference": setup["reason"],
-        "setup": setup, "mode": mode, "warning": combined_warning or None, "interval": interval,
-        "updated_at": datetime.now(timezone.utc).isoformat(), "levels": levels, "technical": ta,
-        "multi_timeframe": mtf, "ai_smart": ai, "calendar": calendar, "candle": candle_countdown(interval),
+        "ok": True, "symbol": symbol, "current_price": round(current, 4),
+        "change_pct": round(change_pct, 3), "headline": headline,
+        "direction": setup["signal"], "bias": levels["bias"], "preference": setup["reason"],
+        "setup": setup, "mode": mode, "warning": combined_warning or None,
+        "interval": interval, "updated_at": datetime.now(timezone.utc).isoformat(),
+        "levels": levels, "technical": ta, "multi_timeframe": mtf,
+        "ai_smart": ai, "calendar": calendar, "candle": candle_countdown(interval),
+        "provider_confluence": confluence, "provider_trend": rm_trend,
     }
 
 
@@ -1694,9 +1835,55 @@ async def market_snapshot(symbol: str, interval: str = Query(DEFAULT_INTERVAL), 
 async def get_symbol_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
     try:
         return await build_full_analysis(symbol, interval)
-    except MarketDataError as exc:
-        return {"ok":False,"mode":"live","provider":"RealMarketAPI","error":str(exc),"symbol":clean_symbol(symbol),"interval":validate_interval(interval)}
+    except Exception as exc:
+        # Keep the dashboard usable and show the real backend cause instead of
+        # silently leaving Signal/Pivot fields as dashes.
+        return {
+            "ok": False,
+            "mode": "error",
+            "provider": live_provider() or "none",
+            "error": str(exc),
+            "symbol": clean_symbol(symbol),
+            "interval": validate_interval(interval),
+            "direction": "WAIT",
+            "headline": "Analysis unavailable: " + str(exc),
+            "setup": {"signal":"WAIT","entry":None,"stop_loss":None,"take_profit":[],"reason":str(exc)},
+            "levels": {},
+            "technical": {},
+            "multi_timeframe": {"overall":"UNAVAILABLE","timeframes":{},"errors":{"analysis":str(exc)}},
+            "ai_smart": {"mode":"fallback","summary":"Backend analysis error","bias":"NEUTRAL","confidence":0,"advice":"Check market-data provider."},
+        }
 
+
+@app.get("/api/v1/pivots/{symbol:path}")
+async def get_pivots(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
+    selected = validate_interval(interval)
+    try:
+        levels, warning = await calculate_pivot_for_interval(clean_symbol(symbol), selected)
+        return {"symbol": clean_symbol(symbol), "selected": selected,
+                "timeframes": {selected: levels}, "errors": {},
+                "generated_at": datetime.now(timezone.utc).isoformat()}
+    except Exception as exc:
+        return {"symbol": clean_symbol(symbol), "selected": selected,
+                "timeframes": {}, "errors": {selected: str(exc)},
+                "generated_at": datetime.now(timezone.utc).isoformat()}
+
+@app.get("/api/v1/ai-smart-analysis/{symbol:path}")
+async def get_ai_smart_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
+    try:
+        analysis = await build_full_analysis(clean_symbol(symbol), validate_interval(interval))
+        ai = analysis.get("ai_smart") or {}
+        return {"ok": True, "symbol": analysis["symbol"], "interval": analysis["interval"],
+                "current_price": analysis["current_price"], "direction": analysis["direction"],
+                "levels": analysis["levels"], "technical": analysis["technical"],
+                "multi_timeframe": analysis["multi_timeframe"], "ai": ai,
+                "provider_confluence": analysis.get("provider_confluence"),
+                "provider_trend": analysis.get("provider_trend"),
+                "generated_at": datetime.now(timezone.utc).isoformat()}
+    except Exception as exc:
+        return {"ok": False, "interval": validate_interval(interval), "error": str(exc),
+                "ai": {"mode":"fallback","summary":"AI Smart Analysis uchun backend ma'lumoti yetarli emas.",
+                       "bias":"NEUTRAL","confidence":0,"advice":"Market data/API sozlamalarini tekshiring."}}
 
 @app.get("/api/v1/multi-timeframe/{symbol:path}")
 async def get_mtf(symbol: str) -> dict[str, Any]:

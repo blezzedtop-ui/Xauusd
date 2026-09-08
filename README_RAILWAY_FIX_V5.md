@@ -13,3 +13,9 @@ Railway variables:
 - DATABASE_URL = reference to Postgres DATABASE_URL
 
 Do not put the API key in GitHub or frontend code.
+
+
+## V7 fixes
+- Multi-timeframe analysis no longer fails when one RealMarketAPI timeframe is unavailable.
+- Analysis endpoint returns visible structured errors instead of blank Signal/Pivot fields.
+- Pivot has an M5 fallback.

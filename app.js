@@ -1,4 +1,4 @@
-const symbol='XAU/USD';let interval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,streamKey='';
+const symbol='XAU/USD';let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,streamKey='';
 const $=id=>document.getElementById(id);const fmt=v=>v==null?'—':Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
 function showToast(m){$('toast').textContent=m;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),2300)}
 
@@ -14,33 +14,75 @@ const DISABLE_MARKET_WS=IS_NETLIFY || window.DISABLE_MARKET_WS===true;
 async function nodeMarketHealth(){if(!NODE_MARKET_URL)return null;try{const r=await fetch(`${NODE_MARKET_URL}/health`,{cache:'no-store'});if(!r.ok) return null;return await r.json()}catch{return null}}
 async function api(path,opt={}){const headers={'Content-Type':'application/json',...(opt.headers||{})};if(token)headers.Authorization='Bearer '+token;let last;for(const base of API_CANDIDATES){try{const url=path.startsWith('http')?path:base+path;const r=await fetch(url,{...opt,headers,cache:'no-store'});let d={};try{d=await r.json()}catch{}if(!r.ok)throw Error(d.detail||d.message||'HTTP '+r.status);return d}catch(e){last=e}}if(last instanceof TypeError){throw Error('Cloud backendga ulanib bo‘lmadi. Saytning cloud serveri ulanmagan yoki hozircha ishlamayapti.') }throw last}
 function tvInterval(tf){return ({'1min':'1','5min':'5','15min':'15','30min':'30','1h':'60','4h':'240','1day':'D'})[tf]||'5'}
+const lwcCharts={};
+const pivotOverlays={};
+function chartTheme(){return {layout:{background:{type:'solid',color:'#07090d'},textColor:'#9aa3af'},grid:{vertLines:{color:'rgba(255,255,255,.055)'},horzLines:{color:'rgba(255,255,255,.055)'}},rightPriceScale:{borderColor:'rgba(255,215,120,.16)',scaleMargins:{top:.08,bottom:.12}},timeScale:{borderColor:'rgba(255,215,120,.12)',timeVisible:true,secondsVisible:false},crosshair:{mode:0}}}
+function clearPivotChart(id){
+ const item=lwcCharts[id]; if(!item)return;
+ (pivotOverlays[id]?.lines||[]).forEach(line=>{try{item.series.removePriceLine(line)}catch(e){}});
+ if(pivotOverlays[id]?.root)pivotOverlays[id].root.remove();
+ pivotOverlays[id]=null;
+}
+function positionPivotZones(id){
+ const item=lwcCharts[id], ov=pivotOverlays[id]; if(!item||!ov)return;
+ const root=ov.root, h=root.clientHeight;
+ const zones=ov.zones||[];
+ zones.forEach(z=>{
+   const y1=item.series.priceToCoordinate(z.top), y2=item.series.priceToCoordinate(z.bottom);
+   if(y1==null||y2==null){z.el.style.display='none';return}
+   const top=Math.max(0,Math.min(y1,y2)), height=Math.min(h,Math.abs(y2-y1));
+   z.el.style.display='block'; z.el.style.top=top+'px'; z.el.style.height=Math.max(2,height)+'px';
+ });
+}
+function drawPivotOnChart(id,p){
+ const item=lwcCharts[id]; if(!item||!p||p.pivot==null)return;
+ clearPivotChart(id);
+ const colors={R3:'#e85d68',R2:'#ef7a82',R1:'#f29aa0',Pivot:'#f5c15d',S1:'#6be0b0',S2:'#45cf99',S3:'#2eb983'};
+ const vals=[['R3',p.r3],['R2',p.r2],['R1',p.r1],['Pivot',p.pivot],['S1',p.s1],['S2',p.s2],['S3',p.s3]].filter(([,v])=>Number.isFinite(Number(v)));
+ const lines=vals.map(([name,v])=>item.series.createPriceLine({price:Number(v),color:colors[name],lineWidth:name==='Pivot'?2:1,lineStyle:name==='Pivot'?0:2,axisLabelVisible:true,title:name}));
+ const root=document.createElement('div'); root.className='pivot-chart-overlay'; item.el.appendChild(root);
+ const zones=[];
+ if(Number.isFinite(+p.r1)&&Number.isFinite(+p.r2)){
+   const el=document.createElement('div'); el.className='pivot-zone resistance-zone'; el.innerHTML='<span>RESISTANCE R1–R2</span>'; root.appendChild(el); zones.push({el,top:Math.max(+p.r1,+p.r2),bottom:Math.min(+p.r1,+p.r2)});
+ }
+ if(Number.isFinite(+p.s1)&&Number.isFinite(+p.s2)){
+   const el=document.createElement('div'); el.className='pivot-zone support-zone'; el.innerHTML='<span>SUPPORT S1–S2</span>'; root.appendChild(el); zones.push({el,top:Math.max(+p.s1,+p.s2),bottom:Math.min(+p.s1,+p.s2)});
+ }
+ pivotOverlays[id]={root,lines,zones,p};
+ positionPivotZones(id);
+ item.chart.timeScale().subscribeVisibleLogicalRangeChange(()=>positionPivotZones(id));
+}
+function applyCurrentPivotToCharts(){
+ const p=window.__selectedPivot; if(!p)return;
+ Object.keys(lwcCharts).forEach(id=>drawPivotOnChart(id,p));
+}
 function mountTradingView(id, tf=interval){
  const el=$(id); if(!el)return;
- el.innerHTML=''; el.style.minHeight=innerWidth<700?'420px':'520px'; el.style.height=innerWidth<700?'420px':'560px';
- const wrap=document.createElement('div'); wrap.className='tradingview-widget-container'; wrap.style.cssText='height:100%;width:100%';
- const host=document.createElement('div'); host.className='tradingview-widget-container__widget'; host.style.cssText='height:calc(100% - 32px);width:100%';
- const note=document.createElement('div'); note.className='tv-data-note'; note.textContent='TradingView chart • Analysis/Signal: same XAUUSD backend candle feed';
- const script=document.createElement('script'); script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js'; script.type='text/javascript'; script.async=true;
- script.textContent=JSON.stringify({autosize:true,symbol:'OANDA:XAUUSD',interval:tvInterval(tf),timezone:'Asia/Tashkent',theme:'dark',style:'1',locale:'en',allow_symbol_change:false,calendar:false,hide_top_toolbar:false,hide_legend:false,save_image:false,withdateranges:true,hide_volume:false,support_host:'https://www.tradingview.com'});
- wrap.appendChild(host); wrap.appendChild(script); el.appendChild(wrap); el.appendChild(note);
+ if(lwcCharts[id]){try{lwcCharts[id].chart.remove()}catch(e){} delete lwcCharts[id];}
+ el.innerHTML=''; el.style.minHeight=innerWidth<700?'420px':'520px'; el.style.height=innerWidth<700?'420px':'560px'; el.style.position='relative';
+ const ch=LightweightCharts.createChart(el,{...chartTheme(),width:el.clientWidth,height:el.clientHeight,localization:{priceFormatter:p=>Number(p).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2})}});
+ const ser=ch.addCandlestickSeries({upColor:'#2fd49a',downColor:'#ef6471',borderVisible:false,wickUpColor:'#2fd49a',wickDownColor:'#ef6471'});
+ lwcCharts[id]={chart:ch,series:ser,el,tf};
+ if(id==='chart'){window.chart=ch;window.series=ser;chart=ch;series=ser;} else {window.chart2=ch;window.series2=ser;chart2=ch;series2=ser;}
+ new ResizeObserver(()=>{try{ch.applyOptions({width:el.clientWidth,height:el.clientHeight});positionPivotZones(id)}catch(e){}}).observe(el);
+ if(window.__selectedPivot) setTimeout(()=>drawPivotOnChart(id,window.__selectedPivot),50);
+ api(`/api/v1/candles/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}&limit=500`).then(d=>{if(d.candles) applyChart(d.candles,d.mode||'live')}).catch(e=>{if(id==='chart')showToast(e.message||'Chart data unavailable')});
 }
-function initChart(id){ mountTradingView(id, interval); return {c:null,s:null}; }
+function initChart(id){mountTradingView(id, interval); return {c:lwcCharts[id]?.chart||null,s:lwcCharts[id]?.series||null};}
 function applyChart(candles,mode){
- const data=(candles||[]).map(x=>({time:x.time,open:+x.open,high:+x.high,low:+x.low,close:+x.close})).filter((x,i,a)=>i===0||x.time>a[i-1].time);
+ const data=(candles||[]).map(x=>({time:Number(x.time),open:+x.open,high:+x.high,low:+x.low,close:+x.close})).filter((x,i,a)=>i===0||x.time>a[i-1].time);
  liveCandle=data[data.length-1]||null;
- if(data.length){
-   const first=data[0].time,last=data[data.length-1].time,days=Math.max(1,Math.round((last-first)/86400));
-   $('change').textContent=`${data.length.toLocaleString()} candles · ${days} days history`;
-   $('historyInfo').textContent=`${days}+ days · ${data.length.toLocaleString()} candles`;
- }
+ if(data.length){const first=data[0].time,last=data[data.length-1].time,days=Math.max(1,Math.round((last-first)/86400));$('change').textContent=`${data.length.toLocaleString()} candles · ${days} days history`;$('historyInfo').textContent=`${days}+ days · ${data.length.toLocaleString()} candles`;}
+ Object.values(lwcCharts).forEach(item=>{try{item.series.setData(data);item.chart.timeScale().fitContent()}catch(e){}});
+ applyCurrentPivotToCharts();
  $('mode').textContent=mode==='live'?'LIVE MARKET':'LIVE RETRY'; $('mode').style.color=mode==='live'?'var(--green)':'var(--amber)'; $('chartStatus').textContent=mode==='live'?'LIVE MARKET':'RETRYING';
 }
 function setTf(v){
  interval=v;
  liveCandle=null;
  document.querySelectorAll('[data-interval]').forEach(b=>b.classList.toggle('active',b.dataset.interval===v));
- $('tfLabel').textContent=({'1min':'1 MIN','5min':'5 MIN','15min':'15 MIN','30min':'30 MIN','1h':'1 HOUR','4h':'4 HOUR','1day':'1 DAY'})[v]||v;
- mountTradingView('chart', interval); if($('chartSection').classList.contains('active')) setTimeout(()=>mountTradingView('chart2', interval),50); loadMain(true);
+ if($('tfLabel'))$('tfLabel').textContent=({'1min':'1 MIN','5min':'5 MIN','15min':'15 MIN','30min':'30 MIN','1h':'1 HOUR','4h':'4 HOUR','1day':'1 DAY'})[v]||v;
+ mountTradingView('chart', interval); if($('chartSection').classList.contains('active')) setTimeout(()=>mountTradingView('chart2', interval),50); loadMain(true); setTimeout(()=>loadPivots(pivotInterval),250);
 }
 async function loadChartHistory(){
  const c=await api(`/api/v1/candles/${encodeURIComponent(symbol)}?interval=${interval}&limit=500`);
@@ -50,27 +92,50 @@ async function loadChartHistory(){
  updateCountdown();
 }
 async function loadAnalysisOnly(){
- try{
-  const d=await api(`/api/v1/analysis/${encodeURIComponent(symbol)}?interval=${interval}`);
-  renderAnalysis(d);
-  if(d.mode==='live'){ $('mode').textContent='LIVE DATA'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE'; }
-  countdownData=d.candle||countdownData; updateCountdown();
-  return d;
- }catch(e){
-  $('signalReason').textContent='Analysis vaqtincha mavjud emas: '+(e.message||'unknown error');
-  throw e;
- }
+  try{
+    const d=await api(`/api/v1/analysis/${encodeURIComponent(symbol)}?interval=${interval}`);
+    renderAnalysis(d);
+    await loadPivots(pivotInterval);
+    if(d.ok===false){
+      $('signalReason').textContent='Analysis xatosi: '+(d.error||d.headline||'unknown error');
+      $('mode').textContent='LIVE ERROR'; $('mode').style.color='var(--amber)';
+    } else if(d.mode==='live'){
+      $('mode').textContent='LIVE DATA'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
+    }
+    countdownData=d.candle||countdownData; updateCountdown(); return d;
+  }catch(e){
+    $('signalReason').textContent='Analysis vaqtincha mavjud emas: '+(e.message||'unknown error');
+    throw e;
+  }
 }
-async function loadMain(forceHistory=false){
- try{
-   if(forceHistory || !liveCandle){ await loadChartHistory(); }
-   $('mode').textContent='LIVE READY'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
-   loadAnalysisOnly().catch(()=>{});
-   quoteHeartbeat();
-   if(streamKey!==symbol+'|'+interval || !marketWS || marketWS.readyState!==WebSocket.OPEN) connectMarketStream();
- }catch(e){
-   $('mode').textContent='LIVE RETRY';$('mode').style.color='var(--amber)';$('chartStatus').textContent='RETRYING';$('change').textContent=e.message||'Live market history unavailable';showToast(e.message||'Live market data unavailable');
- }
+async function loadPivots(tf=pivotInterval){
+  pivotInterval=tf;
+  try{
+    const d=await api(`/api/v1/pivots/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`);
+    const p=d.timeframes?.[tf]||{};
+    $('pivotFilter').textContent=tfName(tf);
+    $('pivotSource').textContent=`${tfName(tf)} Pivot · source: ${tfName(p.source_timeframe||tf)}${p.warning?' · '+p.warning:''}`;
+    $('levels').innerHTML=[['R3',p.r3,'res'],['R2',p.r2,'res'],['R1',p.r1,'res'],['Pivot',p.pivot,'piv'],['S1',p.s1,'sup'],['S2',p.s2,'sup'],['S3',p.s3,'sup']].map(x=>`<div class="row"><span>${x[0]}</span><b class="${x[2]}">${fmt(x[1])}</b></div>`).join('');
+    window.__selectedPivot=p; applyCurrentPivotToCharts();
+  }catch(e){
+    $('pivotSource').textContent='Pivot yuklanmadi: '+e.message;
+  }
+}
+async function loadAISmart(tf=aiInterval){
+  aiInterval=tf;
+  $('aiSummary').textContent='AI tahlil yuklanmoqda...';
+  try{
+    const d=await api(`/api/v1/ai-smart-analysis/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`);
+    const ai=d.ai_smart||d.ai||{};
+    $('aiMode').textContent=ai.mode||'fallback';
+    $('aiSummary').textContent=ai.summary||d.error||'—';
+    $('confidence').textContent=ai.confidence!=null?ai.confidence+'%':'—';
+    $('aiBias').textContent=ai.bias||'—';
+    $('aiAdvice').textContent=ai.advice||'—';
+  }catch(e){
+    $('aiMode').textContent='ERROR';
+    $('aiSummary').textContent=e.message||'AI Smart Analysis ishlamadi';
+  }
 }
 function renderAnalysis(d){const s=d.setup||{},ta=d.technical||{};$('signalMain').textContent=d.direction||'WAIT';$('signalMain').className='signal-main '+((d.direction||'WAIT').toLowerCase()==='buy'?'buy':(d.direction||'').toLowerCase()==='sell'?'sell':'wait');$('signalReason').textContent=d.headline||s.reason||'—';$('entry').textContent=fmt(s.entry);$('sl').textContent=fmt(s.stop_loss);$('tp1').textContent=fmt((s.take_profit||[])[0]);$('tp2').textContent=fmt((s.take_profit||[])[1]);$('bias').textContent=d.levels?.bias||s.pivot_filter||'—';$('pivotFilter').textContent=d.levels?.bias||'—';const p=d.levels||{};$('levels').innerHTML=[['R3',p.r3,'res'],['R2',p.r2,'res'],['R1',p.r1,'res'],['Pivot',p.pivot,'piv'],['S1',p.s1,'sup'],['S2',p.s2,'sup'],['S3',p.s3,'sup']].map(x=>`<div class="row"><span>${x[0]}</span><b class="${x[2]}">${fmt(x[1])}</b></div>`).join('');$('rsi').textContent=fmt(ta.rsi);$('atr').textContent=fmt(ta.atr);$('rsiState').textContent=ta.rsi_state||'—';$('taTrend').textContent=ta.trend||'—';$('taState').textContent=d.interval?.toUpperCase()||interval;$('taSummary').textContent=ta.summary||'—';const ai=d.ai||{};$('aiMode').textContent=ai.mode||'—';$('aiSummary').textContent=ai.summary||'—';$('confidence').textContent=ai.confidence!=null?ai.confidence+'%':'—';$('aiBias').textContent=ai.bias||'—';$('aiAdvice').textContent=ai.advice||'—';}
 function updateCountdown(){const ts=countdownData?.close_timestamp; if(!ts)return;$('countdown').textContent=fmtDuration(Math.max(0,ts*1000-Date.now())); const close=new Date(ts*1000); $('closeTime').textContent='Close time: '+close.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});}function fmtDuration(ms){let s=Math.floor(ms/1000),h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);s%=60;return h?`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`}
@@ -84,7 +149,37 @@ function tfName(tf){return ({'1min':'1 MIN','5min':'5 MIN','15min':'15 MIN','30m
 function advCard(tf,x){const sig=x.signal||'WAIT', cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait', badge=sig==='BUY'?'badge-buy':sig==='SELL'?'badge-sell':'badge-wait';const c=x.components||{};return `<div class="advanced-card ${cls}"><div class="advanced-head"><div><div class="mini">${tfName(tf)}</div><div class="advanced-signal ${badge}">${sig}</div></div><span class="pill">${x.confidence||0}%</span></div><div class="mini" style="margin-top:4px">Score ${x.score??0} · ${x.setup||'—'}</div><div class="grid4" style="margin-top:9px"><div class="metric"><small>Entry</small><b>${fmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${fmt(x.stop_loss)}</b></div><div class="metric"><small>TP1</small><b>${fmt((x.take_profit||[])[0])}</b></div><div class="metric"><small>TP2</small><b>${fmt((x.take_profit||[])[1])}</b></div></div><div class="component-grid"><div class="component"><small>ICT</small><b>${componentText(c['ICT'])}</b></div><div class="component"><small>SNR</small><b>${componentText(c['SNR'])}</b></div><div class="component"><small>SNR Malaysia</small><b>${componentText(c['SNR Malaysia'])}</b></div><div class="component"><small>Order Block</small><b>${componentText(c['Order Block'])}</b></div><div class="component"><small>FVG</small><b>${componentText(c['FVG'])}</b></div><div class="component"><small>Liquidity</small><b>${componentText(c['Liquidity'])}</b></div><div class="component"><small>Trend Line</small><b>${componentText(c['Trend Line'])}</b></div><div class="component"><small>Global Trend</small><b>${componentText(c['Global Trend Line'])}</b></div><div class="component"><small>BOS</small><b>${componentText(c['BOS'])}</b></div><div class="component"><small>CHOCH</small><b>${componentText(c['CHOCH'])}</b></div><div class="component"><small>Internal</small><b>${componentText(c['Internal Structure'])}</b></div><div class="component"><small>RSI / ATR</small><b>${fmt(x.rsi)} / ${fmt(x.atr)}</b></div></div><div class="advanced-actions"><div class="mini">${x.reason||'—'}</div>${sig==='BUY'||sig==='SELL'?`<button class="btn" data-save-advanced="${tf}">Saqlash</button>`:''}</div></div>`}
 async function loadAdvancedSignals(){if(!token){showToast('Avval tizimga kiring');$('authModal').classList.add('show');return}$('advancedStatus').textContent='7 timeframe hisoblanmoqda…';$('advancedGrid').innerHTML='<div class="card">Signal hisoblanmoqda...</div>';try{const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);const order=['1min','5min','15min','30min','1h','4h','1day'];$('advancedGrid').innerHTML=order.map(tf=>advCard(tf,d.timeframes?.[tf]||{})).join('');$('advancedStatus').textContent=`${symbol} · ${new Date(d.generated_at).toLocaleString()} · har bir timeframe alohida`; }catch(e){$('advancedStatus').textContent=e.message;$('advancedGrid').innerHTML='<div class="card">Signal yuklanmadi.</div>'}}
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-save-advanced]');if(!b)return;const tf=b.dataset.saveAdvanced;b.disabled=true;try{await api(`/api/v1/signals/save-advanced?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}`,{method:'POST'});showToast(tfName(tf)+' signal saqlandi');loadStats();if($('historySection').classList.contains('active'))loadHistory()}catch(err){showToast(err.message)}finally{b.disabled=false}});
-function openSection(id){document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));$(id).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',mtfSection:'Multi-Timeframe Analysis',aiSection:'AI Smart Analysis',signalSection:'Signal Lab',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',historySection:'Signal History'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>mountTradingView('chart2',interval),50);setTimeout(()=>window.dispatchEvent(new Event('resize')),150);}if(id==='overview'){setTimeout(()=>mountTradingView('chart',interval),50);}if(id==='analysisSection'||id==='aiSection')loadAnalysisOnly().catch(()=>{});if(id==='signalSection')loadAdvancedSignals();if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory()}
+function openSection(id){document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));$(id).classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',mtfSection:'Multi-Timeframe Analysis',aiSection:'AI Smart Analysis',signalSection:'Signal Lab',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',historySection:'Signal History'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>mountTradingView('chart2',interval),50);setTimeout(()=>window.dispatchEvent(new Event('resize')),150);}if(id==='overview'){setTimeout(()=>mountTradingView('chart',interval),50);}if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='aiSection')loadAISmart(aiInterval);if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory()}
+
+document.addEventListener('click',e=>{
+  const b=e.target.closest('[data-pivot-interval]');
+  if(b){
+    document.querySelectorAll('[data-pivot-interval]').forEach(x=>x.classList.toggle('active',x===b));
+    loadPivots(b.dataset.pivotInterval);
+  }
+  const a=e.target.closest('[data-ai-interval]');
+  if(a){
+    document.querySelectorAll('[data-ai-interval]').forEach(x=>x.classList.toggle('active',x===a));
+    loadAISmart(a.dataset.aiInterval);
+  }
+  const s=e.target.closest('[data-signal-interval]');
+  if(s){
+    document.querySelectorAll('[data-signal-interval]').forEach(x=>x.classList.toggle('active',x===s));
+    signalInterval=s.dataset.signalInterval;
+    loadSelectedSignal(signalInterval);
+  }
+});
+async function loadSelectedSignal(tf){
+  try{
+    const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);
+    const x=d.timeframes?.[tf]||{};
+    $('advancedStatus').textContent=`${tfName(tf)} signal · ${x.provider||'local engine'} · ${x.confidence||0}%`;
+    $('advancedGrid').innerHTML=advCard(tf,x);
+  }catch(e){
+    $('advancedStatus').textContent=e.message;
+    $('advancedGrid').innerHTML='<div class="card">Signal yuklanmadi.</div>';
+  }
+}
 async function saveSignal(){if(!token){showToast('Avval tizimga kiring');$('authModal').classList.add('show');return}try{await api(`/api/v1/signals/save?symbol=${encodeURIComponent(symbol)}&interval=${interval}`,{method:'POST'});showToast('Signal saqlandi');loadStats();loadHistory()}catch(e){showToast(e.message)}}
 
 function bucketStart(ts, secs){return Math.floor(ts/secs)*secs}

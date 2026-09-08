@@ -35,3 +35,9 @@ Calendar kerak bo'lsa:
 `index.html` FastAPI tomonidan `/` route orqali beriladi. Shu sababli frontend va backend bitta domen ostida ishlaydi va `config.js`ga Railway URL yozish shart emas.
 
 PostgreSQL production uchun tavsiya qilinadi; Railway PostgreSQL `DATABASE_URL` orqali ulanadi. SQLite Railway'da doimiy login/history saqlash uchun tavsiya etilmaydi.
+
+
+## V7 fixes
+- Multi-timeframe analysis no longer fails when one RealMarketAPI timeframe is unavailable.
+- Analysis endpoint returns visible structured errors instead of blank Signal/Pivot fields.
+- Pivot has an M5 fallback.
