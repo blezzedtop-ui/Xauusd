@@ -730,7 +730,8 @@ def aggregate_candles(candles: list[dict[str, Any]], seconds: int) -> list[dict[
     return [buckets[k] for k in sorted(buckets)]
 
 
-YAHOO_SYMBOLS = {"XAU/USD": "XAUUSD=X", "XAUUSD": "XAUUSD=X"}
+YAHOO_SYMBOLS = {"XAU/USD": "GC=F", "XAUUSD": "GC=F"}
+YAHOO_FALLBACK_SYMBOLS = {"XAU/USD": "GC=F", "XAUUSD": "GC=F"}
 YAHOO_INTERVALS = {"1min":"1m","5min":"5m","15min":"15m","30min":"30m","1h":"1h","1day":"1d"}
 YAHOO_RANGES = {"1min":"7d","5min":"60d","15min":"60d","30min":"60d","1h":"730d","1day":"10y"}
 
@@ -738,27 +739,36 @@ async def fetch_yahoo_candles(symbol: str, interval: str, limit: int = 500) -> l
     """Public Yahoo Finance chart fallback used when no paid market API key is configured."""
     interval = validate_interval(interval)
     base_symbol = clean_symbol(symbol)
-    yahoo_symbol = YAHOO_SYMBOLS.get(base_symbol, base_symbol.replace("/", "") + "=X")
+    symbols_to_try = [YAHOO_SYMBOLS.get(base_symbol, base_symbol.replace("/", "") + "=X")]
+    if base_symbol in YAHOO_FALLBACK_SYMBOLS:
+        symbols_to_try.append(YAHOO_FALLBACK_SYMBOLS[base_symbol])
     source_interval = interval
     if interval == "4h":
         source_interval = "1h"
     if source_interval not in YAHOO_INTERVALS:
         raise MarketDataError(f"Yahoo fallback does not support {interval}")
     params = {"interval": YAHOO_INTERVALS[source_interval], "range": YAHOO_RANGES[source_interval], "events":"history", "includePrePost":"true"}
-    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urlquote(yahoo_symbol, safe='')}"
+    last_error = None
+    result = None
+    yahoo_symbol = symbols_to_try[0]
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, headers={"User-Agent":"Mozilla/5.0"}) as client:
-            r = await client.get(url, params=params)
-            if r.status_code >= 400:
-                raise MarketDataError(f"Yahoo Finance HTTP {r.status_code}")
-            payload = r.json()
-    except MarketDataError:
-        raise
+            for candidate in symbols_to_try:
+                url = f"https://query1.finance.yahoo.com/v8/finance/chart/{urlquote(candidate, safe='')}"
+                r = await client.get(url, params=params)
+                if r.status_code >= 400:
+                    last_error = f"Yahoo Finance HTTP {r.status_code} for {candidate}"
+                    continue
+                payload = r.json()
+                result = ((payload.get("chart") or {}).get("result") or [None])[0]
+                if result:
+                    yahoo_symbol = candidate
+                    break
+                last_error = f"Yahoo Finance returned no chart data for {candidate}"
     except Exception as exc:
         raise MarketDataError(f"Yahoo Finance request failed: {type(exc).__name__}: {exc}") from exc
-    result = ((payload.get("chart") or {}).get("result") or [None])[0]
     if not result:
-        raise MarketDataError("Yahoo Finance returned no chart data")
+        raise MarketDataError(last_error or "Yahoo Finance returned no chart data")
     timestamps = result.get("timestamp") or []
     quote = ((result.get("indicators") or {}).get("quote") or [None])[0] or {}
     rows=[]
@@ -777,7 +787,9 @@ async def fetch_yahoo_candles(symbol: str, interval: str, limit: int = 500) -> l
     return rows[-limit:]
 
 async def fetch_yahoo_price(symbol: str) -> float:
-    rows = await fetch_yahoo_candles(symbol, "1min", 2)
+    # Yahoo often does not provide 1-minute futures candles reliably.
+    # Use a short 5-minute chart and its latest usable close instead.
+    rows = await fetch_yahoo_candles(symbol, "5min", 2)
     if not rows:
         raise MarketDataError("Yahoo Finance returned no price")
     return float(rows[-1]["close"])
@@ -788,7 +800,7 @@ async def get_chart_history(symbol: str, interval: str, days: int = 31) -> tuple
     if provider == "yahoo":
         try:
             data = await fetch_yahoo_candles(symbol, interval, min(CANDLE_LIMIT, 500))
-            return data, "live", "Yahoo Finance public market feed (no API key)"
+            return data, "live", "Yahoo Finance public market feed (XAUUSD or GC=F gold proxy; no API key)"
         except MarketDataError as exc:
             errors.append(str(exc))
     if REALMARKET_API_KEY:
@@ -1621,7 +1633,7 @@ async def quote(symbol: str) -> dict[str, Any]:
     if live_provider() == "yahoo":
         try:
             price = await fetch_yahoo_price(symbol)
-            return {"symbol":symbol,"price":price,"mode":"live","provider":"yahoo","timestamp":datetime.now(timezone.utc).isoformat()}
+            return {"symbol":symbol,"price":price,"mode":"live","provider":"yahoo-gold","timestamp":datetime.now(timezone.utc).isoformat()}
         except MarketDataError as exc:
             errors.append(f"yahoo: {exc}")
     try:
