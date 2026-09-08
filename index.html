@@ -211,6 +211,22 @@ function applyChart(candles,mode){
  applyCurrentPivotToCharts();
  $('mode').textContent=mode==='live'?'LIVE MARKET':'LIVE RETRY'; $('mode').style.color=mode==='live'?'var(--green)':'var(--amber)'; $('chartStatus').textContent=mode==='live'?'LIVE MARKET':'RETRYING';
 }
+async function loadMain(initial=false){
+  const tasks = [
+    loadChartHistory().catch(e=>{ 
+      if($('chartStatus')) $('chartStatus').textContent='LIVE CHART';
+      if($('historyInfo')) $('historyInfo').textContent='TradingView live chart';
+      return null;
+    }),
+    loadAnalysisOnly().catch(e=>{
+      if($('signalReason')) $('signalReason').textContent='Analysis vaqtincha mavjud emas: '+(e.message||'unknown error');
+      return null;
+    }),
+    loadPivots(pivotInterval).catch(()=>null)
+  ];
+  const results = await Promise.allSettled(tasks);
+  return results;
+}
 function setTf(v){
  interval=v;
  liveCandle=null;
