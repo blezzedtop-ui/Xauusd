@@ -13,6 +13,50 @@
 .advanced-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.advanced-card{border:1px solid var(--line);background:rgba(8,14,21,.86);border-radius:12px;padding:12px;box-shadow:0 12px 30px rgba(0,0,0,.16)}.advanced-card.buy{border-color:rgba(48,212,154,.35)}.advanced-card.sell{border-color:rgba(240,105,120,.35)}.advanced-card.wait{border-color:rgba(245,193,93,.25)}.advanced-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.advanced-signal{font-size:22px;font-weight:1000;letter-spacing:.06em}.component-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}.component{padding:7px 8px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.02)}.component small{display:block;color:var(--muted);font-size:9px;margin-bottom:3px}.component b{font-size:11px}.advanced-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px}.badge-buy{color:var(--green)}.badge-sell{color:var(--red)}.badge-wait{color:var(--gold)}@media(max-width:900px){.advanced-grid{grid-template-columns:1fr}}
 </style><link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#0b1220">
+
+<style>
+/* RED LIQUID GLASS DESIGN — UI ONLY. TradingView chart/JS untouched. */
+:root{--accent:#ff3b4f;--accent2:#ff6b78;--glass-red:rgba(255,45,65,.10);--glass-red-strong:rgba(255,45,65,.18);--red-line:rgba(255,82,96,.34);--red-glow:rgba(255,45,65,.20)}
+html,body{background:radial-gradient(circle at 15% 0%,rgba(255,36,58,.10),transparent 32%),radial-gradient(circle at 100% 20%,rgba(255,58,75,.08),transparent 30%),#07090e}
+.sidebar,.topbar,.card,.advanced-card,.metric,.signal-box,.session,.calendar-item,.modal-card,.toast{background:linear-gradient(145deg,rgba(22,12,16,.78),rgba(10,12,17,.72));border-color:rgba(255,74,88,.22);box-shadow:0 14px 38px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.035)}
+.sidebar{backdrop-filter:blur(18px) saturate(125%);-webkit-backdrop-filter:blur(18px) saturate(125%)}
+.nav button,.btn,.tf,.pill{position:relative;overflow:hidden;background:linear-gradient(145deg,rgba(255,55,72,.08),rgba(255,255,255,.025));border-color:rgba(255,76,91,.22);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);transition:transform .18s ease,background .18s ease,border-color .18s ease,box-shadow .18s ease,color .18s ease}
+.nav button:before,.btn:before,.tf:before{content:"";position:absolute;inset:-80% -30%;background:linear-gradient(105deg,transparent 35%,rgba(255,255,255,.12) 48%,transparent 61%);transform:translateX(-55%) rotate(8deg);animation:liquidSweep 5.5s ease-in-out infinite;pointer-events:none}
+.nav button:hover,.btn:hover,.tf:hover{transform:translateY(-1px);background:linear-gradient(145deg,rgba(255,55,72,.18),rgba(255,255,255,.045));border-color:rgba(255,91,105,.48);box-shadow:0 8px 24px rgba(255,45,65,.12)}
+.nav button.active,.tf.active,.btn.primary{background:linear-gradient(135deg,#8f1020 0%,#d51f36 48%,#ff5363 100%);border-color:rgba(255,151,160,.62);color:#fff;box-shadow:0 8px 26px rgba(255,36,58,.24),inset 0 1px 0 rgba(255,255,255,.20)}
+.btn.danger{color:#ff7d89}
+.card,.advanced-card,.metric,.signal-box,.session,.calendar-item{transition:border-color .2s ease,box-shadow .2s ease,transform .2s ease}
+.card:hover,.advanced-card:hover,.metric:hover,.signal-box:hover{border-color:rgba(255,74,88,.34);box-shadow:0 16px 42px rgba(0,0,0,.30),0 0 24px rgba(255,45,65,.06)}
+.section-head h2,.section-head h3{letter-spacing:.02em}
+.title-shimmer{background:linear-gradient(90deg,#fff 0%,#ff9da7 32%,#ff3b4f 50%,#fff 72%);background-size:220% 100%;animation:titleShimmer 6s linear infinite}
+.price{ text-shadow:0 0 22px rgba(255,45,65,.12)}
+.countdown{color:#ff6a77;text-shadow:0 0 16px rgba(255,45,65,.25)}
+.dot{background:#ff3b4f;box-shadow:0 0 12px rgba(255,45,65,.65);animation:redPulse 1.8s ease-in-out infinite}
+.res,.sell{color:#ff5969}.sup,.buy{color:#ff9aa3}.piv,.wait{color:#ffbdc3}
+.input:focus{outline:none;border-color:rgba(255,76,91,.65);box-shadow:0 0 0 3px rgba(255,45,65,.10)}
+@keyframes liquidSweep{0%,55%{transform:translateX(-70%) rotate(8deg);opacity:0}65%{opacity:1}100%{transform:translateX(70%) rotate(8deg);opacity:0}}
+@keyframes redPulse{0%,100%{opacity:.65;transform:scale(.9)}50%{opacity:1;transform:scale(1.15)}}
+/* Compact phone layout */
+@media(max-width:900px){
+ .app{display:block}.sidebar{position:sticky;top:0;height:auto;padding:9px 10px;border-right:0;border-bottom:1px solid rgba(255,74,88,.22);z-index:10;background:rgba(10,9,13,.84)}
+ .brand{display:flex;align-items:center;justify-content:space-between;padding:3px 5px 8px;margin-bottom:7px}.brand span{margin-top:0}
+ .nav{gap:5px;overflow-x:auto;overflow-y:hidden;scrollbar-width:none;padding-bottom:2px;-webkit-overflow-scrolling:touch}.nav::-webkit-scrollbar{display:none}
+ .nav button{flex:0 0 auto;padding:8px 10px;border-radius:10px;font-size:11px}
+ .main{padding:10px 10px 22px}.topbar{gap:8px;margin-bottom:10px}.topbar h1{font-size:17px}.tools{gap:5px}.btn{padding:8px 10px;font-size:11px}.dashboard{gap:10px}.card{padding:11px;border-radius:13px}.card+.card{margin-top:10px}
+ .chart{height:430px;border-radius:10px}
+ .tfbar{gap:5px;flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;margin:9px 0;padding-bottom:2px;-webkit-overflow-scrolling:touch}.tfbar::-webkit-scrollbar{display:none}.tf{flex:0 0 auto;padding:7px 9px;font-size:11px}
+ .grid2{gap:6px}.grid4{gap:6px}.metric{padding:8px}.metric b{font-size:16px}.metric small{font-size:10px}
+ .advanced-grid{grid-template-columns:1fr;gap:9px}.advanced-card{padding:10px}.component-grid{gap:5px}.component{padding:6px}
+ .sessions{gap:6px}.session{padding:8px}.history th,.history td{padding:7px 6px}
+ .toast{left:10px;right:10px;bottom:10px;text-align:center}
+}
+@media(max-width:480px){
+ .main{padding:8px}.brand b{font-size:16px}.brand span{font-size:10px}.topbar h1{font-size:16px}.price{font-size:25px}.symbol{font-size:19px}.sub{font-size:11px}
+ .chart{height:390px}.section-head{margin-bottom:7px}.section-head h2,.section-head h3{font-size:14px}
+ .signal-main{font-size:19px}.mini{font-size:11px}.levels .row,.list-row{padding:7px 0}
+}
+</style>
+
 </head>
 <body>
 <div class="gold-photo-bg" aria-hidden="true"></div>
@@ -63,7 +107,7 @@
 <div class="toast" id="toast"></div>
 <div class="modal auth-required" id="authModal"><div class="modal-card"><div class="auth-brand">GOLD <span>TRADING</span></div><div class="section-head"><div><h3 id="authTitle">Kirish</h3><div class="mini">Trading terminalga kirish uchun login va parolingizni kiriting.</div></div></div><form id="authForm"><input class="input" id="email" type="text" required placeholder="Login yoki elektron pochta"><input class="input" id="password" type="password" minlength="3" placeholder="Parol"><div class="mini" id="authMsg"></div><button class="btn primary" style="width:100%" type="submit" id="authSubmit">Kirish</button></form><div class="link" id="authSwitch">Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish</div></div></div>
 <script src="/config.js"></script>
-<script>const symbol='XAU/USD';let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,streamKey='';
+<script>const symbol='XAU/USD';let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,lastRestQuoteAt=0,streamKey='';
 const $=id=>document.getElementById(id);const fmt=v=>v==null?'—':Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
 function showToast(m){$('toast').textContent=m;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),2300)}
 
@@ -220,11 +264,14 @@ function closeMarketStream(){try{marketWS?.close()}catch(e){} marketWS=null;stre
 async function quoteHeartbeat(){
   // When Node.js WS is healthy, do not poll Twelve Data REST every few seconds.
   // That was causing 429 responses and flipping the UI into LIVE RETRY.
-  const wsFresh = marketWS && marketWS.readyState===WebSocket.OPEN && (Date.now()-lastTickTs < 20000);
+  const wsFresh = marketWS && marketWS.readyState===WebSocket.OPEN && (Date.now()-lastTickTs < 5000);
   if(wsFresh){
     $('mode').textContent='LIVE STREAM'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
     return true;
   }
+  const now=Date.now();
+  if(now-lastRestQuoteAt < 3000) return false;
+  lastRestQuoteAt=now;
   try{
     const q=await api(`/api/v1/quote/${encodeURIComponent(symbol)}`);
     if(q?.mode==='live' && q.price!=null){
@@ -255,12 +302,12 @@ function connectMarketStream(){
      if(m.type==='tick') updateLiveCandle(+m.price,+m.timestamp); if(m.type==='candle'&&m.candle){ const cc=m.candle; liveCandle=cc; series.update(cc); if(series2) series2.update(cc); $('price').textContent=fmt(+m.price); }
      if(m.type==='reconnecting'){ if(Date.now()-lastTickTs>20000){ $('mode').textContent='RECONNECTING'; $('mode').style.color='var(--amber)'; } } if(m.type==='error'){ $('mode').textContent='LIVE ERROR'; showToast(m.message||'Stream error'); }
    };
-   marketWS.onclose=()=>{ $('chartStatus').textContent='RECONNECTING'; $('mode').textContent='RECONNECTING'; setTimeout(()=>{if(document.visibilityState!=='hidden')connectMarketStream()},2500)};
-   marketWS.onerror=()=>{ $('chartStatus').textContent='STREAM ERROR'; try{marketWS.close()}catch{} setTimeout(()=>{if(document.visibilityState!=='hidden')connectMarketStream()},1200) };
+   marketWS.onclose=()=>{ $('chartStatus').textContent='RECONNECTING'; $('mode').textContent='RECONNECTING'; setTimeout(()=>{if(document.visibilityState!=='hidden')connectMarketStream()},500)};
+   marketWS.onerror=()=>{ $('chartStatus').textContent='STREAM ERROR'; try{marketWS.close()}catch{} setTimeout(()=>{if(document.visibilityState!=='hidden')connectMarketStream()},500) };
  }catch(e){showToast('Real-time stream could not start')}
 }
 function setAuth(mode){authMode=mode;$('authTitle').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSubmit').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSwitch').textContent=mode==='login'?'Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish':'Hisobingiz bormi? Kirish';$('email').placeholder=mode==='login'?'Login yoki elektron pochta':'Elektron pochta';$('password').required=mode==='login';$('password').style.display=mode==='login'?'block':'none';$('password').value='';$('authMsg').textContent=mode==='register'?'Email kiriting — login va parol avtomatik yaratiladi.':''}
 $('timeframes').addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b)setTf(b.dataset.interval)});document.querySelectorAll('.tfbar').forEach(bar=>bar.addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b)setTf(b.dataset.interval)}));document.querySelectorAll('.nav button').forEach(b=>b.addEventListener('click',()=>openSection(b.dataset.section)));$('saveSignal').onclick=saveSignal;$('refreshAdvanced').onclick=loadAdvancedSignals;$('refreshStats').onclick=loadStats;$('refreshCalendar').onclick=loadCalendar;$('refreshHistory').onclick=loadHistory;$('authBtn').onclick=()=>{ setAuth('login'); $('authMsg').textContent=''; $('authModal').classList.add('show'); setTimeout(()=>$('email').focus(),50); }; $('authSwitch').onclick=()=>setAuth(authMode==='login'?'register':'login');async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(()=>{});token='';localStorage.removeItem('trading_token');$('plan').textContent='Guest';$('authBtn').textContent='Kirish';loadStats();loadHistory();$('authModal').classList.add('show');$('authMsg').textContent='Tizimdan chiqildi. Qayta kirish talab qilinadi.';showToast('Tizimdan chiqildi')};$('authForm').onsubmit=async e=>{e.preventDefault();$('authMsg').textContent='Tekshirilmoqda…';try{const path=authMode==='login'?'/api/auth/login':'/api/auth/register';const payload=authMode==='login'?{username:$('email').value,password:$('password').value}:{email:$('email').value};const d=await api(path,{method:'POST',body:JSON.stringify(payload)});token=d.token;localStorage.setItem('trading_token',token);$('plan').textContent=d.user?.plan||'free';$('authBtn').textContent='Chiqish'; if(authMode==='register' && d.credentials){ $('authMsg').textContent=(d.email_message||'Hisob yaratildi')+' Login: '+d.credentials.login+' | Parol: '+d.credentials.password; } else { $('authMsg').textContent=''; } $('authModal').classList.remove('show');showToast(authMode==='login'?'Muvaffaqiyatli kirdingiz':'Hisob yaratildi');loadStats();loadHistory()}catch(err){$('authMsg').textContent=err.message}};
-(async()=>{try{if(token){try{const me=await api('/api/auth/me');$('plan').textContent=me.plan||'free';$('authBtn').textContent='Chiqish'}catch(_){token='';localStorage.removeItem('trading_token')}}if(!token){$('authModal').classList.add('show');$('authBtn').textContent='Kirish'}const nd=await nodeMarketHealth(); if(nd?.ok) $('change').textContent='Cloud market gateway ready'; else window.__NODE_MARKET_DISABLED=true; const d=await api('/api/health');try{const md=await api('/api/market/diagnostics');if(md.live_ready){const ok=Object.entries(md.providers||{}).filter(([,v])=>v.ok).map(([k])=>k.toUpperCase()).join(' + ');$('mode').textContent='LIVE '+(ok||'READY');$('mode').style.color='var(--green)'}else{$('mode').textContent=md?.providers?.realmarketapi?.ok?'LIVE CHECK':'MARKET CHECK';$('mode').style.color='var(--amber)';$('change').textContent=Object.entries(md.providers||{}).map(([k,v])=>k+': '+(v.error||'not configured')).join(' | ')}}catch(_){}mountTradingView('chart', interval);await loadMain(true);await Promise.all([loadStats(),loadHistory(),loadSessions(),loadMtf()]);await quoteHeartbeat();setInterval(async()=>{await quoteHeartbeat();if($('historySection').classList.contains('active'))loadHistory();if($('overview').classList.contains('active'))loadStats()},8000);setInterval(async()=>{loadAnalysisOnly().catch(()=>{})},15000);setInterval(loadSessions,30000);setInterval(updateCountdown,250);setInterval(()=>{if($('calendarSection').classList.contains('active'))loadCalendar()},60000);}catch(e){showToast(e.message)}})();
+(async()=>{try{if(token){try{const me=await api('/api/auth/me');$('plan').textContent=me.plan||'free';$('authBtn').textContent='Chiqish'}catch(_){token='';localStorage.removeItem('trading_token')}}if(!token){$('authModal').classList.add('show');$('authBtn').textContent='Kirish'}const nd=await nodeMarketHealth(); if(nd?.ok) $('change').textContent='Cloud market gateway ready'; else window.__NODE_MARKET_DISABLED=true; const d=await api('/api/health');try{const md=await api('/api/market/diagnostics');if(md.live_ready){const ok=Object.entries(md.providers||{}).filter(([,v])=>v.ok).map(([k])=>k.toUpperCase()).join(' + ');$('mode').textContent='LIVE '+(ok||'READY');$('mode').style.color='var(--green)'}else{$('mode').textContent=md?.providers?.realmarketapi?.ok?'LIVE CHECK':'MARKET CHECK';$('mode').style.color='var(--amber)';$('change').textContent=Object.entries(md.providers||{}).map(([k,v])=>k+': '+(v.error||'not configured')).join(' | ')}}catch(_){}mountTradingView('chart', interval);await loadMain(true);await Promise.all([loadStats(),loadHistory(),loadSessions(),loadMtf()]);await quoteHeartbeat();setInterval(async()=>{await quoteHeartbeat();if($('historySection').classList.contains('active'))loadHistory();if($('overview').classList.contains('active'))loadStats()},1000);setInterval(async()=>{loadAnalysisOnly().catch(()=>{})},15000);setInterval(loadSessions,30000);setInterval(updateCountdown,250);setInterval(()=>{if($('calendarSection').classList.contains('active'))loadCalendar()},60000);}catch(e){showToast(e.message)}})();
 </script>
 </body></html>
