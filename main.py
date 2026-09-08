@@ -187,7 +187,9 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Serve the complete frontend from the same FastAPI/Railway service.
 # The previous build returned 404 for /app.js, /config.js and /assets/*,
 # so the browser loaded the HTML but never executed the dashboard JavaScript.
-app.mount("/assets", StaticFiles(directory=os.path.join(BASE_DIR, "assets")), name="assets")
+ASSETS_DIR = os.path.join(BASE_DIR, "assets")
+os.makedirs(ASSETS_DIR, exist_ok=True)
+app.mount("/assets", StaticFiles(directory=ASSETS_DIR), name="assets")
 
 @app.get("/app.js")
 async def serve_app_js() -> FileResponse:
