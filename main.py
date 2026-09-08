@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi import WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
@@ -182,6 +183,23 @@ app.add_middleware(
     allow_headers=["*"],
 )
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Serve the complete frontend from the same FastAPI/Railway service.
+# The previous build returned 404 for /app.js, /config.js and /assets/*,
+# so the browser loaded the HTML but never executed the dashboard JavaScript.
+app.mount("/assets", StaticFiles(directory=os.path.join(BASE_DIR, "assets")), name="assets")
+
+@app.get("/app.js")
+async def serve_app_js() -> FileResponse:
+    return FileResponse(os.path.join(BASE_DIR, "app.js"), media_type="application/javascript")
+
+@app.get("/config.js")
+async def serve_config_js() -> FileResponse:
+    return FileResponse(os.path.join(BASE_DIR, "config.js"), media_type="application/javascript")
+
+@app.get("/manifest.webmanifest")
+async def serve_manifest() -> FileResponse:
+    return FileResponse(os.path.join(BASE_DIR, "manifest.webmanifest"), media_type="application/manifest+json")
 
 TIMEFRAME_SECONDS = {
     "1min": 60,
