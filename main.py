@@ -1062,7 +1062,7 @@ def merge_live_price_into_candles(candles: list[dict[str, Any]], interval: str, 
 
 async def get_candles(symbol: str, interval: str, limit: int) -> tuple[list[dict[str, Any]], str, str | None]:
     interval = validate_interval(interval)
-    data = await get_chart_history(symbol, interval, max(31, min(limit, 260)))[0]
+    data, _, _ = await get_chart_history(symbol, interval, max(31, min(limit, 260)))
     return data[-limit:], "tradingview", f"TradingView {TRADINGVIEW_SYMBOL} chart series"
 
 
@@ -1714,6 +1714,99 @@ async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, An
         "candle": candles_data[-1], "candles": candles_data,
         "generated_at": datetime.now(timezone.utc).isoformat(),
     }
+
+
+
+async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
+    """Build the public dashboard analysis from ONE TradingView/OANDA OHLC source.
+
+    No provider fallback is used here. Every market-derived field is calculated
+    from the exact candles returned by get_candles(), which itself is backed by
+    the shared TradingView cache.
+    """
+    symbol = clean_symbol(symbol)
+    interval = validate_interval(interval)
+    candles_data, mode, warning = await get_candles(symbol, interval, 220)
+    if len(candles_data) < 40:
+        raise MarketDataError("TradingView returned too few candles for analysis")
+
+    # Previous completed candle of the SAME selected timeframe for classic pivots.
+    if len(candles_data) >= 2:
+        ref = candles_data[-2]
+    else:
+        ref = candles_data[-1]
+    current_price = float(candles_data[-1]["close"])
+    levels = calculate_pivot_levels(
+        float(ref["high"]), float(ref["low"]), float(ref["close"]), current_price
+    )
+    levels.update({
+        "timeframe": interval,
+        "source_timeframe": interval,
+        "reference_time": ref.get("time"),
+        "warning": None,
+    })
+    setup = build_key_level_signal(candles_data, levels, news_blocked=False)
+    technical = technical_analysis(candles_data, levels, setup)
+
+    # MTF is also TradingView-only. It is intentionally fetched separately because
+    # each timeframe is a distinct TradingView series.
+    mtf = await multi_timeframe(symbol)
+    ai_context = {
+        "symbol": symbol,
+        "timeframe": interval,
+        "current_price": current_price,
+        "bias": levels["bias"],
+        "signal": setup["signal"],
+        "setup": setup["setup"],
+        "confidence": 50,
+        "rsi": technical["rsi"],
+        "mtf_overall": mtf.get("overall", "MIXED"),
+        "pivot": levels["pivot"],
+        "support": [levels["s1"], levels["s2"], levels["s3"]],
+        "resistance": [levels["r1"], levels["r2"], levels["r3"]],
+    }
+    ai = await ai_smart_analysis(ai_context)
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "interval": interval,
+        "mode": mode,
+        "warning": warning,
+        "current_price": round(current_price, 4),
+        "candles": candles_data,
+        "candle": candles_data[-1],
+        "levels": levels,
+        "technical": technical,
+        "setup": setup,
+        "direction": setup["signal"],
+        "headline": f"{setup['signal']} · {setup['setup']}",
+        "multi_timeframe": mtf,
+        "ai_smart": ai,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+@app.get("/api/v1/candles/{symbol:path}")
+async def candles_endpoint(symbol: str, interval: str = Query(DEFAULT_INTERVAL), limit: int = Query(220, ge=2, le=500)) -> dict[str, Any]:
+    """Canonical candle endpoint: TradingView/OANDA only."""
+    interval = validate_interval(interval)
+    try:
+        rows = await fetch_tradingview_candles(clean_symbol(symbol), interval, limit)
+        if not rows:
+            raise MarketDataError("TradingView returned no candles")
+        return {
+            "ok": True,
+            "symbol": clean_symbol(symbol),
+            "interval": interval,
+            "mode": "live",
+            "provider": "TradingView",
+            "source": TRADINGVIEW_SYMBOL,
+            "candles": rows,
+            "candle": rows[-1],
+            "warning": None,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"TradingView candles unavailable: {exc}")
 
 
 @app.get("/api/v1/book-openai-analysis/{symbol:path}")
