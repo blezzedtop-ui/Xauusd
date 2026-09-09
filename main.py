@@ -24,6 +24,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi import WebSocket, WebSocketDisconnect
+from book_openai_engine import book_signal
 from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
@@ -1594,6 +1595,90 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
 
 
 
+
+async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, Any]:
+    """Book-pattern signal + OpenAI second opinion, both using the same chart candle feed."""
+    symbol = clean_symbol(symbol)
+    interval = validate_interval(interval)
+    candles_data, mode, warning = await get_candles(symbol, interval, 220)
+    if len(candles_data) < 40:
+        raise MarketDataError(f"{interval} uchun kitob pattern analizi uchun yetarli candle mavjud emas")
+
+    book = book_signal(candles_data)
+    recent = candles_data[-80:]
+    context = {
+        "symbol": symbol,
+        "timeframe": interval,
+        "current_price": candles_data[-1]["close"],
+        "book_signal": book["signal"],
+        "book_reason": book["reason"],
+        "book_patterns": book["patterns"],
+        "recent_candles": recent,
+        "rule": "Validate ONLY the supplied SIMPLE TRADING Book pattern result and candle data. Return BUY, SELL or WAIT. Do not invent other strategies.",
+    }
+    ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI unavailable."}
+    if OPENAI_API_KEY:
+        try:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+            prompt = (
+                "You are the second-opinion validator for XAU/USD. "
+                "Use ONLY the supplied book-pattern analysis and recent OHLC candles. "
+                "Do not add ICT, FVG, order blocks, liquidity, RSI, MACD, or any other strategy. "
+                "Return JSON only with keys signal (BUY/SELL/WAIT), confidence (0-100 integer), reason (short). "
+                "If the book signal is not clearly confirmed by the supplied candles, return WAIT.\n\n" +
+                json.dumps(context, ensure_ascii=False, default=str)
+            )
+            response = await client.responses.create(model=OPENAI_MODEL, input=prompt)
+            text = getattr(response, "output_text", "").strip()
+            if text:
+                try:
+                    parsed = json.loads(text)
+                    sig = str(parsed.get("signal", "WAIT")).upper()
+                    ai = {
+                        "signal": sig if sig in {"BUY", "SELL", "WAIT"} else "WAIT",
+                        "confidence": max(0, min(100, int(parsed.get("confidence", 0)))),
+                        "reason": str(parsed.get("reason", "OpenAI second opinion.")),
+                        "mode": "openai",
+                    }
+                except Exception:
+                    ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI returned an invalid structured result.", "mode": "openai"}
+        except Exception as exc:
+            ai = {"signal": "WAIT", "confidence": 0, "reason": f"OpenAI unavailable: {exc}", "mode": "fallback"}
+    else:
+        ai["mode"] = "fallback"
+
+    final_signal = book["signal"] if book["signal"] in {"BUY", "SELL"} and ai["signal"] == book["signal"] else "WAIT"
+    price = float(candles_data[-1]["close"])
+    # Risk levels are derived from the same live candle range; they are not a new strategy.
+    atr_value = max(_atr_local(candles_data), price * 0.0002)
+    if final_signal == "BUY":
+        entry, sl, tp = price, price - 1.2 * atr_value, [price + 2.0 * atr_value, price + 3.0 * atr_value]
+    elif final_signal == "SELL":
+        entry, sl, tp = price, price + 1.2 * atr_value, [price - 2.0 * atr_value, price - 3.0 * atr_value]
+    else:
+        entry, sl, tp = None, None, []
+    return {
+        "ok": True, "symbol": symbol, "interval": interval, "mode": mode, "warning": warning,
+        "current_price": round(price, 4), "book": book, "openai": ai,
+        "signal": final_signal, "entry": round(entry, 4) if entry is not None else None,
+        "stop_loss": round(sl, 4) if sl is not None else None,
+        "take_profit": [round(x, 4) for x in tp],
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "candle": candle_countdown(interval),
+        "candles": candles_data,
+    }
+
+
+def _atr_local(candles_data: list[dict[str, Any]], n: int = 14) -> float:
+    if len(candles_data) < 2:
+        return 0.0
+    trs=[]
+    for i in range(max(1, len(candles_data)-n), len(candles_data)):
+        c, p = candles_data[i], candles_data[i-1]
+        trs.append(max(float(c["high"])-float(c["low"]), abs(float(c["high"])-float(p["close"])), abs(float(c["low"])-float(p["close"]))))
+    return sum(trs)/max(1,len(trs))
+
 async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
     symbol = clean_symbol(symbol)
     interval = validate_interval(interval)
@@ -1959,6 +2044,18 @@ async def get_symbol_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVA
             "multi_timeframe": {"overall":"UNAVAILABLE","timeframes":{},"errors":{"analysis":str(exc)}},
             "ai_smart": {"mode":"fallback","summary":"Backend analysis error","bias":"NEUTRAL","confidence":0,"advice":"Check market-data provider."},
         }
+
+
+@app.get("/api/v1/book-openai-analysis/{symbol:path}")
+async def get_book_openai_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
+    try:
+        return await book_openai_second_opinion(clean_symbol(symbol), validate_interval(interval))
+    except Exception as exc:
+        return {"ok": False, "symbol": clean_symbol(symbol), "interval": validate_interval(interval),
+                "signal": "WAIT", "entry": None, "stop_loss": None, "take_profit": [],
+                "book": {"signal": "WAIT", "patterns": [], "reason": str(exc)},
+                "openai": {"signal": "WAIT", "confidence": 0, "reason": str(exc), "mode": "fallback"},
+                "error": str(exc)}
 
 
 @app.get("/api/v1/pivots/{symbol:path}")
