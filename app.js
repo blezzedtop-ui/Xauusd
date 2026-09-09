@@ -16,24 +16,48 @@ async function api(path,opt={}){const headers={'Content-Type':'application/json'
 function tvInterval(tf){return ({'1min':'1','5min':'5','15min':'15','30min':'30','1h':'60','4h':'240','1day':'D'})[tf]||'5'}
 function mountTradingView(id, tf=interval){
  const el=$(id); if(!el)return;
- el.innerHTML=''; el.style.minHeight=innerWidth<700?'420px':'520px'; el.style.height=innerWidth<700?'420px':'560px';
- const wrap=document.createElement('div'); wrap.className='tradingview-widget-container'; wrap.style.cssText='height:100%;width:100%';
- const host=document.createElement('div'); host.className='tradingview-widget-container__widget'; host.style.cssText='height:calc(100% - 32px);width:100%';
- const note=document.createElement('div'); note.className='tv-data-note'; note.textContent='TradingView chart • Analysis/Signal: same XAUUSD backend candle feed';
- const script=document.createElement('script'); script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js'; script.type='text/javascript'; script.async=true;
- script.textContent=JSON.stringify({autosize:true,symbol:'OANDA:XAUUSD',interval:tvInterval(tf),timezone:'Asia/Tashkent',theme:'dark',style:'1',locale:'en',allow_symbol_change:false,calendar:false,hide_top_toolbar:false,hide_legend:false,save_image:false,withdateranges:true,hide_volume:false,support_host:'https://www.tradingview.com'});
- wrap.appendChild(host); wrap.appendChild(script); el.appendChild(wrap); el.appendChild(note);
+ if(!window.LightweightCharts){ el.innerHTML='<div style="padding:20px;color:#ffcf70">Chart kutubxonasi yuklanmoqda...</div>'; return; }
+ el.innerHTML='';
+ el.style.minHeight=innerWidth<700?'420px':'520px';
+ el.style.height=innerWidth<700?'420px':'560px';
+ const host=document.createElement('div');
+ host.style.cssText='height:100%;width:100%';
+ el.appendChild(host);
+ const c=LightweightCharts.createChart(host,{
+   width:host.clientWidth||el.clientWidth,
+   height:host.clientHeight||560,
+   layout:{background:{type:'solid',color:'#090d12'},textColor:'#b9c4d0'},
+   grid:{vertLines:{color:'#17202b'},horzLines:{color:'#17202b'}},
+   crosshair:{mode:LightweightCharts.CrosshairMode.Normal},
+   rightPriceScale:{borderColor:'#26313e'},
+   timeScale:{borderColor:'#26313e',timeVisible:true,secondsVisible:false},
+ });
+ const s=c.addSeries(LightweightCharts.CandlestickSeries,{
+   upColor:'#30d49a',downColor:'#ff6471',borderVisible:false,
+   wickUpColor:'#30d49a',wickDownColor:'#ff6471'
+ });
+ if(id==='chart2'){ chart2=c; series2=s; } else { chart=c; series=s; }
+ new ResizeObserver(()=>c.applyOptions({width:host.clientWidth,height:host.clientHeight})).observe(host);
 }
-function initChart(id){ mountTradingView(id, interval); return {c:null,s:null}; }
+function initChart(id){ mountTradingView(id, interval); return {c:chart,s:series}; }
 function applyChart(candles,mode){
- const data=(candles||[]).map(x=>({time:x.time,open:+x.open,high:+x.high,low:+x.low,close:+x.close})).filter((x,i,a)=>i===0||x.time>a[i-1].time);
+ const data=(candles||[]).map(x=>({time:Number(x.time),open:+x.open,high:+x.high,low:+x.low,close:+x.close}))
+   .filter((x,i,a)=>x.time>0&&(i===0||x.time>a[i-1].time));
  liveCandle=data[data.length-1]||null;
+ if(series){
+   try{ series.setData(data); chart.timeScale().fitContent(); }catch(e){ console.error('chart setData',e); }
+ }
+ if(chart2 && series2){
+   try{ series2.setData(data); chart2.timeScale().fitContent(); }catch(e){}
+ }
  if(data.length){
    const first=data[0].time,last=data[data.length-1].time,days=Math.max(1,Math.round((last-first)/86400));
    $('change').textContent=`${data.length.toLocaleString()} candles · ${days} days history`;
    $('historyInfo').textContent=`${days}+ days · ${data.length.toLocaleString()} candles`;
  }
- $('mode').textContent=mode==='live'?'LIVE MARKET':'LIVE RETRY'; $('mode').style.color=mode==='live'?'var(--green)':'var(--amber)'; $('chartStatus').textContent=mode==='live'?'LIVE MARKET':'RETRYING';
+ $('mode').textContent=mode==='live'?'LIVE MARKET':'LIVE RETRY';
+ $('mode').style.color=mode==='live'?'var(--green)':'var(--amber)';
+ $('chartStatus').textContent=mode==='live'?'LIVE MARKET':'RETRYING';
 }
 function setTf(v){
  interval=v;
@@ -44,8 +68,9 @@ function setTf(v){
 }
 async function loadMain(force=false){
   try{
-    const d=await api(`/api/v1/analysis/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}${force?'&fresh=1':''}`);
-    renderAnalysis(d);
+    const d=await api(`/api/v1/chart-analysis/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}${force?'&fresh=1':''}`);
+    renderAnalysis(d.analysis||d);
+    if(d.candles) applyChart(d.candles,d.mode);
     if(d.current_price!=null) $('price').textContent=fmt(d.current_price);
     countdownData=d.candle||countdownData; updateCountdown();
     // Pivot is independent: never block the main chart/analysis render on it.
@@ -57,10 +82,10 @@ async function loadMain(force=false){
   }
 }
 async function loadChartHistory(){
- const c=await api(`/api/v1/candles/${encodeURIComponent(symbol)}?interval=${interval}&limit=500`);
+ const c=await api(`/api/v1/chart-analysis/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}`);
  if(c.mode!=='live') throw Error(c.warning||'LIVE market data unavailable');
  applyChart(c.candles,c.mode);
- countdownData=c.candle;
+ countdownData=(c.analysis||{}).candle||countdownData;
  updateCountdown();
 }
 async function loadAnalysisOnly(){
@@ -124,24 +149,31 @@ async function loadAISmart(tf=aiInterval){
     $('aiSummary').textContent=e.message||'AI Smart Analysis ishlamadi';
   }
 }
-function renderAnalysis(d){const s=d.setup||{},ta=d.technical||{};$('signalMain').textContent=d.direction||'WAIT';$('signalMain').className='signal-main '+((d.direction||'WAIT').toLowerCase()==='buy'?'buy':(d.direction||'').toLowerCase()==='sell'?'sell':'wait');$('signalReason').textContent=d.headline||s.reason||'—';$('entry').textContent=fmt(s.entry);$('sl').textContent=fmt(s.stop_loss);$('tp1').textContent=fmt((s.take_profit||[])[0]);$('tp2').textContent=fmt((s.take_profit||[])[1]);$('bias').textContent=d.levels?.bias||s.pivot_filter||'—';$('pivotFilter').textContent=(d.zones?.ai?.bias||d.levels?.bias||'NEUTRAL')+' · AI';$('rsi').textContent=fmt(ta.rsi);$('atr').textContent=fmt(ta.atr);$('rsiState').textContent=ta.rsi_state||'—';$('taTrend').textContent=ta.trend||'—';$('taState').textContent=d.interval?.toUpperCase()||interval;$('taSummary').textContent=ta.summary||'—';const ai=d.ai||{};$('aiMode').textContent=ai.mode||'—';$('aiSummary').textContent=ai.summary||'—';$('confidence').textContent=ai.confidence!=null?ai.confidence+'%':'—';$('aiBias').textContent=ai.bias||'—';$('aiAdvice').textContent=ai.advice||'—';}
-function updateCountdown(){const ts=countdownData?.close_timestamp; if(!ts)return;$('countdown').textContent=fmtDuration(Math.max(0,ts*1000-Date.now())); const close=new Date(ts*1000); $('closeTime').textContent='Close time: '+close.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});}function fmtDuration(ms){let s=Math.floor(ms/1000),h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);s%=60;return h?`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`}
-async function loadSessions(){try{const d=await api('/api/v1/sessions');const html=d.sessions.map(x=>`<div class="session ${x.open?'open':''}"><b>${x.name}</b><div class="sub">${x.local_time||''}</div><div class="status ${x.open?'up':'muted'}">${x.open?'OPEN':'CLOSED'}</div></div>`).join('');$('sessions').innerHTML=html;$('sessions2').innerHTML=html;$('sessionClock').textContent=d.utc_time||'—';$('sessionClock2').textContent=d.utc_time||'—'}catch(e){}}
-async function loadCalendar(){try{const d=await api('/api/v1/calendar?days=7');const source=d.provider?` · Source: ${d.provider}`:'';if(!d.events?.length){$('calendar').innerHTML=`<div class="mini">${d.warning||'USA/USD economic events topilmadi.'}</div>`;return}const now=Date.now();const rows=d.events.map(x=>{const dt=x.time?Date.parse(x.time):NaN;const until=Number.isFinite(dt)?(dt-now):null;const when=until!=null?(until>0?` · T−${fmtDuration(until)}`:` · ${Math.abs(until)<3600000?'LIVE/RECENT':'o‘tgan'}`):'';return `<div class="calendar-item"><div><span class="tag">${x.impact||'MEDIUM'}</span> · ${x.country||'USD'} · ${x.time||''}${when}</div><b>${x.event||'Economic event'}</b><div class="mini">Kutilmoqda: ${x.forecast??x.estimate??'—'} · Oldingi: ${x.previous??'—'} · Actual: ${x.actual??'—'} ${x.unit||''}</div><div class="mini">Source: ${x.source||d.provider||'—'}</div></div>`}).join('');$('calendar').innerHTML=`<div class="mini" style="margin-bottom:8px">USA / USD · ALL IMPACT${source} · ${d.events.length} event</div>`+rows}catch(e){$('calendar').innerHTML=`<div class="mini">Calendar ma’lumoti hozircha mavjud emas: ${e.message}</div>`}}
-async function loadMtf(){
-  try{
-    const d=await api(`/api/v1/multi-timeframe/${encodeURIComponent(symbol)}`);
-    $('mtfOverall').textContent=d.overall||'—';
-    const order=['1min','5min','15min','30min','1h','4h','1day'];
-    const frames=d.timeframes||{};
-    $('mtfGrid').innerHTML=order.map(tf=>{
-      const x=frames[tf]||{};
-      const tr=(x.trend||'UNAVAILABLE').toUpperCase();
-      const cls=tr==='BULLISH'?'buy':tr==='BEARISH'?'sell':'wait';
-      return `<div class="metric"><small>${tfName(tf)}</small><b class="${cls}">${tr}</b><div class="mini">Price ${x.price!=null?fmt(x.price):'—'} · RSI ${x.rsi!=null?fmt(x.rsi):'—'}</div><div class="mini">${x.mode||''}</div></div>`;
-    }).join('');
-  }catch(e){$('mtfGrid').innerHTML=`<div class="card">MTF LIVE error: ${e.message}</div>`}
+function renderAnalysis(d){
+ const s=d.setup||{},ta=d.technical||{},pa=d.professional_analysis||{};
+ $('signalMain').textContent=d.direction||s.signal||'WAIT';
+ $('signalMain').className='signal-main '+((d.direction||s.signal||'WAIT').toLowerCase()==='buy'?'buy':(d.direction||s.signal||'').toLowerCase()==='sell'?'sell':'wait');
+ $('signalReason').textContent=d.headline||s.reason||'—';
+ $('entry').textContent=fmt(s.entry??pa.entry);
+ $('sl').textContent=fmt(s.stop_loss??pa.stop_loss);
+ $('tp1').textContent=fmt((s.take_profit||pa.take_profit||[])[0]);
+ $('tp2').textContent=fmt((s.take_profit||pa.take_profit||[])[1]);
+ $('bias').textContent=d.bias||d.levels?.bias||'—';
+ $('pivotFilter').textContent=(d.zones?.ai?.bias||d.bias||'NEUTRAL')+' · REAL CHART';
+ $('rsi').textContent=fmt(ta.rsi);
+ $('atr').textContent=fmt(ta.atr);
+ $('rsiState').textContent=ta.rsi_state||'—';
+ $('taTrend').textContent=ta.trend||'—';
+ $('taState').textContent=(d.interval||interval).toUpperCase();
+ $('taSummary').textContent=ta.summary||'—';
+ const ai=d.ai_smart||d.ai||{};
+ $('aiMode').textContent=ai.mode||'—';
+ $('aiSummary').textContent=ai.summary||'—';
+ $('confidence').textContent=pa.technical_score!=null ? pa.technical_score+'/100' : (ai.confidence!=null?ai.confidence+'/100':'—');
+ $('aiBias').textContent=ai.bias||d.direction||'—';
+ $('aiAdvice').textContent=ai.advice||pa.primary_scenario||'—';
 }
+
 async function loadStats(){if(!token){$('totalSignals').textContent='0';$('completedSignals').textContent='0';$('wins').textContent='0';$('losses').textContent='0';$('winrate').textContent='0%';return}try{const d=await api('/api/v1/signals/analytics');$('totalSignals').textContent=d.total_signals;$('completedSignals').textContent=d.completed_trades;$('wins').textContent=d.wins;$('losses').textContent=d.losses;$('winrate').textContent=d.winrate+'%'}catch(e){}}
 async function loadHistory(){if(!token){$('history').innerHTML='<tr><td colspan="7">Kirish kerak.</td></tr>';return}try{const d=await api('/api/v1/signals/history?limit=50');$('history').innerHTML=(d.items||[]).map(x=>`<tr><td>${new Date(x.created_at).toLocaleString()}</td><td>${x.interval}</td><td class="${x.direction==='BUY'?'buy':x.direction==='SELL'?'sell':''}">${x.direction}</td><td>${fmt(x.entry)}</td><td>${(x.tp||[]).map(fmt).join(' / ')||'—'}</td><td>${fmt(x.sl)}</td><td class="outcome-${x.outcome==='TP HIT'?'tp':x.outcome==='SL HIT'?'sl':x.outcome==='OPEN'?'open':'amb'}">${x.outcome}</td></tr>`).join('')||'<tr><td colspan="7">Signal yo‘q.</td></tr>'}catch(e){$('history').innerHTML='<tr><td colspan="7">History yuklanmadi.</td></tr>'}}
 function componentText(v){if(v==null)return '—';if(typeof v==='object'){if(v.type)return v.type+(v.low!=null?' · '+fmt(v.low)+'–'+fmt(v.high):'');if(v.support!=null)return 'S '+fmt(v.support)+' · R '+fmt(v.resistance);return JSON.stringify(v)}return String(v)}
@@ -205,6 +237,8 @@ function updateLiveCandle(price, ts){
   } else {
     liveCandle.high=Math.max(liveCandle.high,price);liveCandle.low=Math.min(liveCandle.low,price);liveCandle.close=price;
   }
+  if(series){ try{series.update(liveCandle);}catch(e){} }
+  if(series2){ try{series2.update(liveCandle);}catch(e){} }
   $('price').textContent=fmt(price); $('change').textContent='Real-time tick'; $('change').className='change up';
   lastTickTs=Date.now();
 }
@@ -247,7 +281,7 @@ function connectMarketStream(){
    marketWS.onopen=()=>{ $('mode').textContent='LIVE STREAM'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE'; $('change').textContent='WebSocket real-time tick'; };
    marketWS.onmessage=ev=>{
      const m=JSON.parse(ev.data);
-     if(m.type==='tick') updateLiveCandle(+m.price,+m.timestamp); if(m.type==='candle'&&m.candle){ const cc=m.candle; liveCandle=cc; series.update(cc); if(series2) series2.update(cc); $('price').textContent=fmt(+m.price); }
+     if(m.type==='tick') updateLiveCandle(+m.price,+m.timestamp); if(m.type==='candle'&&m.candle){ const cc=m.candle; liveCandle=cc; if(series){try{series.update(cc)}catch(e){}} if(series2){try{series2.update(cc)}catch(e){}} $('price').textContent=fmt(+m.price); }
      if(m.type==='reconnecting'){ if(Date.now()-lastTickTs>20000){ $('mode').textContent='RECONNECTING'; $('mode').style.color='var(--amber)'; } } if(m.type==='error'){ $('mode').textContent='LIVE ERROR'; showToast(m.message||'Stream error'); }
    };
    marketWS.onclose=()=>{ $('chartStatus').textContent='RECONNECTING'; $('mode').textContent='RECONNECTING'; setTimeout(()=>{if(document.visibilityState!=='hidden')connectMarketStream()},500)};
