@@ -1,29 +1,21 @@
-# XAUUSD AI Multi-Engine — GitHub + Railway Ready
+# XAUUSD AI Multi-Engine — Railway + GitHub
 
-Real XAUUSD analysis dashboard using:
-- RealMarketAPI for live/historical XAUUSD data
-- TradingView Lightweight Charts for the candlestick chart
-- SIMPLE TRADING Book v1 pattern engine
-- Secondary 10-strategy price-action engine
-- OpenAI second-opinion validator
-- FastAPI backend + WebSocket proxy
+Railway deployment uses **Railpack** (not Dockerfile) to avoid Docker build-context failures.
+
+## Structure
+- `main.py` — FastAPI backend
+- `price_action_10_strategies.py` — secondary strategy engine
+- `frontend/index.html` — TradingView Lightweight Charts UI
+- `requirements.txt` — Python dependencies
+- `Procfile` — Railway start command
+- `railway.toml` — Railway config
 
 ## Railway Variables
-Set these in Railway > Service > Variables. Never commit real keys to GitHub.
-
+Set these in Railway Variables; never commit secrets:
 - `REALMARKET_API_KEY`
 - `OPENAI_API_KEY`
-- `OPENAI_MODEL` = `gpt-5.6-luna`
+- `OPENAI_MODEL=gpt-5.6-luna`
 
-## Deploy from GitHub
-1. Create an empty GitHub repository.
-2. Upload the contents of this folder to the repository root. Do not upload the ZIP itself.
-3. In Railway, create/select a service and connect that GitHub repository.
-4. Railway detects `Dockerfile` and builds it automatically.
-5. Add the variables above and redeploy.
-6. Test `/api/health` and then open the generated Railway domain.
-
-## Important
-API keys stay server-side in Railway. The browser connects only to the FastAPI WebSocket/REST endpoints.
-
-The chart is TradingView Lightweight Charts with RealMarketAPI data; it is not the hosted TradingView.com widget.
+## Start
+Railway runs:
+`uvicorn main:app --host 0.0.0.0 --port $PORT`
