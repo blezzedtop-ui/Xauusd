@@ -8,6 +8,8 @@ import re
 import secrets
 import asyncio
 import smtplib
+import random
+import string
 from email.message import EmailMessage
 import csv
 import io
@@ -24,7 +26,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi import WebSocket, WebSocketDisconnect
-from book_openai_engine import book_signal
+from book_openai_engine import book_signal, _atr as _atr_local
 from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
@@ -68,6 +70,14 @@ BOOK_OPENAI_LOCKS_GUARD = asyncio.Lock()
 CANDLE_LIMIT = max(50, min(int(os.getenv("CANDLE_LIMIT", "220")), 500))
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "12"))
 NODE_MARKET_URL = os.getenv("NODE_MARKET_URL", "http://127.0.0.1:3001").strip().rstrip("/")
+TRADINGVIEW_SYMBOL = os.getenv("TRADINGVIEW_SYMBOL", "OANDA:XAUUSD").strip() or "OANDA:XAUUSD"
+TRADINGVIEW_WS_URL = os.getenv("TRADINGVIEW_WS_URL", "wss://data.tradingview.com/socket.io/websocket").strip()
+TRADINGVIEW_BARS = max(80, min(int(os.getenv("TRADINGVIEW_BARS", "260")), 500))
+TRADINGVIEW_TIMEOUT = float(os.getenv("TRADINGVIEW_TIMEOUT", "10"))
+TRADINGVIEW_CACHE_TTL = float(os.getenv("TRADINGVIEW_CACHE_TTL", "2.0"))
+TV_CANDLE_CACHE: dict[tuple[str,str], tuple[float, list[dict[str,Any]]]] = {}
+TV_CANDLE_LOCKS: dict[tuple[str,str], asyncio.Lock] = {}
+TV_CANDLE_LOCKS_GUARD = asyncio.Lock()
 NODE_QUOTE_TIMEOUT = float(os.getenv("NODE_QUOTE_TIMEOUT", "2.5"))
 MARKET_TIMEZONE = os.getenv("MARKET_TIMEZONE", "UTC").strip() or "UTC"
 SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production").strip()
@@ -828,44 +838,107 @@ async def fetch_yahoo_price(symbol: str) -> float:
     return float(rows[-1]["close"])
 
 async def get_chart_history(symbol: str, interval: str, days: int = 31) -> tuple[list[dict[str, Any]], str, str | None]:
-    errors=[]
-    provider = live_provider()
-    if provider == "yahoo":
-        try:
-            data = await fetch_yahoo_candles(symbol, interval, min(CANDLE_LIMIT, 500))
-            return data, "live", "Yahoo Finance public market feed (XAUUSD or GC=F gold proxy; no API key)"
-        except MarketDataError as exc:
-            errors.append(str(exc))
-    if REALMARKET_API_KEY:
-        try:
-            data = await fetch_realmarket_month_candles(symbol, interval, days)
-            warning = None if interval == "1h" and len(data) > 10 else "RealMarketAPI provides recent candles for this timeframe; long-range /history is currently documented for H1."
-            return data, "live", warning or "RealMarketAPI history"
-        except MarketDataError as exc:
-            errors.append(str(exc))
-        try:
-            data = await fetch_realmarket_candles(symbol, interval, min(CANDLE_LIMIT, 260))
-            return data, "live", "RealMarketAPI recent candles"
-        except MarketDataError as exc:
-            errors.append(str(exc))
-    # Twelve Data is the secondary live market source. RealMarketAPI remains
-    # primary when configured, while Twelve Data fills provider/plan/timeframe
-    # gaps without changing the TradingView chart implementation.
-    if TWELVE_DATA_API_KEY:
-        try:
-            data = await fetch_twelvedata_candles(clean_symbol(symbol), interval, min(CANDLE_LIMIT, 260))
-            return data, "live", "Twelve Data live market feed"
-        except MarketDataError as exc:
-            errors.append(str(exc))
-    # If the paid/live feeds reject a timeframe because of plan limits or a
-    # temporary provider validation issue, keep the analysis engine usable with
-    # the public gold-futures fallback. This is explicitly marked as a proxy.
+    data=await fetch_tradingview_candles(symbol,interval,min(CANDLE_LIMIT,TRADINGVIEW_BARS))
+    return data,"tradingview",f"TradingView {TRADINGVIEW_SYMBOL} chart series"
+
+
+def _tv_session(prefix: str) -> str:
+    return prefix + "_" + "".join(random.choice(string.ascii_lowercase) for _ in range(12))
+
+def _tv_frame(method: str, params: list[Any]) -> str:
+    payload=json.dumps({"m":method,"p":params},separators=(",",":"))
+    return f"~m~{len(payload.encode('utf-8'))}~m~{payload}"
+
+def _tv_interval(interval: str) -> str:
+    return {"1min":"1","5min":"5","15min":"15","30min":"30","1h":"60","4h":"240","1day":"1D"}[validate_interval(interval)]
+
+def _tv_parse_frames(raw: str) -> list[dict[str,Any]]:
+    out=[]; pos=0
+    while pos < len(raw):
+        if raw.startswith("~m~",pos):
+            end=raw.find("~m~",pos+3)
+            if end<0: break
+            try:n=int(raw[pos+3:end])
+            except ValueError: break
+            st=end+3; payload=raw[st:st+n]; pos=st+n
+            try: out.append(json.loads(payload))
+            except Exception: pass
+        else: pos+=1
+    return out
+
+async def _fetch_tradingview_candles_once(symbol: str, interval: str, limit: int = TRADINGVIEW_BARS) -> list[dict[str,Any]]:
+    try: import websockets
+    except Exception as exc: raise MarketDataError(f"TradingView WebSocket dependency unavailable: {exc}")
+    tf=_tv_interval(interval); cs=_tv_session("cs"); qs=_tv_session("qs"); bars=[]
     try:
-        data = await fetch_yahoo_candles(symbol, interval, min(CANDLE_LIMIT, 500))
-        return data, "live", "Yahoo Finance GC=F gold-futures proxy fallback"
-    except MarketDataError as exc:
-        errors.append(str(exc))
-    raise MarketDataError("Live market history unavailable. " + " | ".join(errors))
+        async with websockets.connect(TRADINGVIEW_WS_URL, additional_headers={"Origin":"https://www.tradingview.com","User-Agent":"Mozilla/5.0"}, open_timeout=TRADINGVIEW_TIMEOUT, close_timeout=2, ping_interval=20, ping_timeout=20, max_size=8*1024*1024) as ws:
+            async def send(m,p): await ws.send(_tv_frame(m,p))
+            await send("set_auth_token",["unauthorized_user_token"])
+            await send("chart_create_session",[cs,""])
+            await send("quote_create_session",[qs])
+            await send("quote_set_fields",[qs,"lp","ch","chp"])
+            await send("quote_add_symbols",[qs,TRADINGVIEW_SYMBOL])
+            resolve=json.dumps({"symbol":TRADINGVIEW_SYMBOL,"adjustment":"splits","session":"regular"},separators=(",",":"))
+            await send("resolve_symbol",[cs,"sds_sym_1","="+resolve])
+            await send("create_series",[cs,"sds_1","s1","sds_sym_1",tf,int(limit),""])
+            deadline=asyncio.get_running_loop().time()+TRADINGVIEW_TIMEOUT
+            while asyncio.get_running_loop().time()<deadline:
+                try: raw=await asyncio.wait_for(ws.recv(),timeout=2.5)
+                except asyncio.TimeoutError: continue
+                if isinstance(raw,bytes): raw=raw.decode("utf-8","ignore")
+                for hb in re.findall(r"~m~\d+~m~~h~([^~]+)",raw):
+                    packet=f"~m~~h~{hb}"; await ws.send(f"~m~{len(packet)}~m~{packet}")
+                for msg in _tv_parse_frames(raw):
+                    m=msg.get("m"); pp=msg.get("p") or []
+                    if m in {"critical_error","series_error","symbol_error"}: raise MarketDataError(f"TradingView {m}: {pp}")
+                    if m!="timescale_update": continue
+                    node=pp[1] if len(pp)>1 and isinstance(pp[1],dict) else {}
+                    rawbars=(node.get("sds_1") or {}).get("s") or []
+                    parsed=[]
+                    for item in rawbars:
+                        v=item.get("v") if isinstance(item,dict) else None
+                        if not isinstance(v,list) or len(v)<5: continue
+                        try:
+                            t,o,h,l,c=map(float,v[:5])
+                            if all(math.isfinite(x) for x in (t,o,h,l,c)): parsed.append({"time":int(t),"open":o,"high":h,"low":l,"close":c})
+                        except Exception: pass
+                    if parsed:
+                        bars=sorted({b["time"]:b for b in parsed}.values(),key=lambda x:x["time"])
+                        if len(bars)>=min(20,limit): return bars[-limit:]
+            if bars:return bars[-limit:]
+            raise MarketDataError("TradingView returned no OHLC bars")
+    except MarketDataError: raise
+    except Exception as exc: raise MarketDataError(f"TradingView WebSocket unavailable: {type(exc).__name__}: {exc}")
+
+
+async def fetch_tradingview_candles(symbol: str, interval: str, limit: int = TRADINGVIEW_BARS) -> list[dict[str,Any]]:
+    """Shared TradingView/OANDA cache. One request/connection per symbol+TF at a time.
+
+    The dashboard has several panels that ask for the same candles simultaneously.
+    Opening a fresh TradingView websocket for every panel/quote caused intermittent
+    reconnects and empty data. This single-flight cache makes every module consume
+    the exact same TradingView series. No market-data provider fallback is used.
+    """
+    symbol = clean_symbol(symbol)
+    interval = validate_interval(interval)
+    key = (symbol, interval)
+    now = asyncio.get_running_loop().time()
+    cached = TV_CANDLE_CACHE.get(key)
+    if cached and now - cached[0] < TRADINGVIEW_CACHE_TTL and cached[1]:
+        return cached[1][-limit:]
+    async with TV_CANDLE_LOCKS_GUARD:
+        lock = TV_CANDLE_LOCKS.setdefault(key, asyncio.Lock())
+    async with lock:
+        now = asyncio.get_running_loop().time()
+        cached = TV_CANDLE_CACHE.get(key)
+        if cached and now - cached[0] < TRADINGVIEW_CACHE_TTL and cached[1]:
+            return cached[1][-limit:]
+        bars = await _fetch_tradingview_candles_once(symbol, interval, max(limit, 80))
+        if not bars:
+            raise MarketDataError("TradingView returned no OHLC bars")
+        bars = sorted({int(b["time"]): b for b in bars}.values(), key=lambda x: x["time"])
+        TV_CANDLE_CACHE[key] = (asyncio.get_running_loop().time(), bars[-TRADINGVIEW_BARS:])
+        return TV_CANDLE_CACHE[key][1][-limit:]
 
 
 async def fetch_tradingview_price(symbol: str) -> float:
@@ -952,69 +1025,14 @@ def demo_candles() -> list[dict[str, Any]]:
 
 
 async def fetch_live_price_any(symbol: str, interval: str = DEFAULT_INTERVAL) -> tuple[float, str]:
-    """Return the freshest available quote without making the dashboard depend on WS.
-
-    Priority: provider /price -> secondary provider -> newest provider candle close.
-    The candle-close fallback keeps Book/OpenAI analysis alive when a provider plan
-    rejects /price while its candle endpoint is still working.
-    """
-    key = clean_symbol(symbol)
-    interval = validate_interval(interval)
-    now_mono = asyncio.get_running_loop().time()
-    cached = LIVE_PRICE_CACHE.get(key)
-    if cached and now_mono - cached[0] < LIVE_PRICE_CACHE_TTL:
-        return cached[1], cached[2]
-    errors = []
-    # Canonical visible quote: the dashboard must match the embedded TradingView
-    # OANDA:XAUUSD chart, not a different CFD/provider feed.
-    try:
-        price = await fetch_tradingview_price(symbol)
-        LIVE_PRICE_CACHE[key] = (now_mono, price, "TradingView OANDA:XAUUSD")
-        return price, "TradingView OANDA:XAUUSD"
-    except Exception as exc:
-        errors.append(f"TradingView quote: {exc}")
-    if REALMARKET_API_KEY:
-        try:
-            price = await fetch_realmarket_price(symbol, interval)
-            LIVE_PRICE_CACHE[key] = (now_mono, price, "RealMarketAPI")
-            return price, "RealMarketAPI"
-        except Exception as exc:
-            errors.append(f"RealMarketAPI /price: {exc}")
-        try:
-            bars = await fetch_realmarket_candles(symbol, interval, 3)
-            if bars:
-                price = float(bars[-1]["close"])
-                LIVE_PRICE_CACHE[key] = (now_mono, price, "RealMarketAPI candle")
-                return price, "RealMarketAPI candle"
-        except Exception as exc:
-            errors.append(f"RealMarketAPI /candle: {exc}")
-    if TWELVE_DATA_API_KEY:
-        try:
-            price = await fetch_twelvedata_price(symbol)
-            LIVE_PRICE_CACHE[key] = (now_mono, price, "Twelve Data")
-            return price, "Twelve Data"
-        except Exception as exc:
-            errors.append(f"Twelve Data /price: {exc}")
-        try:
-            bars = await fetch_twelvedata_candles(symbol, interval, 3)
-            if bars:
-                price = float(bars[-1]["close"])
-                LIVE_PRICE_CACHE[key] = (now_mono, price, "Twelve Data candle")
-                return price, "Twelve Data candle"
-        except Exception as exc:
-            errors.append(f"Twelve Data /time_series: {exc}")
-    # Final public-feed fallback; explicitly labeled so it is never mistaken for a
-    # broker tick. This is preferable to breaking the analysis UI.
-    try:
-        bars = await fetch_yahoo_candles(symbol, interval, 3)
-        if bars:
-            price = float(bars[-1]["close"])
-            LIVE_PRICE_CACHE[key] = (now_mono, price, "Yahoo gold proxy candle")
-            return price, "Yahoo gold proxy candle"
-    except Exception as exc:
-        errors.append(f"Yahoo candle: {exc}")
-    raise MarketDataError("Fresh live price unavailable. " + " | ".join(errors))
-
+    """Return the latest close from the exact TradingView chart series used by analysis."""
+    key=clean_symbol(symbol); now=asyncio.get_running_loop().time()
+    cached=LIVE_PRICE_CACHE.get(key)
+    if cached and now-cached[0]<1.0:return cached[1],cached[2]
+    bars=await fetch_tradingview_candles(symbol,interval,2)
+    if not bars: raise MarketDataError("TradingView returned no live candle")
+    price=float(bars[-1]["close"]); source=f"TradingView {TRADINGVIEW_SYMBOL} chart series"
+    LIVE_PRICE_CACHE[key]=(now,price,source); return price,source
 
 def merge_live_price_into_candles(candles: list[dict[str, Any]], interval: str, price: float) -> list[dict[str, Any]]:
     """Make the analysis candle represent the current live quote.
@@ -1044,60 +1062,15 @@ def merge_live_price_into_candles(candles: list[dict[str, Any]], interval: str, 
 
 async def get_candles(symbol: str, interval: str, limit: int) -> tuple[list[dict[str, Any]], str, str | None]:
     interval = validate_interval(interval)
-    data, mode, provider = await get_chart_history(symbol, interval, max(31, min(limit, 260)))
-    live_note = None
-    try:
-        live_price, live_source = await fetch_live_price_any(symbol, interval)
-        data = merge_live_price_into_candles(data, interval, live_price)
-        live_note = f"Fresh quote: {live_source}"
-    except Exception as exc:
-        live_note = f"Fresh quote unavailable: {exc}"
-    return data[-limit:], mode, " | ".join(x for x in (provider, live_note) if x)
+    data = await get_chart_history(symbol, interval, max(31, min(limit, 260)))[0]
+    return data[-limit:], "tradingview", f"TradingView {TRADINGVIEW_SYMBOL} chart series"
 
 
 async def get_pivot_reference(symbol: str) -> tuple[dict[str, float], str | None]:
-    # Prefer the previous completed D1 candle. If D1 is unavailable on the
-    # current API plan, derive a daily reference from recent H1 candles.
-    try:
-        data = await fetch_realmarket_candles(symbol, "1day", 5)
-        if len(data) >= 2:
-            base = data[-2]
-        else:
-            base = data[-1]
-        return {"high":base["high"],"low":base["low"],"close":base["close"]}, None
-    except Exception as exc: first_error = str(exc)
-    try:
-        data = await fetch_realmarket_candles(symbol, "1h", 72)
-        if len(data) >= 2:
-            # Use the most recently completed UTC day represented in H1 data.
-            last_day = datetime.fromtimestamp(data[-1]["time"], tz=timezone.utc).date()
-            prior = [c for c in data if datetime.fromtimestamp(c["time"], tz=timezone.utc).date() < last_day]
-            day = prior if prior else data[:-1]
-            if day:
-                return {"high":max(c["high"] for c in day),
-                        "low":min(c["low"] for c in day),
-                        "close":day[-1]["close"]}, "Pivot derived from H1 because D1 was unavailable."
-    except Exception as exc: second_error = str(exc)
-    # Last-resort: derive a rolling reference from the currently available bars.
-    try:
-        data = await fetch_yahoo_candles(symbol, "1h", 72)
-        if data:
-            return {"high":max(c["high"] for c in data),
-                    "low":min(c["low"] for c in data),
-                    "close":data[-1]["close"]}, "Pivot derived from Yahoo GC=F fallback."
-    except Exception as exc: second_error = str(exc)
-    try:
-        data = await fetch_realmarket_candles(symbol, "5min", 100)
-        if data:
-            recent = data[-min(len(data), 100):]
-            return {
-                "high": max(c["high"] for c in recent),
-                "low": min(c["low"] for c in recent),
-                "close": recent[-1]["close"],
-            }, "Pivot derived from recent M5 candles because D1/H1 were unavailable."
-    except Exception:
-        pass
-    return {"high":0.0,"low":0.0,"close":0.0}, f"Pivot data unavailable: {first_error}"
+    data=await fetch_tradingview_candles(symbol,"1day",5)
+    if not data: raise MarketDataError("TradingView daily candles unavailable for pivot")
+    base=data[-2] if len(data)>=2 else data[-1]
+    return {"high":float(base["high"]),"low":float(base["low"]),"close":float(base["close"])},None
 
 def timeframe_trend(candles: list[dict[str, Any]]) -> dict[str, Any]:
     closes = [float(c["close"]) for c in candles]
@@ -1372,37 +1345,6 @@ def technical_analysis(candles_data: list[dict[str, Any]], levels: dict[str, Any
 
 
 
-async def fetch_rm_confluence(symbol: str, interval: str) -> dict[str, Any] | None:
-    """Use RealMarketAPI's server-side confluence when the account plan exposes it.
-    Falls back silently to the local engine for plans without Intelligence API.
-    """
-    if not REALMARKET_API_KEY:
-        return None
-    try:
-        tf = realmarket_timeframe(interval)
-        data = await rm_get("api/v1/insight/confluence", {
-            "SymbolCode": realmarket_symbol(symbol),
-            "TimeFrame": tf,
-        })
-        if isinstance(data, dict):
-            return data
-    except Exception:
-        return None
-    return None
-
-async def fetch_rm_trend(symbol: str, interval: str) -> dict[str, Any] | None:
-    if not REALMARKET_API_KEY:
-        return None
-    try:
-        tf = realmarket_timeframe(interval)
-        data = await rm_get("api/v1/insight/trend", {
-            "SymbolCode": realmarket_symbol(symbol),
-            "TimeFrame": tf,
-        })
-        return data if isinstance(data, dict) else None
-    except Exception:
-        return None
-
 async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict[str, Any], str | None]:
     """Classic Pivot levels based on the previous completed candle of the selected timeframe.
     This intentionally does NOT force D1 for every timeframe.
@@ -1658,19 +1600,9 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
         try:
             candles_data,mode,warning=await get_candles(symbol,tf,260)
             item=build_advanced_signal(candles_data,tf,news_blocked=news_blocked)
-            confluence=await fetch_rm_confluence(symbol,tf)
-            trend_data=await fetch_rm_trend(symbol,tf)
-            if confluence:
-                # Intelligence is supplemental context only. The displayed signal
-                # remains calculated from the same fresh candle feed as the chart
-                # analysis, so an older provider insight cannot overwrite a live signal.
-                item["provider"]="RealMarketAPI Intelligence (context)"
-                item["provider_signal"]=str(confluence.get("signal") or "").upper() or None
-                item["provider_strength"]=confluence.get("strength")
-                item["provider_reasons"]=confluence.get("reasons") or []
-            if trend_data:
-                item["provider_trend"]=trend_data.get("trend")
-                item["provider_adx"]=trend_data.get("adx")
+            # Every timeframe and signal component is calculated from the same
+            # TradingView OHLC series returned by get_candles(). No secondary
+            # market-data or provider-intelligence result is merged into the signal.
             return tf,{**item,"mode":mode,"warning":warning}
         except Exception as exc:
             return tf,{"interval":tf,"signal":"UNAVAILABLE","entry":None,"stop_loss":None,"take_profit":[],
@@ -1796,6 +1728,24 @@ async def get_book_openai_analysis(symbol: str, interval: str = Query(DEFAULT_IN
                 "error": str(exc)}
 
 
+@app.get("/api/v1/quote/{symbol:path}")
+async def quote(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
+    """Canonical quote from the same TradingView OANDA:XAUUSD chart series."""
+    symbol = clean_symbol(symbol)
+    interval = validate_interval(interval)
+    try:
+        price, source = await fetch_live_price_any(symbol, interval)
+        bars = await fetch_tradingview_candles(symbol, interval, 2)
+        ts = int(bars[-1]["time"]) if bars else int(datetime.now(timezone.utc).timestamp())
+        return {
+            "symbol": symbol, "price": round(float(price), 4), "mode": "live",
+            "provider": source, "timestamp": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
+            "source": "TradingView OANDA:XAUUSD chart series",
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="TradingView live quote unavailable: " + str(exc))
+
+
 @app.get("/api/v1/pivots/{symbol:path}")
 async def get_pivots(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
     selected = validate_interval(interval)
@@ -1818,8 +1768,6 @@ async def get_ai_smart_analysis(symbol: str, interval: str = Query(DEFAULT_INTER
                 "current_price": analysis["current_price"], "direction": analysis["direction"],
                 "levels": analysis["levels"], "technical": analysis["technical"],
                 "multi_timeframe": analysis["multi_timeframe"], "ai": ai,
-                "provider_confluence": analysis.get("provider_confluence"),
-                "provider_trend": analysis.get("provider_trend"),
                 "generated_at": datetime.now(timezone.utc).isoformat()}
     except Exception as exc:
         return {"ok": False, "interval": validate_interval(interval), "error": str(exc),
@@ -1900,7 +1848,7 @@ async def live_signals(symbol: str) -> dict[str, Any]:
     # Every request recomputes signals from the current live candle feed.
     # No demo/static signal data is used.
     result = await build_advanced_signals(clean_symbol(symbol), news_blocked=False)
-    return {**result, "mode": "live", "source": "RealMarketAPI candle feed"}
+    return {**result, "mode": "live", "source": f"TradingView {TRADINGVIEW_SYMBOL} chart series"}
 
 @app.post("/api/v1/signals/save-advanced")
 async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:

@@ -240,7 +240,7 @@ function connectMarketStream(){
    closeMarketStream();
    $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)';
    $('chartStatus').textContent='LIVE';
-   $('change').textContent='TradingView live chart · REST analysis feed';
+   $('change').textContent='TradingView live chart · same TradingView data for analysis';
    return;
  }
  closeMarketStream();
@@ -304,14 +304,8 @@ document.addEventListener('click',e=>{
     loadChartHistory().catch(e=>{ $('change').textContent='Chart: '+e.message; });
     connectMarketStream();
     $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
-    try{
-      const md=await api('/api/market/diagnostics');
-      if(md.live_ready){
-        const ok=Object.entries(md.providers||{}).filter(([,v])=>v.ok).map(([k])=>k.toUpperCase()).join(' + ');
-        $('mode').textContent='LIVE '+(ok||'READY');
-        $('mode').style.color='var(--green)';
-      }
-    }catch(_){ $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE'; }
+    // Market source is intentionally fixed to the TradingView OANDA:XAUUSD series.
+    $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
     // Never let one slow/failing module prevent the rest of the dashboard.
     loadMain(true).catch(e=>{$('signalReason').textContent='Live analysis unavailable: '+(e.message||'server error')});
     quoteHeartbeat().catch(()=>{});
