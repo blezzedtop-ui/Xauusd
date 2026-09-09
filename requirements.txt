@@ -1,9 +1,7 @@
-fastapi>=0.116,<1.0
-uvicorn[standard]>=0.35,<1.0
-httpx>=0.28,<1.0
-python-dotenv>=1.1,<2.0
-sqlalchemy>=2.0,<3.0
-psycopg[binary]>=3.2,<4.0
-openai>=1.0,<3.0
-
-websockets>=14.0,<16.0
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pandas>=2.2
+numpy>=1.26
+requests>=2.32
+python-dotenv>=1.0
+openai>=1.0
