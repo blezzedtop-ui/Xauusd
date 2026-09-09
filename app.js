@@ -193,7 +193,7 @@ async function quoteHeartbeat(){
   if(now-lastRestQuoteAt < 3000) return false;
   lastRestQuoteAt=now;
   try{
-    const q=await api(`/api/v1/quote/${encodeURIComponent(symbol)}`);
+    const q=await api(`/api/v1/quote/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}`);
     if(q?.mode==='live' && q.price!=null){
       const price=+q.price; $('price').textContent=fmt(price);
       $('mode').textContent=marketWS&&marketWS.readyState===WebSocket.OPEN?'LIVE STREAM':'LIVE REST'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';

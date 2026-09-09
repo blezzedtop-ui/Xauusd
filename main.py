@@ -862,13 +862,15 @@ async def get_chart_history(symbol: str, interval: str, days: int = 31) -> tuple
     raise MarketDataError("Live market history unavailable. " + " | ".join(errors))
 
 
-async def fetch_realmarket_price(symbol: str) -> float:
-    # RealMarketAPI /api/v1/price requires BOTH symbolCode and timeFrame.
-    # The previous build omitted timeFrame, which caused HTTP 400 validation
-    # errors and prevented quote/analysis/signal modules from receiving data.
+async def fetch_realmarket_price(symbol: str, interval: str = DEFAULT_INTERVAL) -> float:
+    # Use the SAME timeframe that the chart/analysis selected. Hard-coding M1
+    # can return HTTP 400 on plans that do not expose M1, even when M5/M15/H1
+    # candles work correctly. M30 is locally built from the provider M15 feed.
+    interval = validate_interval(interval)
+    source_interval = "15min" if interval == "30min" else interval
     data = await rm_get("price", {
         "symbolCode": realmarket_symbol(symbol),
-        "timeFrame": "M1",
+        "timeFrame": realmarket_timeframe(source_interval),
     })
     if isinstance(data, dict):
         candidates = [data.get(k) for k in ("price","Price","closePrice","ClosePrice","Close","last","Last","Bid","bid")]
@@ -900,7 +902,7 @@ def demo_candles() -> list[dict[str, Any]]:
     return out
 
 
-async def fetch_live_price_any(symbol: str) -> tuple[float, str]:
+async def fetch_live_price_any(symbol: str, interval: str = DEFAULT_INTERVAL) -> tuple[float, str]:
     """Return a fresh shared quote for all analysis modules.
 
     A tiny cache prevents MTF/Signal/TA/Pivot from making seven identical quote
@@ -914,7 +916,7 @@ async def fetch_live_price_any(symbol: str) -> tuple[float, str]:
     errors = []
     if REALMARKET_API_KEY:
         try:
-            price = await fetch_realmarket_price(symbol)
+            price = await fetch_realmarket_price(symbol, interval)
             LIVE_PRICE_CACHE[key] = (now_mono, price, "RealMarketAPI")
             return price, "RealMarketAPI"
         except Exception as exc:
@@ -960,7 +962,7 @@ async def get_candles(symbol: str, interval: str, limit: int) -> tuple[list[dict
     data, mode, provider = await get_chart_history(symbol, interval, max(31, min(limit, 260)))
     live_note = None
     try:
-        live_price, live_source = await fetch_live_price_any(symbol)
+        live_price, live_source = await fetch_live_price_any(symbol, interval)
         data = merge_live_price_into_candles(data, interval, live_price)
         live_note = f"Fresh quote: {live_source}"
     except Exception as exc:
@@ -1861,7 +1863,7 @@ async def market_diagnostics() -> dict[str, Any]:
         if configured:
             try:
                 if name=="realmarketapi":
-                    item["price"]=await fetch_realmarket_price(DEFAULT_SYMBOL)
+                    item["price"]=await fetch_realmarket_price(DEFAULT_SYMBOL, DEFAULT_INTERVAL)
                 else:
                     item["price"]=await fetch_twelvedata_price(clean_symbol(DEFAULT_SYMBOL))
                 item["ok"]=True
@@ -1990,7 +1992,8 @@ async def candles(symbol: str, interval: str = Query(DEFAULT_INTERVAL), limit: i
 
 
 @app.get("/api/v1/quote/{symbol:path}")
-async def quote(symbol: str) -> dict[str, Any]:
+async def quote(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
+    interval = validate_interval(interval)
     symbol = clean_symbol(symbol); errors=[]
     try:
         node_url=f"{NODE_MARKET_URL}/market/price?symbol={urlquote(symbol)}"
@@ -2007,7 +2010,7 @@ async def quote(symbol: str) -> dict[str, Any]:
         except MarketDataError as exc:
             errors.append(f"yahoo: {exc}")
     try:
-        price=await fetch_realmarket_price(symbol)
+        price=await fetch_realmarket_price(symbol, interval)
         return {"symbol":symbol,"price":price,"mode":"live","provider":"realmarketapi","timestamp":datetime.now(timezone.utc).isoformat()}
     except MarketDataError as exc: errors.append(f"realmarketapi: {exc}")
     raise HTTPException(status_code=503, detail="No live quote available. " + " | ".join(errors))
