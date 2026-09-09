@@ -10,7 +10,7 @@ const API_BASE=CONFIGURED_API || ((location.protocol==='http:'||location.protoco
 const API_CANDIDATES=[API_BASE].filter(Boolean);
 const NODE_MARKET_URL=(window.NODE_MARKET_URL||'').replace(/\/$/,'');
 const IS_NETLIFY=/netlify\.app$|netlify\.com$/i.test(location.hostname);
-const DISABLE_MARKET_WS=IS_NETLIFY || window.DISABLE_MARKET_WS===true;
+const DISABLE_MARKET_WS=window.DISABLE_MARKET_WS!==false;
 async function nodeMarketHealth(){if(!NODE_MARKET_URL)return null;try{const r=await fetch(`${NODE_MARKET_URL}/health`,{cache:'no-store'});if(!r.ok) return null;return await r.json()}catch{return null}}
 async function api(path,opt={}){const headers={'Content-Type':'application/json',...(opt.headers||{})};if(token)headers.Authorization='Bearer '+token;let last;for(const base of API_CANDIDATES){try{const url=path.startsWith('http')?path:base+path;const r=await fetch(url,{...opt,headers,cache:'no-store'});let d={};try{d=await r.json()}catch{}if(!r.ok)throw Error(d.detail||d.message||'HTTP '+r.status);return d}catch(e){last=e}}if(last instanceof TypeError){throw Error('Cloud backendga ulanib bo‘lmadi. Saytning cloud serveri ulanmagan yoki hozircha ishlamayapti.') }throw last}
 function tvInterval(tf){return ({'1min':'1','5min':'5','15min':'15','30min':'30','1h':'60','4h':'240','1day':'D'})[tf]||'5'}
@@ -226,28 +226,34 @@ async function quoteHeartbeat(){
     // The TradingView chart remains independently live even if our backend quote
     // heartbeat is temporarily unavailable.
     $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
-    $('change').textContent='TradingView live chart · backend quote retrying';
+    $('change').textContent='TradingView live chart · backend REST retrying';
     return false;
   }
 }
 
 function connectMarketStream(){
- if(DISABLE_MARKET_WS) return;
+ // TradingView's embedded chart owns its own real-time connection. The dashboard
+ // must not create a second fragile WS dependency that can leave the UI stuck on
+ // RECONNECTING. Backend prices/analysis use the stable REST heartbeat instead.
+ if(DISABLE_MARKET_WS){
+   closeMarketStream();
+   $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)';
+   $('chartStatus').textContent='LIVE';
+   $('change').textContent='TradingView live chart · REST analysis feed';
+   return;
+ }
  closeMarketStream();
  const wsBase=API_BASE.replace(/^http/,'ws');
- const nodeWsBase=NODE_MARKET_URL.replace(/^http/,'ws');
  const wsUrl=wsBase+`/api/v1/ws/market/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}`;
  try{
    streamKey=symbol+'|'+interval; marketWS=new WebSocket(wsUrl);
-   marketWS.onopen=()=>{ $('mode').textContent='LIVE STREAM'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE'; $('change').textContent='WebSocket real-time tick'; };
+   marketWS.onopen=()=>{ $('mode').textContent='LIVE STREAM'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE'; };
    marketWS.onmessage=ev=>{
-     const m=JSON.parse(ev.data);
-     if(m.type==='tick') updateLiveCandle(+m.price,+m.timestamp); if(m.type==='candle'&&m.candle){ liveCandle=m.candle; $('price').textContent=fmt(+m.price); loadMain(true).catch(()=>{}); }
-     if(m.type==='reconnecting'){ if(Date.now()-lastTickTs>20000){ $('mode').textContent='RECONNECTING'; $('mode').style.color='var(--amber)'; } } if(m.type==='error'){ $('mode').textContent='LIVE ERROR'; showToast(m.message||'Stream error'); }
+     try{ const m=JSON.parse(ev.data); if(m.type==='tick') updateLiveCandle(+m.price,+m.timestamp); }catch(_){}
    };
-   marketWS.onclose=()=>{ $('chartStatus').textContent='RECONNECTING'; $('mode').textContent='RECONNECTING'; setTimeout(()=>{if(document.visibilityState!=='hidden')connectMarketStream()},500)};
-   marketWS.onerror=()=>{ $('chartStatus').textContent='STREAM ERROR'; try{marketWS.close()}catch{} setTimeout(()=>{if(document.visibilityState!=='hidden')connectMarketStream()},500) };
- }catch(e){showToast('Real-time stream could not start')}
+   marketWS.onclose=()=>{ marketWS=null; $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE'; };
+   marketWS.onerror=()=>{ try{marketWS.close()}catch{} };
+ }catch(e){ marketWS=null; }
 }
 function setAuth(mode){authMode=mode;$('authTitle').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSubmit').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSwitch').textContent=mode==='login'?'Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish':'Hisobingiz bormi? Kirish';$('email').placeholder=mode==='login'?'Login yoki elektron pochta':'Elektron pochta';$('password').required=mode==='login';$('password').style.display=mode==='login'?'block':'none';$('password').value='';$('authMsg').textContent=mode==='register'?'Email kiriting — login va parol avtomatik yaratiladi.':''}
 document.querySelectorAll('.tfbar').forEach(bar=>bar.addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b && bar.contains(b))setTf(b.dataset.interval)}));document.querySelectorAll('.nav button').forEach(b=>b.addEventListener('click',()=>openSection(b.dataset.section)));$('saveSignal').onclick=saveSignal;$('refreshAdvanced').onclick=loadAdvancedSignals;$('refreshStats').onclick=loadStats;$('refreshCalendar').onclick=loadCalendar;$('refreshHistory').onclick=loadHistory;$('authBtn').onclick=()=>{ setAuth('login'); $('authMsg').textContent=''; $('authModal').classList.add('show'); setTimeout(()=>$('email').focus(),50); }; $('authSwitch').onclick=()=>setAuth(authMode==='login'?'register':'login');async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(()=>{});token='';localStorage.removeItem('trading_token');$('plan').textContent='Guest';$('authBtn').textContent='Kirish';loadStats();loadHistory();$('authModal').classList.remove('show');$('authMsg').textContent='';showToast('Tizimdan chiqildi')};$('authForm').onsubmit=async e=>{
@@ -296,7 +302,7 @@ document.addEventListener('click',e=>{
     mountTradingView('chart', interval);
     loadChartHistory().catch(e=>{ $('change').textContent='Chart: '+e.message; });
     connectMarketStream();
-    $('mode').textContent='CONNECTING…';
+    $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
     try{
       const md=await api('/api/market/diagnostics');
       if(md.live_ready){
@@ -304,7 +310,7 @@ document.addEventListener('click',e=>{
         $('mode').textContent='LIVE '+(ok||'READY');
         $('mode').style.color='var(--green)';
       }
-    }catch(_){ $('mode').textContent='LIVE RETRY'; }
+    }catch(_){ $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE'; }
     // Never let one slow/failing module prevent the rest of the dashboard.
     loadMain(true).catch(e=>{$('signalReason').textContent='Live analysis unavailable: '+(e.message||'server error')});
     quoteHeartbeat().catch(()=>{});

@@ -903,12 +903,14 @@ def demo_candles() -> list[dict[str, Any]]:
 
 
 async def fetch_live_price_any(symbol: str, interval: str = DEFAULT_INTERVAL) -> tuple[float, str]:
-    """Return a fresh shared quote for all analysis modules.
+    """Return the freshest available quote without making the dashboard depend on WS.
 
-    A tiny cache prevents MTF/Signal/TA/Pivot from making seven identical quote
-    requests at once while still refreshing fast enough for live analysis.
+    Priority: provider /price -> secondary provider -> newest provider candle close.
+    The candle-close fallback keeps Book/OpenAI analysis alive when a provider plan
+    rejects /price while its candle endpoint is still working.
     """
     key = clean_symbol(symbol)
+    interval = validate_interval(interval)
     now_mono = asyncio.get_running_loop().time()
     cached = LIVE_PRICE_CACHE.get(key)
     if cached and now_mono - cached[0] < LIVE_PRICE_CACHE_TTL:
@@ -920,14 +922,40 @@ async def fetch_live_price_any(symbol: str, interval: str = DEFAULT_INTERVAL) ->
             LIVE_PRICE_CACHE[key] = (now_mono, price, "RealMarketAPI")
             return price, "RealMarketAPI"
         except Exception as exc:
-            errors.append(f"RealMarketAPI: {exc}")
+            errors.append(f"RealMarketAPI /price: {exc}")
+        try:
+            bars = await fetch_realmarket_candles(symbol, interval, 3)
+            if bars:
+                price = float(bars[-1]["close"])
+                LIVE_PRICE_CACHE[key] = (now_mono, price, "RealMarketAPI candle")
+                return price, "RealMarketAPI candle"
+        except Exception as exc:
+            errors.append(f"RealMarketAPI /candle: {exc}")
     if TWELVE_DATA_API_KEY:
         try:
             price = await fetch_twelvedata_price(symbol)
             LIVE_PRICE_CACHE[key] = (now_mono, price, "Twelve Data")
             return price, "Twelve Data"
         except Exception as exc:
-            errors.append(f"Twelve Data: {exc}")
+            errors.append(f"Twelve Data /price: {exc}")
+        try:
+            bars = await fetch_twelvedata_candles(symbol, interval, 3)
+            if bars:
+                price = float(bars[-1]["close"])
+                LIVE_PRICE_CACHE[key] = (now_mono, price, "Twelve Data candle")
+                return price, "Twelve Data candle"
+        except Exception as exc:
+            errors.append(f"Twelve Data /time_series: {exc}")
+    # Final public-feed fallback; explicitly labeled so it is never mistaken for a
+    # broker tick. This is preferable to breaking the analysis UI.
+    try:
+        bars = await fetch_yahoo_candles(symbol, interval, 3)
+        if bars:
+            price = float(bars[-1]["close"])
+            LIVE_PRICE_CACHE[key] = (now_mono, price, "Yahoo gold proxy candle")
+            return price, "Yahoo gold proxy candle"
+    except Exception as exc:
+        errors.append(f"Yahoo candle: {exc}")
     raise MarketDataError("Fresh live price unavailable. " + " | ".join(errors))
 
 
@@ -2012,7 +2040,22 @@ async def quote(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[st
     try:
         price=await fetch_realmarket_price(symbol, interval)
         return {"symbol":symbol,"price":price,"mode":"live","provider":"realmarketapi","timestamp":datetime.now(timezone.utc).isoformat()}
-    except MarketDataError as exc: errors.append(f"realmarketapi: {exc}")
+    except MarketDataError as exc:
+        errors.append(f"realmarketapi /price: {exc}")
+        # Stable fallback: the latest provider candle close is still current market
+        # data and is enough to keep the dashboard/Book/OpenAI pipeline alive.
+        try:
+            bars = await fetch_realmarket_candles(symbol, interval, 3)
+            if bars:
+                return {"symbol":symbol,"price":float(bars[-1]["close"]),"mode":"live","provider":"realmarketapi-candle","timestamp":datetime.now(timezone.utc).isoformat()}
+        except MarketDataError as candle_exc:
+            errors.append(f"realmarketapi /candle: {candle_exc}")
+    try:
+        bars = await fetch_yahoo_candles(symbol, interval, 3)
+        if bars:
+            return {"symbol":symbol,"price":float(bars[-1]["close"]),"mode":"live","provider":"yahoo-gold-proxy-candle","timestamp":datetime.now(timezone.utc).isoformat()}
+    except MarketDataError as exc:
+        errors.append(f"yahoo candle: {exc}")
     raise HTTPException(status_code=503, detail="No live quote available. " + " | ".join(errors))
 
 

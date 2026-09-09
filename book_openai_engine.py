@@ -53,13 +53,13 @@ def detect_book_patterns(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if len(highs) >= 2:
         a, b = highs[-2], highs[-1]
         if b[0] > a[0] and _pct(a[1], b[1]) <= 0.02:
-            neck = min(_f(candles[i]["low"]) for i in range(a[0], b[0]+1))
+            neck = min(_f(candles[i], "low") for i in range(a[0], b[0]+1))
             sig = "SELL" if close < neck else "WAIT"
             out.append(_result("Double Top", sig, f"Two similar highs; neckline {neck:.4f}." + (" Close confirmed below neckline." if sig=="SELL" else " Waiting for neckline break."), [a[0], b[0]]))
     if len(lows) >= 2:
         a, b = lows[-2], lows[-1]
         if b[0] > a[0] and _pct(a[1], b[1]) <= 0.02:
-            neck = max(_f(candles[i]["high"]) for i in range(a[0], b[0]+1))
+            neck = max(_f(candles[i], "high") for i in range(a[0], b[0]+1))
             sig = "BUY" if close > neck else "WAIT"
             out.append(_result("Double Bottom", sig, f"Two similar lows; neckline {neck:.4f}." + (" Close confirmed above neckline." if sig=="BUY" else " Waiting for neckline break."), [a[0], b[0]]))
 
@@ -67,13 +67,13 @@ def detect_book_patterns(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if len(highs) >= 3:
         h1, h2, h3 = highs[-3:]
         if h2[1] > h1[1] and h2[1] > h3[1] and _pct(h1[1], h3[1]) <= 0.03:
-            neck = min(_f(candles[i]["low"]) for i in range(h1[0], h3[0]+1))
+            neck = min(_f(candles[i], "low") for i in range(h1[0], h3[0]+1))
             sig = "SELL" if close < neck else "WAIT"
             out.append(_result("Head & Shoulders", sig, f"Center high exceeds both shoulders; neckline {neck:.4f}." + (" Break confirmed." if sig=="SELL" else " Waiting for neckline break."), [h1[0], h2[0], h3[0]]))
     if len(lows) >= 3:
         l1, l2, l3 = lows[-3:]
         if l2[1] < l1[1] and l2[1] < l3[1] and _pct(l1[1], l3[1]) <= 0.03:
-            neck = max(_f(candles[i]["high"]) for i in range(l1[0], l3[0]+1))
+            neck = max(_f(candles[i], "high") for i in range(l1[0], l3[0]+1))
             sig = "BUY" if close > neck else "WAIT"
             out.append(_result("Inverse Head & Shoulders", sig, f"Center low is below both shoulders; neckline {neck:.4f}." + (" Break confirmed." if sig=="BUY" else " Waiting for neckline break."), [l1[0], l2[0], l3[0]]))
 
