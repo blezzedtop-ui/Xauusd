@@ -8,10 +8,11 @@ import pandas as pd
 import numpy as np
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from openai import OpenAI
+import websockets
 
 from price_action_10_strategies import Config, analyze as secondary_analyze, latest_signal as secondary_latest
 
@@ -20,6 +21,7 @@ REALMARKET_API_KEY = os.getenv("REALMARKET_API_KEY","").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY","").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL","gpt-5.6-luna").strip()
 BASE="https://api.realmarketapi.com"
+WS_BASE="wss://api.realmarketapi.com/price"
 
 app=FastAPI(title="XAUUSD AI Multi-Engine Analyzer")
 app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
@@ -225,6 +227,40 @@ def final_decision(book,secondary,ai):
             "finalConfidence":round(float(np.mean(confs))) if confs else 0,
             "agreementCount":sum(x==final and final!="WAIT" for x in [b,s2,a]),
             "allThreeAgree":final!="WAIT" and b==s2==a}
+
+
+@app.websocket("/ws/price")
+async def ws_price(websocket: WebSocket):
+    await websocket.accept()
+    symbol = websocket.query_params.get("symbolCode", "XAUUSD")
+    timeframe = websocket.query_params.get("timeFrame", "M5")
+    if not REALMARKET_API_KEY:
+        await websocket.send_json({"type":"error","error":"REALMARKET_API_KEY is not configured on Railway."})
+        await websocket.close(code=1011)
+        return
+    url = f"{WS_BASE}?apiKey={REALMARKET_API_KEY}&symbolCode={symbol}&timeFrame={timeframe}"
+    try:
+        async with websockets.connect(url, ping_interval=20, ping_timeout=20, close_timeout=5) as upstream:
+            async for message in upstream:
+                try:
+                    raw=json.loads(message)
+                    if isinstance(raw, dict):
+                        try:
+                            candle=norm(raw)
+                            await websocket.send_json({"type":"candle","candle":candle,"raw":raw})
+                        except Exception:
+                            await websocket.send_json({"type":"tick","raw":raw})
+                    else:
+                        await websocket.send_json({"type":"raw","raw":raw})
+                except Exception as exc:
+                    await websocket.send_json({"type":"error","error":str(exc)})
+    except WebSocketDisconnect:
+        return
+    except Exception as exc:
+        try: await websocket.send_json({"type":"error","error":str(exc)})
+        except Exception: pass
+        try: await websocket.close(code=1011)
+        except Exception: pass
 
 @app.get("/api/health")
 def health():

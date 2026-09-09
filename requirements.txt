@@ -5,3 +5,5 @@ numpy>=1.26
 requests>=2.32
 python-dotenv>=1.0
 openai>=1.0
+
+websockets>=13.0
