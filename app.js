@@ -84,12 +84,28 @@ async function loadPivots(tf=pivotInterval){
   pivotInterval=tf;
   try{
     const d=await api(`/api/v1/pivots/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`);
-    const p=d.timeframes?.[tf]||{};
-    $('pivotFilter').textContent=tfName(tf);
-    $('pivotSource').textContent=`${tfName(tf)} Pivot · source: ${tfName(p.source_timeframe||tf)}${p.warning?' · '+p.warning:''}`;
-    $('levels').innerHTML=[['R3',p.r3,'res'],['R2',p.r2,'res'],['R1',p.r1,'res'],['Pivot',p.pivot,'piv'],['S1',p.s1,'sup'],['S2',p.s2,'sup'],['S3',p.s3,'sup']].map(x=>`<div class="row"><span>${x[0]}</span><b class="${x[2]}">${fmt(x[1])}</b></div>`).join('');
+    const z=d.zones||{}; const ai=z.ai||{};
+    $('pivotFilter').textContent=`${tfName(tf)} · AI ZONES`;
+    $('pivotSource').textContent=`Real OHLC · ${tfName(tf)} · ${z.mode==='openai'?'OpenAI zone ranking':'rule-based zone confirmation'}${d.warning?' · '+d.warning:''}`;
+    const supports=(z.support_zones||[]).map((x,i)=>({kind:'support',name:`SUPPORT ${i+1}`,z:x}));
+    const resistances=(z.resistance_zones||[]).map((x,i)=>({kind:'resistance',name:`RESISTANCE ${i+1}`,z:x}));
+    const primaryS=ai.primary_support_id; const primaryR=ai.primary_resistance_id;
+    const cards=[...supports,...resistances].map(x=>{
+      const i=x.kind==='support'?supports.findIndex(v=>v.z===x.z):resistances.findIndex(v=>v.z===x.z);
+      const primary=(x.kind==='support'&&i===primaryS)||(x.kind==='resistance'&&i===primaryR);
+      return `<div class="zone-card ${x.kind}"><div class="zone-head"><span class="zone-name">${primary?'★ PRIMARY ':''}${x.name}</span><span class="zone-strength">${x.z.strength||0}/100</span></div><div class="zone-price">${fmt(x.z.min)} — ${fmt(x.z.max)}</div><div class="zone-meta">Center ${fmt(x.z.center)} · ${x.z.evidence?.join(', ')||'OHLC cluster'}</div></div>`;
+    });
+    const rej=z.latest_rejection;
+    if(rej) cards.push(`<div class="zone-card entry"><div class="zone-head"><span class="zone-name">LATEST REJECTION</span><span class="zone-strength">${rej.strength}/100</span></div><div class="zone-price">${fmt(rej.min)} — ${fmt(rej.max)}</div><div class="zone-meta">${rej.type||'Price-action rejection'} · real candle evidence</div></div>`);
+    $('levels').innerHTML=cards.length?cards.join(''):'<div class="zone-card zone-empty">Real chartdan hozircha yetarli zona aniqlanmadi.</div>';
+    let aiText=`AI BIAS: ${ai.bias||'NEUTRAL'}`;
+    if(primaryS!=null&&z.support_zones?.[primaryS]) aiText+=` · Primary Support ${fmt(z.support_zones[primaryS].min)}–${fmt(z.support_zones[primaryS].max)}`;
+    if(primaryR!=null&&z.resistance_zones?.[primaryR]) aiText+=` · Primary Resistance ${fmt(z.resistance_zones[primaryR].min)}–${fmt(z.resistance_zones[primaryR].max)}`;
+    if(ai.reasoning?.length) aiText+=`<br>• ${ai.reasoning.slice(0,4).join('<br>• ')}`;
+    $('pivotAiSummary').innerHTML=aiText;
   }catch(e){
-    $('pivotSource').textContent='Pivot yuklanmadi: '+e.message;
+    $('pivotAiSummary').textContent='AI zone analysis mavjud emas: '+e.message;
+    $('pivotSource').textContent='Real chart zonalari yuklanmadi';
   }
 }
 async function loadAISmart(tf=aiInterval){
@@ -108,7 +124,7 @@ async function loadAISmart(tf=aiInterval){
     $('aiSummary').textContent=e.message||'AI Smart Analysis ishlamadi';
   }
 }
-function renderAnalysis(d){const s=d.setup||{},ta=d.technical||{};$('signalMain').textContent=d.direction||'WAIT';$('signalMain').className='signal-main '+((d.direction||'WAIT').toLowerCase()==='buy'?'buy':(d.direction||'').toLowerCase()==='sell'?'sell':'wait');$('signalReason').textContent=d.headline||s.reason||'—';$('entry').textContent=fmt(s.entry);$('sl').textContent=fmt(s.stop_loss);$('tp1').textContent=fmt((s.take_profit||[])[0]);$('tp2').textContent=fmt((s.take_profit||[])[1]);$('bias').textContent=d.levels?.bias||s.pivot_filter||'—';$('pivotFilter').textContent=d.levels?.bias||'—';const p=d.levels||{};$('levels').innerHTML=[['R3',p.r3,'res'],['R2',p.r2,'res'],['R1',p.r1,'res'],['Pivot',p.pivot,'piv'],['S1',p.s1,'sup'],['S2',p.s2,'sup'],['S3',p.s3,'sup']].map(x=>`<div class="row"><span>${x[0]}</span><b class="${x[2]}">${fmt(x[1])}</b></div>`).join('');$('rsi').textContent=fmt(ta.rsi);$('atr').textContent=fmt(ta.atr);$('rsiState').textContent=ta.rsi_state||'—';$('taTrend').textContent=ta.trend||'—';$('taState').textContent=d.interval?.toUpperCase()||interval;$('taSummary').textContent=ta.summary||'—';const ai=d.ai||{};$('aiMode').textContent=ai.mode||'—';$('aiSummary').textContent=ai.summary||'—';$('confidence').textContent=ai.confidence!=null?ai.confidence+'%':'—';$('aiBias').textContent=ai.bias||'—';$('aiAdvice').textContent=ai.advice||'—';}
+function renderAnalysis(d){const s=d.setup||{},ta=d.technical||{};$('signalMain').textContent=d.direction||'WAIT';$('signalMain').className='signal-main '+((d.direction||'WAIT').toLowerCase()==='buy'?'buy':(d.direction||'').toLowerCase()==='sell'?'sell':'wait');$('signalReason').textContent=d.headline||s.reason||'—';$('entry').textContent=fmt(s.entry);$('sl').textContent=fmt(s.stop_loss);$('tp1').textContent=fmt((s.take_profit||[])[0]);$('tp2').textContent=fmt((s.take_profit||[])[1]);$('bias').textContent=d.levels?.bias||s.pivot_filter||'—';$('pivotFilter').textContent=(d.zones?.ai?.bias||d.levels?.bias||'NEUTRAL')+' · AI';$('rsi').textContent=fmt(ta.rsi);$('atr').textContent=fmt(ta.atr);$('rsiState').textContent=ta.rsi_state||'—';$('taTrend').textContent=ta.trend||'—';$('taState').textContent=d.interval?.toUpperCase()||interval;$('taSummary').textContent=ta.summary||'—';const ai=d.ai||{};$('aiMode').textContent=ai.mode||'—';$('aiSummary').textContent=ai.summary||'—';$('confidence').textContent=ai.confidence!=null?ai.confidence+'%':'—';$('aiBias').textContent=ai.bias||'—';$('aiAdvice').textContent=ai.advice||'—';}
 function updateCountdown(){const ts=countdownData?.close_timestamp; if(!ts)return;$('countdown').textContent=fmtDuration(Math.max(0,ts*1000-Date.now())); const close=new Date(ts*1000); $('closeTime').textContent='Close time: '+close.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});}function fmtDuration(ms){let s=Math.floor(ms/1000),h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);s%=60;return h?`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`}
 async function loadSessions(){try{const d=await api('/api/v1/sessions');const html=d.sessions.map(x=>`<div class="session ${x.open?'open':''}"><b>${x.name}</b><div class="sub">${x.local_time||''}</div><div class="status ${x.open?'up':'muted'}">${x.open?'OPEN':'CLOSED'}</div></div>`).join('');$('sessions').innerHTML=html;$('sessions2').innerHTML=html;$('sessionClock').textContent=d.utc_time||'—';$('sessionClock2').textContent=d.utc_time||'—'}catch(e){}}
 async function loadCalendar(){try{const d=await api('/api/v1/calendar?days=7');const source=d.provider?` · Source: ${d.provider}`:'';if(!d.events?.length){$('calendar').innerHTML=`<div class="mini">${d.warning||'USA/USD economic events topilmadi.'}</div>`;return}const now=Date.now();const rows=d.events.map(x=>{const dt=x.time?Date.parse(x.time):NaN;const until=Number.isFinite(dt)?(dt-now):null;const when=until!=null?(until>0?` · T−${fmtDuration(until)}`:` · ${Math.abs(until)<3600000?'LIVE/RECENT':'o‘tgan'}`):'';return `<div class="calendar-item"><div><span class="tag">${x.impact||'MEDIUM'}</span> · ${x.country||'USD'} · ${x.time||''}${when}</div><b>${x.event||'Economic event'}</b><div class="mini">Kutilmoqda: ${x.forecast??x.estimate??'—'} · Oldingi: ${x.previous??'—'} · Actual: ${x.actual??'—'} ${x.unit||''}</div><div class="mini">Source: ${x.source||d.provider||'—'}</div></div>`}).join('');$('calendar').innerHTML=`<div class="mini" style="margin-bottom:8px">USA / USD · ALL IMPACT${source} · ${d.events.length} event</div>`+rows}catch(e){$('calendar').innerHTML=`<div class="mini">Calendar ma’lumoti hozircha mavjud emas: ${e.message}</div>`}}

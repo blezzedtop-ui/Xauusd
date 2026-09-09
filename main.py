@@ -1041,7 +1041,7 @@ async def multi_timeframe(symbol: str) -> dict[str, Any]:
             candles_data, mode, warning = await get_candles(key, tf, 80)
             if len(candles_data) < 2:
                 raise MarketDataError("Not enough candles")
-            return tf, {**timeframe_trend(candles_data), "mode": mode, "warning": warning}
+            return tf, {**timeframe_trend(candles_data), "mode": mode, "warning": warning}, None
         except Exception as exc:
             return tf, None, str(exc)
 
@@ -1343,6 +1343,108 @@ async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict
     levels["warning"] = warning
     return levels, warning
 
+
+def _cluster_price_points(points: list[tuple[float, str]], tolerance: float) -> list[dict[str, Any]]:
+    """Cluster real swing prices into objective price zones."""
+    if not points:
+        return []
+    pts=sorted(points, key=lambda x:x[0])
+    clusters=[]
+    for price, kind in pts:
+        if not clusters or abs(price-clusters[-1]["center"]) > tolerance:
+            clusters.append({"prices":[price],"kinds":[kind],"center":price})
+        else:
+            clusters[-1]["prices"].append(price)
+            clusters[-1]["kinds"].append(kind)
+            clusters[-1]["center"]=sum(clusters[-1]["prices"])/len(clusters[-1]["prices"])
+    return clusters
+
+
+def build_ai_zone_candidates(candles: list[dict[str, Any]], levels: dict[str, Any], setup: dict[str, Any], ta: dict[str, Any]) -> dict[str, Any]:
+    """Build support/resistance zones strictly from the supplied real OHLC candles.
+    AI is used later to rank/name these candidates; it is never allowed to invent prices.
+    """
+    if len(candles) < 12:
+        raise MarketDataError("AI zones uchun yetarli real candle mavjud emas")
+    current=float(candles[-1]["close"])
+    a=max(float(ta.get("atr") or atr(candles)), 0.01)
+    highs,lows=_swing_points(candles[-120:], left=2, right=2)
+    offset=len(candles)-min(120,len(candles))
+    high_points=[(float(candles[i+offset]["high"]),"swing_high") for i,_ in highs]
+    low_points=[(float(candles[i+offset]["low"]),"swing_low") for i,_ in lows]
+    # Previous completed candle and classic pivot levels are candidates only; the zone engine
+    # still clusters them with actual swing/rejection prices instead of displaying raw pivots.
+    prev=candles[-2]
+    high_points += [(float(prev["high"]),"previous_high"),(float(levels["r1"]),"pivot_r1"),(float(levels["r2"]),"pivot_r2")]
+    low_points += [(float(prev["low"]),"previous_low"),(float(levels["s1"]),"pivot_s1"),(float(levels["s2"]),"pivot_s2")]
+    tol=max(a*0.35, current*0.00035)
+    def make_zones(points, side):
+        zones=[]
+        for c in _cluster_price_points(points,tol):
+            center=float(c["center"])
+            if side=="support" and center>=current+a*0.15: continue
+            if side=="resistance" and center<=current-a*0.15: continue
+            strength=min(100,35+len(c["prices"])*15+sum(1 for k in c["kinds"] if "swing" in k)*8)
+            half=max(a*0.18, (max(c["prices"])-min(c["prices"]))/2 + a*0.05)
+            zones.append({"min":round(center-half,2),"max":round(center+half,2),"center":round(center,2),"strength":int(strength),"evidence":sorted(set(c["kinds"]))})
+        zones.sort(key=lambda z:(abs(z["center"]-current),-z["strength"]))
+        return zones[:4]
+    support=make_zones(low_points,"support")
+    resistance=make_zones(high_points,"resistance")
+    # Add a demand/supply candidate from the latest confirmed rejection if available.
+    last=candles[-1]; body=abs(float(last["close"])-float(last["open"]))
+    lower_wick=min(float(last["open"]),float(last["close"]))-float(last["low"])
+    upper_wick=float(last["high"])-max(float(last["open"]),float(last["close"]))
+    rejection=None
+    if lower_wick > max(body*1.25,a*0.12):
+        rejection={"type":"DEMAND_REJECTION","min":round(float(last["low"]),2),"max":round(min(float(last["open"]),float(last["close"]))+a*0.10,2),"center":round((float(last["low"])+min(float(last["open"]),float(last["close"])))/2,2),"strength":70,"evidence":["latest_lower_wick_rejection"]}
+    elif upper_wick > max(body*1.25,a*0.12):
+        rejection={"type":"SUPPLY_REJECTION","min":round(max(float(last["open"]),float(last["close"]))-a*0.10,2),"max":round(float(last["high"]),2),"center":round((float(last["high"])+max(float(last["open"]),float(last["close"])))/2,2),"strength":70,"evidence":["latest_upper_wick_rejection"]}
+    return {"current_price":round(current,4),"atr":round(a,4),"support_zones":support,"resistance_zones":resistance,"latest_rejection":rejection,"pivot_reference":{"pivot":levels["pivot"],"r1":levels["r1"],"r2":levels["r2"],"s1":levels["s1"],"s2":levels["s2"]}}
+
+
+async def ai_zone_analysis(zone_context: dict[str, Any]) -> dict[str, Any]:
+    """AI may rank/classify objective zones but must reference existing zone IDs only."""
+    cache_key="ZONE:"+json.dumps(zone_context,sort_keys=True,default=str)
+    now=datetime.now(timezone.utc).timestamp()
+    cached=AI_CACHE.get(cache_key)
+    if cached and now-cached[0] < AI_CACHE_TTL:
+        return cached[1]
+    supports=zone_context.get("support_zones",[]); resistances=zone_context.get("resistance_zones",[])
+    fallback={"mode":"rule_based","bias":"NEUTRAL","primary_support_id":0 if supports else None,"primary_resistance_id":0 if resistances else None,"entry_zone_id":None,"invalidation_zone_id":None,"target_zone_ids":[],"reasoning":["Zones are derived from real OHLC swing/rejection clusters."]}
+    if supports and resistances:
+        cur=float(zone_context["current_price"])
+        near_s=min(range(len(supports)),key=lambda i:abs(supports[i]["center"]-cur))
+        near_r=min(range(len(resistances)),key=lambda i:abs(resistances[i]["center"]-cur))
+        if cur>float(zone_context.get("pivot_reference",{}).get("pivot",cur)):
+            fallback.update(bias="BULLISH",primary_support_id=near_s,primary_resistance_id=near_r,target_zone_ids=[near_r])
+        else:
+            fallback.update(bias="BEARISH",primary_support_id=near_s,primary_resistance_id=near_r,target_zone_ids=[near_s])
+    if not OPENAI_API_KEY:
+        AI_CACHE[cache_key]=(now,fallback); return fallback
+    prompt=("You are an institutional XAU/USD zone analyst. Use ONLY the supplied objective zones from real OHLC data. "
+            "Do not invent, alter, or calculate any price. Return JSON only with keys: bias, primary_support_id, "
+            "primary_resistance_id, entry_zone_id, invalidation_zone_id, target_zone_ids, reasoning. IDs are zero-based "
+            "indexes into support_zones/resistance_zones; entry/invalidation can be null. Reasoning max 4 short items. "
+            "If evidence conflicts, choose NEUTRAL. This is technical alignment, not profit probability.\n\n"+json.dumps(zone_context,ensure_ascii=False))
+    try:
+        from openai import AsyncOpenAI
+        client=AsyncOpenAI(api_key=OPENAI_API_KEY)
+        response=await client.responses.create(model=OPENAI_MODEL,input=prompt)
+        text=getattr(response,"output_text","").strip()
+        parsed=json.loads(text) if text else {}
+        # Validate every referenced index so AI cannot create an arbitrary price zone.
+        for key,maxlen in [("primary_support_id",len(supports)),("primary_resistance_id",len(resistances)),("entry_zone_id",len(supports)+len(resistances)),("invalidation_zone_id",len(supports)+len(resistances))]:
+            v=parsed.get(key)
+            if v is not None and (not isinstance(v,int) or v<0 or v>=maxlen): parsed[key]=None
+        ids=parsed.get("target_zone_ids",[])
+        parsed["target_zone_ids"]=[i for i in ids if isinstance(i,int) and 0<=i<max(len(supports),len(resistances))][:3]
+        result={**fallback,**parsed,"mode":"openai"}
+        AI_CACHE[cache_key]=(now,result); return result
+    except Exception as exc:
+        fallback["warning"]=f"AI zone ranking unavailable: {exc}"
+        AI_CACHE[cache_key]=(now,fallback); return fallback
+
 async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
     cache_key = json.dumps(analysis_context, sort_keys=True, default=str)
     now = datetime.now(timezone.utc).timestamp()
@@ -1609,6 +1711,9 @@ async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
     blocked, news_reason = news_blackout(calendar.get("events", []))
     setup = build_key_level_signal(candles_data, levels, news_blocked=blocked)
     ta = technical_analysis(candles_data, levels, setup)
+    zone_candidates = build_ai_zone_candidates(candles_data, levels, setup, ta)
+    zone_ai = await ai_zone_analysis(zone_candidates)
+    zone_context = {**zone_candidates, "ai": zone_ai, "timeframe": interval, "signal": setup.get("signal"), "trend": ta.get("trend")}
 
     # Prefer RealMarketAPI Intelligence when the user's plan exposes it.
     confluence = await fetch_rm_confluence(symbol, interval)
@@ -1642,7 +1747,7 @@ async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
         "direction": setup["signal"], "bias": levels["bias"], "preference": setup["reason"],
         "setup": setup, "mode": mode, "warning": combined_warning or None,
         "interval": interval, "updated_at": datetime.now(timezone.utc).isoformat(),
-        "levels": levels, "technical": ta, "multi_timeframe": mtf,
+        "levels": levels, "technical": ta, "zones": zone_context, "multi_timeframe": mtf,
         "ai_smart": ai, "calendar": calendar, "candle": candle_countdown(interval),
         "provider_confluence": confluence, "provider_trend": rm_trend,
     }
@@ -1965,14 +2070,15 @@ async def get_symbol_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVA
 async def get_pivots(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
     selected = validate_interval(interval)
     try:
-        levels, warning = await calculate_pivot_for_interval(clean_symbol(symbol), selected)
-        return {"symbol": clean_symbol(symbol), "selected": selected,
-                "timeframes": {selected: levels}, "errors": {},
-                "generated_at": datetime.now(timezone.utc).isoformat()}
+        candles_data, mode, warning = await get_candles(clean_symbol(symbol), selected, 160)
+        levels, pivot_warning = await calculate_pivot_for_interval(clean_symbol(symbol), selected)
+        setup = build_key_level_signal(candles_data, levels)
+        ta = technical_analysis(candles_data, levels, setup)
+        zones = build_ai_zone_candidates(candles_data, levels, setup, ta)
+        ai = await ai_zone_analysis({**zones, "timeframe": selected, "signal": setup.get("signal"), "trend": ta.get("trend")})
+        return {"ok":True,"symbol":clean_symbol(symbol),"selected":selected,"mode":mode,"zones":{**zones,"ai":ai},"legacy_pivot":levels,"warning":" | ".join(x for x in (warning,pivot_warning) if x) or None,"generated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as exc:
-        return {"symbol": clean_symbol(symbol), "selected": selected,
-                "timeframes": {}, "errors": {selected: str(exc)},
-                "generated_at": datetime.now(timezone.utc).isoformat()}
+        return {"ok":False,"symbol":clean_symbol(symbol),"selected":selected,"zones":{},"errors":{selected:str(exc)},"generated_at":datetime.now(timezone.utc).isoformat()}
 
 @app.get("/api/v1/ai-smart-analysis/{symbol:path}")
 async def get_ai_smart_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
