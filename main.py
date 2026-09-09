@@ -1,309 +1,315 @@
 
 from __future__ import annotations
-import os, time, json
+
+import os
+import time
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any
 
 import pandas as pd
-import numpy as np
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from openai import OpenAI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from openai import OpenAI
-import websockets
 
-from price_action_10_strategies import Config, analyze as secondary_analyze, latest_signal as secondary_latest
+from price_action_10_strategies import Config, analyze, latest_signal
 
 load_dotenv()
-REALMARKET_API_KEY = os.getenv("REALMARKET_API_KEY","").strip()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY","").strip()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL","gpt-5.6-luna").strip()
-BASE="https://api.realmarketapi.com"
-WS_BASE="wss://api.realmarketapi.com/price"
 
-app=FastAPI(title="XAUUSD AI Multi-Engine Analyzer")
-app.add_middleware(CORSMiddleware,allow_origins=["*"],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])
-openai = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
-_ai_cache={"at":0.0,"data":None}
+API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
+SYMBOL = os.getenv("SYMBOL", "XAU/USD").strip()
+INTERVAL = os.getenv("INTERVAL", "30min").strip()
+OUTPUTSIZE = int(os.getenv("OUTPUTSIZE", "300"))
+POLL_SECONDS = int(os.getenv("POLL_SECONDS", "15"))
+AI_CACHE_SECONDS = int(os.getenv("AI_CACHE_SECONDS", "45"))
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.4").strip()
 
-TF_MAP={"M1":"M1","M5":"M5","M15":"M15","M30":"M30","H1":"H1","H4":"H4","D1":"D1"}
 
-def api_get(path:str, params:dict):
-    if not REALMARKET_API_KEY: raise RuntimeError("REALMARKET_API_KEY is not configured on Railway.")
-    q={"apiKey":REALMARKET_API_KEY, **params}
-    r=requests.get(BASE+path,params=q,timeout=20)
-    text=r.text
-    try: payload=r.json()
-    except: payload={"raw":text}
-    if not r.ok: raise RuntimeError(f"RealMarketAPI {r.status_code}: {payload}")
-    return payload
+BASE = "https://api.twelvedata.com"
 
-def unwrap(payload):
-    if isinstance(payload,list): return payload
-    for k in ["data","Data","items","Items","candles","Candles","results","Results","values"]:
-        if isinstance(payload.get(k),list): return payload[k]
+app = FastAPI(title="XAUUSD Price Action AI")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+def fetch_candles() -> pd.DataFrame:
+    if not API_KEY or API_KEY == "YOUR_API_KEY_HERE":
+        raise RuntimeError("TWELVE_DATA_API_KEY is not configured.")
+
+    params = {
+        "symbol": SYMBOL,
+        "interval": INTERVAL,
+        "outputsize": OUTPUTSIZE,
+        "apikey": API_KEY,
+        "timezone": "UTC",
+        "order": "ASC",
+    }
+    r = requests.get(f"{BASE}/time_series", params=params, timeout=20)
+    r.raise_for_status()
+    payload = r.json()
+
+    if payload.get("status") == "error":
+        raise RuntimeError(payload.get("message", "Market-data API error."))
+
+    values = payload.get("values", [])
+    if not values:
+        raise RuntimeError("No candle data returned.")
+
+    df = pd.DataFrame(values)
+    df["datetime"] = pd.to_datetime(df["datetime"], utc=True, errors="coerce")
+    for c in ["open", "high", "low", "close"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df.dropna(subset=["datetime", "open", "high", "low", "close"])
+    df = df.sort_values("datetime").set_index("datetime")
+    return df
+
+
+def json_records(df: pd.DataFrame) -> list[dict[str, Any]]:
+    rows = []
+    for ts, row in df.iterrows():
+        rows.append(
+            {
+                "time": int(ts.timestamp()),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+            }
+        )
+    return rows
+
+
+_ai_cache = {"at": 0.0, "data": None}
+
+
+def _build_ai_snapshot(df: pd.DataFrame, analysis_df: pd.DataFrame) -> dict:
+    tail = df.tail(40).copy()
+    rows = []
+    for ts, r in tail.iterrows():
+        rows.append({
+            "time": str(ts),
+            "open": round(float(r["open"]), 3),
+            "high": round(float(r["high"]), 3),
+            "low": round(float(r["low"]), 3),
+            "close": round(float(r["close"]), 3),
+        })
+
+    a = analysis_df.iloc[-1]
+    return {
+        "symbol": SYMBOL,
+        "timeframe": INTERVAL,
+        "last_price": round(float(df["close"].iloc[-1]), 3),
+        "atr14": None if pd.isna(a["atr"]) else round(float(a["atr"]), 4),
+        "rule_engine_signal": a["signal"],
+        "rule_engine_strategy": a["strategy"],
+        "rule_engine_entry": None if pd.isna(a["entry"]) else round(float(a["entry"]), 3),
+        "rule_engine_sl": None if pd.isna(a["sl"]) else round(float(a["sl"]), 3),
+        "rule_engine_tp": None if pd.isna(a["tp"]) else round(float(a["tp"]), 3),
+        "rule_engine_rr": None if pd.isna(a["rr"]) else round(float(a["rr"]), 2),
+        "candles": rows,
+    }
+
+
+def _generate_openai_analysis_uncached(snapshot: dict) -> dict:
+    if not OPENAI_API_KEY:
+        return {
+            "available": False,
+            "error": "OPENAI_API_KEY is not configured.",
+        }
+
+    client = OpenAI(api_key=OPENAI_API_KEY)
+
+    system = """You are a disciplined XAUUSD M30 technical-analysis assistant.
+Use ONLY the supplied OHLC snapshot and rule-engine result. Do not invent prices,
+candles, indicators, news, order flow, or fundamentals that are not supplied.
+The 10 strategy rule engine is the primary signal source. Your role is to:
+1) validate/criticize the rule-engine setup using the supplied candles,
+2) describe trend/market structure visible in those candles,
+3) identify support/resistance zones that can be inferred from the supplied OHLC,
+4) provide a confidence score from 0 to 100,
+5) produce a final recommendation of BUY, SELL, or NO TRADE.
+When the evidence is insufficient or conflicting, choose NO TRADE.
+Do not claim certainty or guaranteed profit.
+
+Return strict JSON with these keys:
+final_signal, confidence, market_bias, structure, support_zones, resistance_zones,
+entry, stop_loss, take_profit, rr, strategy_alignment, reasons, risks.
+
+support_zones and resistance_zones are arrays of objects:
+{"low": number, "high": number, "reason": string}
+reasons and risks are arrays of short strings.
+Numbers must be numeric or null.
+"""
+
+    user = f"""Analyze this live XAUUSD M30 snapshot:
+
+{snapshot}
+
+Important:
+- The supplied rule_engine_* fields come from the deterministic 10-strategy engine.
+- Do not override a valid rule-engine signal without explaining the conflict.
+- Prefer NO TRADE when there is no clean confirmation.
+"""
+
+    try:
+        resp = client.responses.create(
+            model=OPENAI_MODEL,
+            input=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        )
+        text = resp.output_text.strip()
+        import json
+        data = json.loads(text)
+        data["available"] = True
+        return data
+    except Exception as e:
+        return {
+            "available": False,
+            "error": str(e),
+        }
+
+
+def generate_openai_analysis(snapshot: dict) -> dict:
+    import time
+    now = time.time()
+    cached = _ai_cache.get("data")
+    if cached is not None and now - float(_ai_cache.get("at", 0.0)) < AI_CACHE_SECONDS:
+        return cached
+    data = _generate_openai_analysis_uncached(snapshot)
+    if data.get("available"):
+        _ai_cache["at"] = now
+        _ai_cache["data"] = data
+    return data
+
+
+
+@app.get("/api/health")
+def health():
+    return {
+        "ok": True,
+        "symbol": SYMBOL,
+        "interval": INTERVAL,
+        "provider": "Twelve Data",
+        "server_time": datetime.now(timezone.utc).isoformat(),
+        "poll_seconds": POLL_SECONDS,
+        "market_key_configured": bool(API_KEY and API_KEY != "YOUR_API_KEY_HERE"),
+        "openai_key_configured": bool(OPENAI_API_KEY and OPENAI_API_KEY != "YOUR_OPENAI_API_KEY_HERE"),
+    }
+
+
+@app.get("/api/market")
+def market():
+    try:
+        df = fetch_candles()
+        cfg = Config()
+        analysis_df = analyze(df, cfg)
+        latest = latest_signal(df, cfg)
+
+        latest_row = analysis_df.iloc[-1]
+        signal_age = str(df.index[-1])
+
+        return {
+            "symbol": SYMBOL,
+            "interval": INTERVAL,
+            "provider": "Twelve Data",
+            "last_candle_time": signal_age,
+            "candles": json_records(df),
+            "signal": latest,
+            "history": [
+                {
+                    "time": int(ts.timestamp()),
+                    "signal": row["signal"],
+                    "entry": None if pd.isna(row["entry"]) else float(row["entry"]),
+                    "sl": None if pd.isna(row["sl"]) else float(row["sl"]),
+                    "tp": None if pd.isna(row["tp"]) else float(row["tp"]),
+                    "rr": None if pd.isna(row["rr"]) else float(row["rr"]),
+                    "strategy": row["strategy"],
+                }
+                for ts, row in analysis_df.tail(30).iterrows()
+                if row["signal"] != "NO TRADE"
+            ],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/api/ai-analysis")
+def ai_analysis():
+    try:
+        df = fetch_candles()
+        cfg = Config()
+        analysis_df = analyze(df, cfg)
+        snapshot = _build_ai_snapshot(df, analysis_df)
+        ai = generate_openai_analysis(snapshot)
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "provider": "OpenAI",
+            "model": OPENAI_MODEL,
+            "ai": ai,
+            "rule_engine": snapshot,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+app.mount("/", StaticFiles(directory="../frontend", html=True), name="frontend")
+
+# --- Advanced analysis add-on: does not replace the existing /api/market flow. ---
+from advanced_analysis import analyze_advanced
+
+REALMARKET_API_KEY_ADV = os.getenv("REALMARKET_API_KEY", "").strip()
+REALMARKET_BASE_ADV = "https://api.realmarketapi.com"
+
+def _advanced_rm_get(path: str, params: dict):
+    if not REALMARKET_API_KEY_ADV:
+        return None
+    q = {"apiKey": REALMARKET_API_KEY_ADV, **params}
+    r = requests.get(REALMARKET_BASE_ADV + path, params=q, timeout=20)
+    r.raise_for_status()
+    return r.json()
+
+def _advanced_unwrap(payload):
+    if isinstance(payload, list): return payload
+    for k in ("data","Data","items","Items","candles","Candles","results","Results","values"):
+        if isinstance(payload, dict) and isinstance(payload.get(k), list): return payload[k]
     return []
 
-def norm(c):
+def _advanced_norm(c):
     t=c.get("openTime",c.get("OpenTime",c.get("time",c.get("timestamp",c.get("Timestamp")))))
     o=c.get("openPrice",c.get("OpenPrice",c.get("open",c.get("Open"))))
     h=c.get("highPrice",c.get("HighPrice",c.get("high",c.get("High"))))
     l=c.get("lowPrice",c.get("LowPrice",c.get("low",c.get("Low"))))
     cl=c.get("closePrice",c.get("ClosePrice",c.get("close",c.get("Close"))))
-    v=c.get("volume",c.get("Volume",0))
     if isinstance(t,(int,float)): ts=t/1000 if t>1e12 else t
     else: ts=pd.Timestamp(t).timestamp()
-    return {"time":int(ts),"open":float(o),"high":float(h),"low":float(l),"close":float(cl),"volume":float(v or 0)}
+    return {"time":int(ts),"open":float(o),"high":float(h),"low":float(l),"close":float(cl)}
 
-def get_candles(symbol="XAUUSD",tf="M5"):
-    payload=api_get("/api/v1/candle",{"symbolCode":symbol,"timeFrame":tf})
-    arr=[norm(x) for x in unwrap(payload)]
-    arr=[x for x in arr if all(np.isfinite(x[k]) for k in ["time","open","high","low","close"])]
-    if len(arr)<60:
-        hours={"M1":6,"M5":24,"M15":72,"M30":144,"H1":300,"H4":720,"D1":3650}.get(tf,72)
-        end=datetime.now(timezone.utc); start=end-pd.Timedelta(hours=hours)
-        try:
-            hp=api_get("/api/v1/history",{"symbolCode":symbol,"timeFrame":tf,"startTime":start.isoformat(),"endTime":end.isoformat(),"pageNumber":"1","pageSize":"300"})
-            h=[norm(x) for x in unwrap(hp)]
-            if h: arr=h
-        except Exception: pass
-    ded={x["time"]:x for x in arr}
-    return sorted(ded.values(),key=lambda x:x["time"])[-300:]
+def _advanced_candles(timeframe: str):
+    if REALMARKET_API_KEY_ADV:
+        payload=_advanced_rm_get("/api/v1/candle",{"symbolCode":"XAUUSD","timeFrame":timeframe})
+        arr=[_advanced_norm(x) for x in _advanced_unwrap(payload)]
+        return sorted({x["time"]:x for x in arr}.values(), key=lambda x:x["time"])[-300:]
+    # Preserve the original working site's Twelve Data source when RealMarketAPI is not configured.
+    return [
+        {"time":int(ts.timestamp()),"open":float(r["open"]),"high":float(r["high"]),"low":float(r["low"]),"close":float(r["close"])}
+        for ts,r in fetch_candles().iterrows()
+    ][-300:]
 
-def candles_df(cs):
-    return pd.DataFrame(cs,index=pd.to_datetime([x["time"] for x in cs],unit="s",utc=True))[["open","high","low","close"]]
-
-def pct(a,b):
-    return abs(a-b)/max((a+b)/2,1e-12)
-
-def local_extrema(cs,look=2):
-    highs=[]; lows=[]
-    for i in range(look,len(cs)-look):
-        hi=all(cs[i]["high"]>=cs[i-j]["high"] and cs[i]["high"]>=cs[i+j]["high"] for j in range(1,look+1))
-        lo=all(cs[i]["low"]<=cs[i-j]["low"] and cs[i]["low"]<=cs[i+j]["low"] for j in range(1,look+1))
-        if hi: highs.append((i,cs[i]["high"]))
-        if lo: lows.append((i,cs[i]["low"]))
-    return highs,lows
-
-def atr(cs,p=14):
-    if len(cs)<=p: return 0.0
-    tr=[]
-    for i in range(1,len(cs)):
-        tr.append(max(cs[i]["high"]-cs[i]["low"],abs(cs[i]["high"]-cs[i-1]["close"]),abs(cs[i]["low"]-cs[i-1]["close"])))
-    return float(np.mean(tr[-p:]))
-
-def trend(cs):
-    if len(cs)<20: return "NEUTRAL"
-    a=np.mean([x["close"] for x in cs[-20:]]); b=np.mean([x["close"] for x in cs[-8:]])
-    if b>a*1.001: return "BULLISH"
-    if b<a*0.999: return "BEARISH"
-    return "NEUTRAL"
-
-def pivots(c):
-    p=(c["high"]+c["low"]+c["close"])/3
-    return {"pivot":p,"r1":2*p-c["low"],"r2":p+(c["high"]-c["low"]),"r3":c["high"]+2*(p-c["low"]),
-            "s1":2*p-c["high"],"s2":p-(c["high"]-c["low"]),"s3":c["low"]-2*(c["high"]-p)}
-
-# ---- SIMPLE TRADING Book v1 engine ----
-def book_patterns(cs):
-    out=[]; highs,lows=local_extrema(cs,2); price=cs[-1]["close"]
-    h=highs[-6:]; l=lows[-6:]
-    def add(name,direction,entry,sl,tp,confidence,why):
-        if all(np.isfinite(v) for v in [entry,sl,tp]) and abs(entry-sl)>0:
-            out.append({"name":name,"direction":direction,"entry":entry,"sl":sl,"tp":tp,"confidence":confidence,"why":why})
-    if len(h)>=2:
-        a,b=h[-2],h[-1]
-        mids=[x for x in l if a[0]<x[0]<b[0]]
-        if mids and pct(a[1],b[1])<=.02:
-            n=mids[-1][1]
-            if price<n:
-                height=max(a[1],b[1])-n
-                add("Double Top","SELL",price,max(a[1],b[1]),n-height,88,f"Two highs within 2%; neckline {n:.2f} broken.")
-        if len(h)>=3:
-            A,B,C=h[-3],h[-2],h[-1]
-            if B[1]>A[1] and B[1]>C[1] and pct(A[1],C[1])<=.03:
-                ls=[x for x in l if A[0]<x[0]<B[0]]; rs=[x for x in l if B[0]<x[0]<C[0]]
-                if ls and rs:
-                    n=(ls[-1][1]+rs[-1][1])/2
-                    if price<n:
-                        ht=B[1]-n
-                        add("Head & Shoulders","SELL",price,max(C[1],rs[-1][1]),n-ht,92,"Head above both shoulders; neckline broken.")
-    if len(l)>=2:
-        a,b=l[-2],l[-1]
-        mids=[x for x in h if a[0]<x[0]<b[0]]
-        if mids and pct(a[1],b[1])<=.02:
-            n=mids[-1][1]
-            if price>n:
-                height=n-min(a[1],b[1])
-                add("Double Bottom","BUY",price,min(a[1],b[1]),n+height,88,f"Two lows within 2%; neckline {n:.2f} broken.")
-        if len(l)>=3:
-            A,B,C=l[-3],l[-2],l[-1]
-            if B[1]<A[1] and B[1]<C[1] and pct(A[1],C[1])<=.03:
-                ls=[x for x in h if A[0]<x[0]<B[0]]; rs=[x for x in h if B[0]<x[0]<C[0]]
-                if ls and rs:
-                    n=(ls[-1][1]+rs[-1][1])/2
-                    if price>n:
-                        ht=n-B[1]
-                        add("Inverse Head & Shoulders","BUY",price,min(C[1],rs[-1][1]),n+ht,92,"Head below both shoulders; neckline broken.")
-    if len(h)>=2 and len(l)>=2:
-        H1,H2=h[-2],h[-1]; L1,L2=l[-2],l[-1]
-        if pct(H1[1],H2[1])<=.02 and L2[1]>L1[1] and price>H2[1]:
-            height=H2[1]-min(L1[1],L2[1]); add("Ascending Triangle","BUY",price,min(L1[1],L2[1]),price+height,84,"Flat resistance, rising lows, upside breakout.")
-        if pct(L1[1],L2[1])<=.02 and H2[1]<H1[1] and price<L2[1]:
-            height=max(H1[1],H2[1])-L2[1]; add("Descending Triangle","SELL",price,max(H1[1],H2[1]),price-height,84,"Flat support, falling highs, downside breakout.")
-    xs=cs[-25:]; early=cs[-25:-12]; late=cs[-12:]
-    if len(early)>=2 and len(late)>=2:
-        eh=max(x["high"] for x in early); el=min(x["low"] for x in early)
-        lh=max(x["high"] for x in late); ll=min(x["low"] for x in late)
-        if lh<eh and ll>el and price>lh: add("Symmetrical Triangle","BUY",price,el,price+(eh-el),78,"Converging range with upside breakout.")
-        if lh<eh and ll>el and price<ll: add("Symmetrical Triangle","SELL",price,eh,price-(eh-el),78,"Converging range with downside breakout.")
-        impulse_start=cs[max(0,len(cs)-20)]["close"]; last_close=cs[-1]["close"]; pole=(last_close-impulse_start)/max(abs(impulse_start),1e-9)
-        if pole>.012 and ll>el and price>lh: add("Bullish Flag","BUY",price,el,price+(last_close-impulse_start),82,"Bullish pole + tight consolidation + upside break.")
-        if pole<-.012 and lh<eh and price<ll: add("Bearish Flag","SELL",price,eh,price-(abs(last_close-impulse_start)),82,"Bearish pole + consolidation + downside break.")
-        us=(lh-eh)/11; ls=(ll-el)/11
-        rh=max(x["high"] for x in xs); rl=min(x["low"] for x in xs)
-        if us<0 and ls<0 and price>lh: add("Falling Wedge","BUY",price,rl,price+(rh-rl),80,"Downward wedge boundaries + upper break.")
-        if us>0 and ls>0 and price<ll: add("Rising Wedge","SELL",price,rh,price-(rh-rl),80,"Upward wedge boundaries + lower break.")
-    return sorted(out,key=lambda x:x["confidence"],reverse=True)
-
-def book_analysis(cs,symbol,tf):
-    current=cs[-1]; pp=pivots(cs[-2]); pats=book_patterns(cs); best=pats[0] if pats else None
-    return {"symbolCode":symbol,"timeFrame":tf,"price":current["close"],"trend":trend(cs),"atr":atr(cs),"pivot":pp,
-            "range":{"high":max(x["high"] for x in cs[-40:]),"low":min(x["low"] for x in cs[-40:])},
-            "patterns":pats,"signal":best["direction"] if best else "WAIT","bestPattern":best["name"] if best else "No qualifying book pattern",
-            "entry":best["entry"] if best else current["close"],"sl":best["sl"] if best else None,"tp":best["tp"] if best else None,
-            "rr":(abs(best["tp"]-best["entry"])/abs(best["entry"]-best["sl"])) if best and abs(best["entry"]-best["sl"]) else None,
-            "source":"SIMPLE TRADING Book v1 pattern logic"}
-
-BOOK_NAMES=["Double Top","Double Bottom","Head & Shoulders","Inverse Head & Shoulders","Ascending Triangle","Descending Triangle","Symmetrical Triangle","Bullish Flag","Bearish Flag","Falling/Rising Wedge"]
-
-def ai_second_opinion(payload):
-    if not openai: return {"available":False,"error":"OPENAI_API_KEY is not configured."}
-    global _ai_cache
-    now=time.time()
-    if _ai_cache["data"] is not None and now-_ai_cache["at"]<30: return _ai_cache["data"]
-    system="""You are the SECOND-OPINION AI validator for a live XAUUSD system.
-PRIMARY SOURCE: SIMPLE TRADING Book v1. A SECONDARY ENGINE is supplied from another
-uploaded XAUUSD analysis website. Do not invent strategies outside the supplied engines.
-Inspect the supplied OHLC candles and BOTH deterministic engines.
-Validate pattern geometry, breakout, trend, support/resistance, pivots, entry, SL, TP and R:R.
-Return BUY, SELL or WAIT. Prefer WAIT on conflict or insufficient evidence.
-For FINAL consensus, do not choose a side that is contradicted by both deterministic engines.
-Return strict JSON with:
-signal, confidence, pattern, summary, reasons, risks, market_bias, entry, stop_loss,
-take_profit_1, take_profit_2, risk_reward, invalidation, book_signal, secondary_signal,
-consensus.
-"""
-    resp=openai.responses.create(model=OPENAI_MODEL,input=[{"role":"system","content":system},{"role":"user","content":json.dumps(payload)}])
-    text=resp.output_text.strip()
-    try: data=json.loads(text)
-    except: raise RuntimeError("OpenAI returned invalid JSON")
-    data["available"]=True; data["model"]=OPENAI_MODEL
-    _ai_cache={"at":now,"data":data}
-    return data
-
-def final_decision(book,secondary,ai):
-    b=book.get("signal","WAIT"); s=secondary.get("signal","NO TRADE"); s2="WAIT" if s in ("NO TRADE","") else s
-    a=(ai or {}).get("signal","WAIT")
-    if b!="WAIT" and b==s2==a:
-        status="CONFIRMED"; final=b
-    elif b=="WAIT" and s2!="WAIT" and s2==a:
-        status="SECONDARY_CONFIRMED"; final=s2
-    elif s2=="WAIT" and b!="WAIT" and b==a:
-        status="BOOK_CONFIRMED"; final=b
-    elif b=="WAIT" and s2=="WAIT" and a=="WAIT":
-        status="NO_SETUP"; final="WAIT"
-    else:
-        status="CONFLICT"; final="WAIT"
-    confs=[]
-    if b!="WAIT" and book.get("patterns"): confs.append(float(book["patterns"][0].get("confidence",0)))
-    if s2!="WAIT" and secondary.get("all_signals"): 
-        try: confs.append(float(max(x.get("rr",0) for x in secondary["all_signals"]))*25)
-        except: pass
-    if isinstance((ai or {}).get("confidence"),(int,float)): confs.append(float(ai["confidence"]))
-    return {"finalSignal":final,"decisionStatus":status,"bookSignal":b,"secondarySignal":s2,"openAISecondOpinion":a,
-            "finalConfidence":round(float(np.mean(confs))) if confs else 0,
-            "agreementCount":sum(x==final and final!="WAIT" for x in [b,s2,a]),
-            "allThreeAgree":final!="WAIT" and b==s2==a}
-
-
-@app.websocket("/ws/price")
-async def ws_price(websocket: WebSocket):
-    await websocket.accept()
-    symbol = websocket.query_params.get("symbolCode", "XAUUSD")
-    timeframe = websocket.query_params.get("timeFrame", "M5")
-    if not REALMARKET_API_KEY:
-        await websocket.send_json({"type":"error","error":"REALMARKET_API_KEY is not configured on Railway."})
-        await websocket.close(code=1011)
-        return
-    url = f"{WS_BASE}?apiKey={REALMARKET_API_KEY}&symbolCode={symbol}&timeFrame={timeframe}"
+@app.get("/api/advanced-analysis")
+def advanced_analysis(timeframe: str = "M30"):
     try:
-        async with websockets.connect(url, ping_interval=20, ping_timeout=20, close_timeout=5) as upstream:
-            async for message in upstream:
-                try:
-                    raw=json.loads(message)
-                    if isinstance(raw, dict):
-                        try:
-                            candle=norm(raw)
-                            await websocket.send_json({"type":"candle","candle":candle,"raw":raw})
-                        except Exception:
-                            await websocket.send_json({"type":"tick","raw":raw})
-                    else:
-                        await websocket.send_json({"type":"raw","raw":raw})
-                except Exception as exc:
-                    await websocket.send_json({"type":"error","error":str(exc)})
-    except WebSocketDisconnect:
-        return
-    except Exception as exc:
-        try: await websocket.send_json({"type":"error","error":str(exc)})
-        except Exception: pass
-        try: await websocket.close(code=1011)
-        except Exception: pass
-
-@app.get("/api/health")
-def health():
-    return {"ok":True,"provider":"RealMarketAPI","realMarketConfigured":bool(REALMARKET_API_KEY),"openAIConfigured":bool(OPENAI_API_KEY),"model":OPENAI_MODEL}
-
-@app.get("/api/candles")
-def candles(symbolCode:str="XAUUSD",timeFrame:str="M5"):
-    try:return {"symbolCode":symbolCode,"timeFrame":timeFrame,"candles":get_candles(symbolCode,timeFrame)}
-    except Exception as e: raise HTTPException(502,str(e))
-
-@app.get("/api/analyze")
-def analyze(symbolCode:str="XAUUSD",timeFrame:str="M5"):
-    try:
-        cs=get_candles(symbolCode,timeFrame)
-        if len(cs)<30: raise RuntimeError("Not enough candles")
-        book=book_analysis(cs,symbolCode,timeFrame)
-        dfd=candles_df(cs)
-        secondary=secondary_latest(dfd,Config())
-        # Normalize secondary response for JSON
-        secondary["signal"]="WAIT" if secondary.get("signal")=="NO TRADE" else secondary.get("signal","WAIT")
-        snap={
-          "symbol":symbolCode,"timeframe":timeFrame,"current_price":cs[-1]["close"],"trend":trend(cs),"atr":atr(cs),
-          "pivot":book["pivot"],"range":book["range"],
-          "book_engine":{"signal":book["signal"],"best_pattern":book["bestPattern"],"patterns":book["patterns"]},
-          "secondary_engine":{"signal":secondary["signal"],"strategy":secondary.get("strategy"),"entry":secondary.get("entry"),
-             "sl":secondary.get("sl"),"tp":secondary.get("tp"),"rr":secondary.get("rr"),"reason":secondary.get("reason"),
-             "all_signals":secondary.get("all_signals",[])},
-          "candles":cs[-120:]
-        }
-        ai=ai_second_opinion(snap) if openai else None
-        decision=final_decision(book,secondary,ai)
-        # choose levels from agreeing engine/AI, fallback book
-        level_source=ai if ai and ai.get("signal")!="WAIT" else (book if decision["bookSignal"]!="WAIT" else secondary)
-        return {"symbolCode":symbolCode,"timeFrame":timeFrame,"price":cs[-1]["close"],"trend":trend(cs),"atr":atr(cs),
-                "pivot":book["pivot"],"range":book["range"],"candles":cs,"book":book,
-                "secondary":secondary,"ai":ai,"decision":decision,"updatedAt":datetime.now(timezone.utc).isoformat(),
-                "entry":level_source.get("entry"),"sl":level_source.get("sl",level_source.get("stop_loss")),
-                "tp":level_source.get("tp",level_source.get("take_profit_1"))}
-    except Exception as e: raise HTTPException(502,str(e))
-
-@app.get("/api/price")
-def price(symbolCode:str="XAUUSD",timeFrame:str="M5"):
-    try:return api_get("/api/v1/price",{"symbolCode":symbolCode,"timeFrame":timeFrame})
-    except Exception as e: raise HTTPException(502,str(e))
-
-app.mount("/",StaticFiles(directory="../frontend",html=True),name="frontend")
+        cs=_advanced_candles(timeframe)
+        if len(cs)<40: raise RuntimeError("Not enough candles for advanced analysis.")
+        return analyze_advanced(cs,"XAUUSD",timeframe)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=str(e))

@@ -1,29 +1,196 @@
+
 <!doctype html>
-<html lang="uz"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>XAUUSD AI — Red Neon</title>
-<script src="https://unpkg.com/lightweight-charts@5.0.8/dist/lightweight-charts.standalone.production.js"></script>
-<style>
-:root{--bg:#050507;--panel:rgba(18,10,13,.70);--panel2:rgba(28,9,14,.58);--line:rgba(255,45,70,.22);--text:#f7eef0;--muted:#a68d93;--red:#ff1744;--red2:#ff003c;--red3:#ff4d6d;--green:#5dffb0;--gold:#ffd166;--shadow:0 0 28px rgba(255,0,50,.16)}
-*{box-sizing:border-box}html,body{margin:0;min-height:100%;background:#030304;color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial,sans-serif}body{overflow-x:hidden;background:radial-gradient(circle at 15% 0%,rgba(255,0,45,.13),transparent 28%),radial-gradient(circle at 90% 10%,rgba(255,25,55,.08),transparent 30%),linear-gradient(135deg,#030304,#090508 48%,#030304)}body:before{content:"";position:fixed;inset:0;pointer-events:none;background:linear-gradient(115deg,transparent 0 45%,rgba(255,255,255,.018) 50%,transparent 55%);mix-blend-mode:screen;animation:sweep 9s linear infinite}@keyframes sweep{from{transform:translateX(-20%)}to{transform:translateX(20%)}}
-.wrap{max-width:1650px;margin:auto;padding:14px}.top{display:flex;justify-content:space-between;gap:14px;align-items:center;margin-bottom:12px}.brandWrap{display:flex;align-items:center;gap:12px}.logo{width:58px;height:58px;border-radius:17px;position:relative;display:grid;place-items:center;background:linear-gradient(145deg,#3a0b13,#080508 62%);border:1px solid rgba(255,40,70,.6);box-shadow:inset 0 1px 0 rgba(255,255,255,.12),inset 0 -10px 20px rgba(255,0,40,.08),0 0 26px rgba(255,0,50,.35);transform:perspective(400px) rotateX(7deg) rotateY(-8deg);animation:logoPulse 2.7s ease-in-out infinite}.logo:before{content:"X";font-size:31px;font-weight:1000;font-style:italic;color:#fff;text-shadow:0 2px 0 #79001d,0 5px 12px #ff003c,0 0 18px #ff1744;transform:translateZ(12px)}.logo:after{content:"";position:absolute;inset:4px;border-radius:13px;border:1px solid rgba(255,255,255,.08)}@keyframes logoPulse{50%{box-shadow:inset 0 1px 0 rgba(255,255,255,.12),0 0 40px rgba(255,0,50,.55)}}.brand{font-size:23px;font-weight:1000;letter-spacing:.4px;text-shadow:0 0 18px rgba(255,0,55,.34)}.sub{font-size:10px;color:var(--muted);margin-top:4px;letter-spacing:.25px}.controls{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}.btn{border:1px solid var(--line);background:linear-gradient(180deg,rgba(38,14,19,.75),rgba(10,7,9,.75));backdrop-filter:blur(14px);color:var(--text);padding:9px 12px;border-radius:10px;cursor:pointer;transition:.2s;box-shadow:inset 0 1px rgba(255,255,255,.05)}.btn:hover{border-color:rgba(255,35,65,.65);box-shadow:0 0 18px rgba(255,0,50,.16)}.btn.active{border-color:var(--red);box-shadow:0 0 18px rgba(255,0,50,.3),inset 0 0 12px rgba(255,0,50,.08)}.btn.ai{border-color:rgba(255,23,68,.75);font-weight:800}.grid{display:grid;grid-template-columns:minmax(0,1.72fr) minmax(360px,1fr);gap:12px}.panel{background:linear-gradient(135deg,rgba(26,10,14,.76),rgba(8,7,9,.74));border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:var(--shadow),inset 0 1px rgba(255,255,255,.04);backdrop-filter:blur(20px)}.panel h3{padding:12px 14px;margin:0;border-bottom:1px solid var(--line);font-size:11px;letter-spacing:.7px;color:#f6dfe4}.chart{height:590px;position:relative}.live{position:absolute;z-index:5;top:10px;left:10px;padding:6px 9px;border:1px solid rgba(255,30,70,.45);background:rgba(12,4,7,.74);backdrop-filter:blur(10px);border-radius:9px;font-size:9px;color:#ff7b94;box-shadow:0 0 14px rgba(255,0,50,.12)}.live i{display:inline-block;width:6px;height:6px;border-radius:50%;background:#ff1744;box-shadow:0 0 10px #ff1744;margin-right:5px;animation:blink 1s infinite}@keyframes blink{50%{opacity:.25}}.timer{position:absolute;z-index:5;top:10px;right:10px;padding:6px 10px;border:1px solid rgba(255,30,70,.35);background:rgba(12,4,7,.74);backdrop-filter:blur(10px);border-radius:9px;font-size:10px;color:#fff}.timer b{color:#ff5473;font-variant-numeric:tabular-nums}.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;padding:9px}.card,.box{background:linear-gradient(135deg,rgba(12,9,11,.74),rgba(30,8,14,.42));border:1px solid rgba(255,35,65,.14);border-radius:11px;padding:9px;box-shadow:inset 0 1px rgba(255,255,255,.025)}.label{font-size:8px;color:var(--muted);text-transform:uppercase;letter-spacing:.6px}.value{font-weight:900;font-size:14px;margin-top:3px}.buy{color:var(--green);text-shadow:0 0 12px rgba(93,255,176,.2)}.sell{color:#ff5574;text-shadow:0 0 12px rgba(255,23,68,.25)}.wait{color:var(--gold)}.blue{color:#ff6b86}.content{padding:11px}.final{position:relative;border:1px solid rgba(255,30,70,.35);background:radial-gradient(circle at 100% 0%,rgba(255,0,50,.12),transparent 45%),rgba(10,5,8,.65);border-radius:15px;padding:14px;margin-bottom:10px;overflow:hidden}.final:after{content:"";position:absolute;inset:auto -30% -70% -30%;height:100%;background:radial-gradient(ellipse,rgba(255,0,50,.12),transparent 65%);animation:glow 3s ease-in-out infinite}@keyframes glow{50%{transform:translateY(-10px);opacity:.65}}.big{font-size:34px;font-weight:1000;letter-spacing:1px;position:relative;z-index:1}.grid2{display:grid;grid-template-columns:1fr 1fr;gap:9px}.row{display:flex;justify-content:space-between;gap:7px;padding:6px 0;border-bottom:1px dashed rgba(255,45,70,.12);font-size:11px}.row:last-child{border-bottom:0}.title{font-size:10px;color:#e2c8cd;margin:12px 0 7px;letter-spacing:.35px}.engine{padding:9px;border:1px solid rgba(255,35,65,.13);border-radius:11px;background:rgba(10,7,9,.55);margin-bottom:7px}.muted{color:var(--muted)}.tiny{font-size:10px;line-height:1.5;color:#c7b6ba}.tag{display:inline-block;border:1px solid rgba(255,40,70,.22);border-radius:6px;padding:3px 5px;font-size:8px;margin:2px}.status{font-size:9px;color:#bba7ac;margin:7px 0}.reason{margin-top:6px;font-size:10px;color:#d8c5ca}.footer{font-size:9px;color:#8f7b81;margin-top:10px;line-height:1.5}.micro{font-size:9px;color:#ff8096}.glass{background:linear-gradient(135deg,rgba(255,255,255,.05),rgba(255,0,55,.04));border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:8px;box-shadow:inset 0 1px rgba(255,255,255,.06)}
-@media(max-width:1050px){.grid{grid-template-columns:1fr}.stats{grid-template-columns:repeat(3,1fr)}.chart{height:500px}}@media(max-width:650px){.top{align-items:flex-start;flex-direction:column}.controls{justify-content:flex-start}.chart{height:390px}.stats{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}.brand{font-size:18px}.logo{width:48px;height:48px}.logo:before{font-size:25px}}
-</style></head><body><div class="wrap">
-<div class="top"><div class="brandWrap"><div class="logo"></div><div><div class="brand">XAUUSD AI MULTI-ENGINE</div><div class="sub">SIMPLE TRADING BOOK v1 · SECOND ENGINE · OPENAI SECOND OPINION</div></div></div><div class="controls"><button class="btn" data-tf="M1">M1</button><button class="btn active" data-tf="M5">M5</button><button class="btn" data-tf="M15">M15</button><button class="btn" data-tf="M30">M30</button><button class="btn" data-tf="H1">H1</button><button class="btn" data-tf="H4">H4</button><button class="btn" data-tf="D1">D1</button><button class="btn ai" id="refresh">⚡ AI ANALIZ</button></div></div>
-<div class="grid"><div class="panel"><h3>TRADINGVIEW-STYLE REAL XAUUSD CHART · REALMARKETAPI FEED</h3><div id="chart" class="chart"><div class="live"><i></i>LIVE REAL MARKET</div><div class="timer">NEXT CANDLE <b id="timer">--:--</b></div></div><div class="stats"><div class="card"><div class="label">Price</div><div id="price" class="value">—</div></div><div class="card"><div class="label">Trend</div><div id="trend" class="value">—</div></div><div class="card"><div class="label">ATR</div><div id="atr" class="value">—</div></div><div class="card"><div class="label">Pivot</div><div id="pivot" class="value">—</div></div><div class="card"><div class="label">R1 / S1</div><div id="r1s1" class="value">—</div></div><div class="card"><div class="label">R2 / S2</div><div id="r2s2" class="value">—</div></div></div></div>
-<div class="panel"><h3>FINAL AI ANALYSIS</h3><div class="content"><div class="status" id="status">Connecting...</div><div class="final"><div class="label">FINAL SIGNAL</div><div id="final" class="big wait">WAIT</div><div id="finalstatus" class="tiny">—</div></div>
-<div class="grid2"><div class="box"><div class="label">Book Engine</div><div id="bookSignal" class="value">—</div></div><div class="box"><div class="label">Second Engine</div><div id="secondarySignal" class="value">—</div></div><div class="box"><div class="label">OpenAI</div><div id="aiSignal" class="value">—</div></div><div class="box"><div class="label">Confidence</div><div id="confidence" class="value blue">—</div></div></div>
-<div class="title">Trade levels</div><div class="engine"><div class="row"><span>Pattern</span><b id="pattern">—</b></div><div class="row"><span>Entry</span><b id="entry">—</b></div><div class="row"><span>SL</span><b id="sl">—</b></div><div class="row"><span>TP1</span><b id="tp1">—</b></div><div class="row"><span>TP2</span><b id="tp2">—</b></div><div class="row"><span>R:R</span><b id="rr">—</b></div></div>
-<div class="title">1 · SIMPLE TRADING BOOK v1</div><div id="bookBox"></div><div class="title">2 · SECOND ANALYSIS ENGINE</div><div id="secondaryBox"></div><div class="title">3 · OPENAI SECOND OPINION</div><div id="aiBox" class="engine"><div class="tiny">—</div></div><div class="glass micro">Data flow: RealMarketAPI → real candles → Book Engine + Secondary Engine → OpenAI → Final Signal</div>
-<div class="footer">FINAL CONFIRMED faqat Book Engine + Secondary Engine + OpenAI bir xil BUY/SELL berganda. Qarama-qarshilik bo‘lsa WAIT. Bu avtomatik savdo buyrug‘i emas.</div></div></div></div>
+<html lang="uz">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>XAUUSD M30 — Price Action 10 Strategies</title>
+  <script src="https://unpkg.com/lightweight-charts@5.0.8/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family: Arial, sans-serif; background:#0b1020; color:#e9eefc; }
+    header { padding:14px 18px; border-bottom:1px solid #26304a; display:flex; justify-content:space-between; gap:14px; align-items:center; }
+    .title { font-size:20px; font-weight:700; }
+    .sub { color:#9ca8c7; font-size:12px; margin-top:3px; }
+    .live { padding:7px 10px; border:1px solid #34405f; border-radius:8px; font-size:12px; }
+    main { display:grid; grid-template-columns:minmax(0,1fr) 360px; min-height:calc(100vh - 72px); }
+    #chart { height:calc(100vh - 72px); min-height:600px; }
+    aside { border-left:1px solid #26304a; padding:16px; overflow:auto; }
+    .card { border:1px solid #293452; border-radius:12px; padding:14px; margin-bottom:12px; background:#10172b; }
+    .label { font-size:11px; color:#8d9aba; text-transform:uppercase; letter-spacing:.08em; }
+    .big { font-size:30px; font-weight:800; margin-top:8px; }
+    .row { display:flex; justify-content:space-between; margin:8px 0; font-size:14px; }
+    .buy { color:#62e39a; } .sell { color:#ff8d9f; } .muted { color:#9ca8c7; }
+    .tag { display:inline-block; padding:4px 7px; border-radius:6px; background:#1b2540; font-size:11px; margin-top:8px; }
+    .foot { color:#7d8aae; font-size:11px; line-height:1.5; }
+    @media (max-width: 900px) { main { grid-template-columns:1fr; } aside { border-left:0; border-top:1px solid #26304a; } #chart { height:60vh; min-height:450px; } }
+  </style>
+</head>
+<body>
+<header>
+  <div>
+    <div class="title">XAUUSD M30 — Price Action 10 Strategies</div>
+    <div class="sub">Railway hosted · Real XAU/USD M30 → 10 strategies → OpenAI validation → Entry / SL / TP</div>
+  </div>
+  <div class="live" id="status">Connecting…</div>
+</header>
+
+<main>
+  <div id="chart"></div>
+  <aside>
+    <div class="card">
+      <div class="label">Current Signal</div>
+      <div class="big" id="signal">NO TRADE</div>
+      <div class="tag" id="strategy">Waiting for data</div>
+    </div>
+    <div class="card">
+      <div class="row"><span class="muted">Entry</span><b id="entry">—</b></div>
+      <div class="row"><span class="muted">Stop Loss</span><b id="sl">—</b></div>
+      <div class="row"><span class="muted">Take Profit</span><b id="tp">—</b></div>
+      <div class="row"><span class="muted">R:R</span><b id="rr">—</b></div>
+      <div class="row"><span class="muted">ATR(14)</span><b id="atr">—</b></div>
+      <div class="row"><span class="muted">Last candle</span><b id="last">—</b></div>
+    </div>
+    <div class="card">
+      <div class="label">OpenAI Analysis</div>
+      <div class="row"><span class="muted">AI Signal</span><b id="aiSignal">—</b></div>
+      <div class="row"><span class="muted">Confidence</span><b id="aiConfidence">—</b></div>
+      <div class="row"><span class="muted">Bias</span><b id="aiBias">—</b></div>
+      <div style="margin-top:10px"><div class="label">Structure</div><div id="aiStructure" class="foot">Waiting for AI…</div></div>
+      <div style="margin-top:10px"><div class="label">Reasons</div><div id="aiReasons" class="foot">—</div></div>
+      <div style="margin-top:10px"><div class="label">Risks</div><div id="aiRisks" class="foot">—</div></div>
+    </div>
+
+    <div class="card advanced-card">
+      <div class="label">Advanced Market Structure + Signal</div>
+      <div class="row"><span class="muted">FINAL SIGNAL</span><b id="advFinal">WAIT</b></div>
+      <div class="row"><span class="muted">Decision</span><b id="advStatus">—</b></div>
+      <div class="row"><span class="muted">Structure</span><b id="advStructure">—</b></div>
+      <div class="row"><span class="muted">Trend</span><b id="advTrend">—</b></div>
+      <div class="row"><span class="muted">Book Pattern</span><b id="advPattern">—</b></div>
+      <div class="row"><span class="muted">Secondary</span><b id="advSecondary">—</b></div>
+      <div class="row"><span class="muted">Entry</span><b id="advEntry">—</b></div>
+      <div class="row"><span class="muted">SL</span><b id="advSL">—</b></div>
+      <div class="row"><span class="muted">TP</span><b id="advTP">—</b></div>
+    </div>
+    <div class="card">
+      <div class="label">Logic</div>
+      <p class="foot">10 ta strategiya bitta engine ichida tekshiriladi. Signal faqat algoritm shartlari bajarilganda chiqadi.</p>
+      <p class="foot">Data provider: Twelve Data. Chart rendering: TradingView Lightweight Charts. Bu TradingView platformasining o‘z market-data feed'i emas.</p>
+    </div>
+  </aside>
+</main>
+
 <script>
-let tf='M5',chart,series,lines=[],ws=null,lastCandleTime=null,analyzeTimer=null;const $=s=>document.querySelector(s),fmt=v=>v==null||!Number.isFinite(Number(v))?'—':Number(v).toFixed(2),cls=s=>s==='BUY'?'buy':s==='SELL'?'sell':'wait';
-function make(){chart=LightweightCharts.createChart($('#chart'),{layout:{background:{color:'#050507'},textColor:'#b9aeb2'},grid:{vertLines:{color:'#151013'},horzLines:{color:'#151013'}},timeScale:{timeVisible:true,secondsVisible:false,borderColor:'#2a171d'},rightPriceScale:{borderColor:'#2a171d'},crosshair:{mode:1}});series=chart.addSeries(LightweightCharts.CandlestickSeries,{upColor:'#5dffb0',downColor:'#ff1744',borderUpColor:'#5dffb0',borderDownColor:'#ff1744',wickUpColor:'#5dffb0',wickDownColor:'#ff1744'});addEventListener('resize',()=>chart.applyOptions({width:$('#chart').clientWidth}));}
-function clear(){lines.forEach(x=>{try{series.removePriceLine(x)}catch{}});lines=[]}function line(p,t){if(p==null)return;lines.push(series.createPriceLine({price:p,lineWidth:1,lineStyle:LightweightCharts.LineStyle.Dashed,axisLabelVisible:true,title:t}))}
-function tfSeconds(){return ({M1:60,M5:300,M15:900,M30:1800,H1:3600,H4:14400,D1:86400}[tf]||300)}
-function timer(){const n=Math.floor(Date.now()/1000),next=(Math.floor(n/tfSeconds())+1)*tfSeconds(),d=Math.max(0,next-n),m=String(Math.floor(d/60)).padStart(2,'0'),s=String(d%60).padStart(2,'0');$('#timer').textContent=`${m}:${s}`}setInterval(timer,1000);
-function render(a){const d=a.decision||{},ai=a.ai||{},b=a.book||{},s=a.secondary||{};$('#price').textContent=fmt(a.price);$('#trend').textContent=a.trend;$('#trend').className='value '+cls(a.trend==='BULLISH'?'BUY':a.trend==='BEARISH'?'SELL':'WAIT');$('#atr').textContent=fmt(a.atr);$('#pivot').textContent=fmt(a.pivot?.pivot);$('#r1s1').textContent=`${fmt(a.pivot?.r1)} / ${fmt(a.pivot?.s1)}`;$('#r2s2').textContent=`${fmt(a.pivot?.r2)} / ${fmt(a.pivot?.s2)}`;$('#final').textContent=d.finalSignal||'WAIT';$('#final').className='big '+cls(d.finalSignal);$('#finalstatus').textContent=`${d.decisionStatus||'—'} · Agreement ${d.agreementCount||0}/3`;for(const [id,v] of [['bookSignal',d.bookSignal],['secondarySignal',d.secondarySignal],['aiSignal',d.openAISecondOpinion]]){$('#'+id).textContent=v||'WAIT';$('#'+id).className='value '+cls(v)}$('#confidence').textContent=(d.finalConfidence??0)+'%';const lev=ai.signal&&ai.signal!=='WAIT'?ai:b;$('#pattern').textContent=ai.pattern||b.bestPattern||s.strategy||'—';$('#entry').textContent=fmt(lev.entry);$('#sl').textContent=fmt(lev.stop_loss??lev.sl);$('#tp1').textContent=fmt(lev.take_profit_1??lev.tp);$('#tp2').textContent=fmt(lev.take_profit_2);$('#rr').textContent=(lev.risk_reward??lev.rr)!=null?`1 : ${Number(lev.risk_reward??lev.rr).toFixed(2)}`:'—';$('#bookBox').innerHTML=(b.patterns||[]).map(p=>`<div class="engine"><span class="tag ${cls(p.direction)}">${p.direction}</span><b>${p.name}</b><span class="tag">${p.confidence}%</span><div class="tiny">${p.why}<br>Entry ${fmt(p.entry)} · SL ${fmt(p.sl)} · TP ${fmt(p.tp)}</div></div>`).join('')||'<div class="tiny muted">Tasdiqlangan book pattern topilmadi.</div>';const ss=s.all_signals||[];$('#secondaryBox').innerHTML=ss.map(p=>`<div class="engine"><span class="tag ${cls(p.signal)}">${p.signal}</span><b>${p.strategy}</b><div class="tiny">${p.reason||''}<br>Entry ${fmt(p.entry)} · SL ${fmt(p.sl)} · TP ${fmt(p.tp)} · R:R ${p.rr==null?'—':Number(p.rr).toFixed(2)}</div></div>`).join('')||`<div class="tiny muted">${s.signal||'WAIT'} — ${s.reason||'No qualifying setup'}</div>`;$('#aiBox').innerHTML=ai.available?`<b class="${cls(ai.signal)}">${ai.signal}</b> · ${ai.confidence??0}% · <span class="muted">${ai.market_bias||''}</span><div class="reason">${(ai.reasons||[]).map(x=>`<div>• ${x}</div>`).join('')}</div><div class="tiny" style="margin-top:7px">${ai.summary||''}</div>`:`<div class="tiny muted">OpenAI: ${ai.error||'not configured'}</div>`;clear();line(a.pivot?.pivot,'P');line(a.pivot?.r1,'R1');line(a.pivot?.r2,'R2');line(a.pivot?.r3,'R3');line(a.pivot?.s1,'S1');line(a.pivot?.s2,'S2');line(a.pivot?.s3,'S3');line(a.entry,'ENTRY');line(a.sl,'SL');line(a.tp,'TP1');}
-async function analyze(){try{const a=await fetch(`/api/analyze?symbolCode=XAUUSD&timeFrame=${tf}`,{cache:'no-store'}).then(r=>r.json());if(a.error)throw Error(a.error);series.setData(a.candles.map(x=>({time:x.time,open:x.open,high:x.high,low:x.low,close:x.close})));if(lastCandleTime===null)chart.timeScale().fitContent();lastCandleTime=a.candles.at(-1)?.time||lastCandleTime;render(a);$('#status').textContent='LIVE · '+new Date().toLocaleTimeString('uz-UZ')}catch(e){$('#status').textContent='ERROR · '+e.message}}
-function closeWS(){if(ws){try{ws.close()}catch{}ws=null}}
-function connectWS(){closeWS();const proto=location.protocol==='https:'?'wss':'ws';ws=new WebSocket(`${proto}://${location.host}/ws/price?symbolCode=XAUUSD&timeFrame=${tf}`);ws.onopen=()=>{$('#status').textContent='LIVE WS · RealMarketAPI'};ws.onmessage=e=>{try{const m=JSON.parse(e.data);if(m.type!=='candle')return;const x=m.candle;series.update({time:x.time,open:x.open,high:x.high,low:x.low,close:x.close});if(lastCandleTime!==null&&x.time!==lastCandleTime){analyze()}lastCandleTime=x.time;$('#price').textContent=fmt(x.close);$('#status').textContent='LIVE WS · '+new Date().toLocaleTimeString('uz-UZ')}catch{}};ws.onclose=()=>{setTimeout(connectWS,2000)};ws.onerror=()=>{try{ws.close()}catch{}}}
-function changeTF(next){document.querySelectorAll('[data-tf]').forEach(x=>x.classList.toggle('active',x.dataset.tf===next));tf=next;lastCandleTime=null;analyze();connectWS()}
-make();document.querySelectorAll('[data-tf]').forEach(b=>b.onclick=()=>changeTF(b.dataset.tf));$('#refresh').onclick=analyze;analyze().then(connectWS);setInterval(()=>{if(document.visibilityState==='visible'&&!ws)analyze()},15000);setInterval(()=>{if(document.visibilityState==='visible'&&!ws)connectWS()},5000);
-</script></body></html>
+const chart = LightweightCharts.createChart(document.getElementById('chart'), {
+  layout: { background: { type: 'solid', color: '#0b1020' }, textColor: '#c9d2ea' },
+  grid: { vertLines: { color: '#182139' }, horzLines: { color: '#182139' } },
+  rightPriceScale: { borderColor: '#2b3652' },
+  timeScale: { borderColor: '#2b3652', timeVisible: true, secondsVisible: false },
+  crosshair: { mode: 0 },
+});
+
+const series = chart.addSeries(LightweightCharts.CandlestickSeries, {
+  upColor: '#46d69a', downColor: '#ff6f89',
+  borderUpColor: '#46d69a', borderDownColor: '#ff6f89',
+  wickUpColor: '#46d69a', wickDownColor: '#ff6f89',
+});
+
+let priceLines = [];
+function clearLines() {
+  for (const p of priceLines) series.removePriceLine(p);
+  priceLines = [];
+}
+function drawSignal(sig) {
+  clearLines();
+  if (!sig || sig.signal === 'NO TRADE') return;
+  const levels = [
+    ['Entry', sig.entry],
+    ['SL', sig.sl],
+    ['TP', sig.tp],
+  ];
+  for (const [title, price] of levels) {
+    if (price == null) continue;
+    const line = series.createPriceLine({
+      price, title,
+      lineWidth: 1,
+      axisLabelVisible: true,
+      titleLabelVisible: true,
+    });
+    priceLines.push(line);
+  }
+}
+function fmt(v) { return v == null ? '—' : Number(v).toFixed(2); }
+
+async function refresh() {
+  try {
+    const r = await fetch('/api/market', { cache:'no-store' });
+    if (!r.ok) throw new Error(await r.text());
+    const data = await r.json();
+    series.setData(data.candles);
+    chart.timeScale().fitContent();
+
+    const s = data.signal || {};
+    const sigEl = document.getElementById('signal');
+    sigEl.textContent = s.signal || 'NO TRADE';
+    sigEl.className = 'big ' + ((s.signal === 'BUY') ? 'buy' : (s.signal === 'SELL' ? 'sell' : 'muted'));
+    document.getElementById('strategy').textContent = s.strategy || 'No active setup';
+    document.getElementById('entry').textContent = fmt(s.entry);
+    document.getElementById('sl').textContent = fmt(s.sl);
+    document.getElementById('tp').textContent = fmt(s.tp);
+    document.getElementById('rr').textContent = s.rr == null ? '—' : s.rr.toFixed(2);
+    document.getElementById('atr').textContent = s.atr == null ? '—' : s.atr.toFixed(2);
+    document.getElementById('last').textContent = data.last_candle_time || '—';
+    document.getElementById('status').textContent = 'LIVE · ' + data.provider;
+    drawSignal(s);
+
+    try {
+      const ar = await fetch('/api/ai-analysis', { cache:'no-store' });
+      const ad = await ar.json();
+      const ai = ad.ai || {};
+      const aiSig = document.getElementById('aiSignal');
+      aiSig.textContent = ai.final_signal || '—';
+      aiSig.className = (ai.final_signal === 'BUY') ? 'buy' : (ai.final_signal === 'SELL' ? 'sell' : 'muted');
+      document.getElementById('aiConfidence').textContent =
+        ai.confidence == null ? '—' : ai.confidence + '%';
+      document.getElementById('aiBias').textContent = ai.market_bias || '—';
+      document.getElementById('aiStructure').textContent = ai.structure || (ai.error || '—');
+      document.getElementById('aiReasons').textContent =
+        Array.isArray(ai.reasons) ? ai.reasons.join(' · ') : '—';
+      document.getElementById('aiRisks').textContent =
+        Array.isArray(ai.risks) ? ai.risks.join(' · ') : '—';
+    } catch (ae) {
+      console.error(ae);
+    }
+  } catch (e) {
+    document.getElementById('status').textContent = 'DATA ERROR';
+    console.error(e);
+  }
+}
+
+refresh();
+setInterval(refresh, 30000);
+window.addEventListener('resize', () => chart.applyOptions({
+  width: document.getElementById('chart').clientWidth,
+}));
+
+async function refreshAdvanced(){
+  try{
+    const r=await fetch('/api/advanced-analysis?timeframe=M30',{cache:'no-store'});
+    if(!r.ok) throw new Error(await r.text());
+    const d=await r.json(), dec=d.decision||{}, b=d.book||{}, sec=d.secondary||{}, lev=d.signalLevels||{}, st=d.structure||{};
+    const f=document.getElementById('advFinal'); f.textContent=dec.finalSignal||'WAIT'; f.className=(dec.finalSignal==='BUY')?'buy':(dec.finalSignal==='SELL'?'sell':'muted');
+    document.getElementById('advStatus').textContent=dec.status||'—';
+    document.getElementById('advStructure').textContent=st.state||'—';
+    document.getElementById('advTrend').textContent=d.trend||'—';
+    document.getElementById('advPattern').textContent=b.bestPattern||'—';
+    document.getElementById('advSecondary').textContent=sec.signal||'WAIT';
+    document.getElementById('advEntry').textContent=dFmt(lev.entry); document.getElementById('advSL').textContent=dFmt(lev.sl); document.getElementById('advTP').textContent=dFmt(lev.tp);
+  }catch(e){ console.error('Advanced analysis:',e); }
+}
+function dFmt(v){return v==null?'—':Number(v).toFixed(2)}
+refreshAdvanced(); setInterval(refreshAdvanced,30000);
+</script>
+</body>
+</html>
