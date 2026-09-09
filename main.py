@@ -58,7 +58,9 @@ APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8000").strip().rstrip
 REQUIRE_EMAIL_DELIVERY = os.getenv("REQUIRE_EMAIL_DELIVERY", "false").lower() == "true"
 SMTP_USE_STARTTLS = os.getenv("SMTP_USE_STARTTLS", "true").lower() == "true"
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
-AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", "10"))
+AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", "60"))
+OPENAI_MIN_INTERVAL = max(5, int(os.getenv("OPENAI_MIN_INTERVAL", "20")))
+OPENAI_429_COOLDOWN = max(15, int(os.getenv("OPENAI_429_COOLDOWN", "60")))
 CANDLE_LIMIT = max(50, min(int(os.getenv("CANDLE_LIMIT", "220")), 500))
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "12"))
 NODE_MARKET_URL = os.getenv("NODE_MARKET_URL", "http://127.0.0.1:3001").strip().rstrip("/")
@@ -215,6 +217,10 @@ TIMEFRAME_SECONDS = {
 }
 VALID_INTERVALS = tuple(TIMEFRAME_SECONDS.keys())
 AI_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+OPENAI_INFLIGHT: dict[str, asyncio.Task] = {}
+OPENAI_LAST_CALL: dict[str, float] = {}
+OPENAI_COOLDOWN_UNTIL: dict[str, float] = {}
+OPENAI_LOCK = asyncio.Lock()
 MARKET_HISTORY_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 MARKET_HISTORY_CACHE_TTL = int(os.getenv("MARKET_HISTORY_CACHE_TTL", "5"))
 LIVE_PRICE_CACHE: dict[str, tuple[float, float, str]] = {}
@@ -862,6 +868,49 @@ async def get_chart_history(symbol: str, interval: str, days: int = 31) -> tuple
     raise MarketDataError("Live market history unavailable. " + " | ".join(errors))
 
 
+async def fetch_tradingview_price(symbol: str) -> float:
+    """Fetch the same OANDA:XAUUSD last price used by the embedded TradingView chart.
+
+    TradingView's public scanner endpoint is used only for the live quote. The chart
+    itself remains the official Advanced Chart widget. Keeping the dashboard quote
+    on the same symbol/feed prevents a visible price mismatch with OANDA:XAUUSD.
+    """
+    tv_symbol = os.getenv("TRADINGVIEW_SYMBOL", "OANDA:XAUUSD").strip() or "OANDA:XAUUSD"
+    # OANDA instruments are exposed through TradingView's forex scanner.
+    url = "https://scanner.tradingview.com/forex/scan"
+    payload = {
+        "filter": [],
+        "options": {"lang": "en"},
+        "symbols": {"query": {"types": []}, "tickers": [tv_symbol]},
+        "columns": ["close"],
+        "range": [0, 1],
+    }
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "User-Agent": "Mozilla/5.0 (compatible; GOLD-Trading-SaaS/1.0)",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=min(REQUEST_TIMEOUT, 6.0)) as client:
+            r = await client.post(url, json=payload, headers=headers)
+            if r.status_code >= 400:
+                raise MarketDataError(f"TradingView scanner HTTP {r.status_code}: {r.text[:300]}")
+            data = r.json()
+    except httpx.HTTPError as exc:
+        raise MarketDataError(f"TradingView scanner request failed: {exc}") from exc
+    except ValueError as exc:
+        raise MarketDataError("TradingView scanner returned invalid JSON") from exc
+
+    rows = data.get("data") if isinstance(data, dict) else None
+    if not rows:
+        raise MarketDataError("TradingView scanner returned no OANDA:XAUUSD quote")
+    row = rows[0]
+    values = row.get("d") if isinstance(row, dict) else None
+    if not isinstance(values, list) or not values:
+        raise MarketDataError("TradingView scanner returned no close value")
+    return to_float(values[0])
+
+
 async def fetch_realmarket_price(symbol: str, interval: str = DEFAULT_INTERVAL) -> float:
     # Use the SAME timeframe that the chart/analysis selected. Hard-coding M1
     # can return HTTP 400 on plans that do not expose M1, even when M5/M15/H1
@@ -916,6 +965,14 @@ async def fetch_live_price_any(symbol: str, interval: str = DEFAULT_INTERVAL) ->
     if cached and now_mono - cached[0] < LIVE_PRICE_CACHE_TTL:
         return cached[1], cached[2]
     errors = []
+    # Canonical visible quote: the dashboard must match the embedded TradingView
+    # OANDA:XAUUSD chart, not a different CFD/provider feed.
+    try:
+        price = await fetch_tradingview_price(symbol)
+        LIVE_PRICE_CACHE[key] = (now_mono, price, "TradingView OANDA:XAUUSD")
+        return price, "TradingView OANDA:XAUUSD"
+    except Exception as exc:
+        errors.append(f"TradingView quote: {exc}")
     if REALMARKET_API_KEY:
         try:
             price = await fetch_realmarket_price(symbol, interval)
@@ -1626,8 +1683,93 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
 
 
 
+async def _openai_book_validate(cache_key: str, context: dict[str, Any], book_signal_value: str) -> dict[str, Any]:
+    """Rate-limit-safe OpenAI validator. One request per candle/key, with cooldowns."""
+    now = datetime.now(timezone.utc).timestamp()
+    cached = AI_CACHE.get(cache_key)
+    if cached and now - cached[0] < AI_CACHE_TTL:
+        return cached[1]
+
+    # Never spend an OpenAI request when the Book itself has no confirmed signal.
+    if book_signal_value not in {"BUY", "SELL"}:
+        result = {"signal": "WAIT", "confidence": 0,
+                  "reason": "Book pattern tasdiqlanmadi — OpenAI so‘rovi yuborilmadi.",
+                  "mode": "book_wait"}
+        AI_CACHE[cache_key] = (now, result)
+        return result
+
+    cooldown_until = OPENAI_COOLDOWN_UNTIL.get(cache_key, 0.0)
+    if now < cooldown_until:
+        result = {"signal": "WAIT", "confidence": 0,
+                  "reason": "OpenAI rate limitdan keyin vaqtincha kutish rejimi.",
+                  "mode": "openai_cooldown"}
+        return result
+
+    async with OPENAI_LOCK:
+        # Another request may have completed while we waited for the lock.
+        now = datetime.now(timezone.utc).timestamp()
+        cached = AI_CACHE.get(cache_key)
+        if cached and now - cached[0] < AI_CACHE_TTL:
+            return cached[1]
+        last = OPENAI_LAST_CALL.get("global", 0.0)
+        if now - last < OPENAI_MIN_INTERVAL:
+            result = {"signal": "WAIT", "confidence": 0,
+                      "reason": "OpenAI so‘rovi juda tez-tez yuborilmasligi uchun kutish rejimi.",
+                      "mode": "openai_throttled"}
+            return result
+        OPENAI_LAST_CALL["global"] = now
+
+        if not OPENAI_API_KEY:
+            result = {"signal": "WAIT", "confidence": 0,
+                      "reason": "OPENAI_API_KEY sozlanmagan.", "mode": "fallback"}
+            AI_CACHE[cache_key] = (now, result)
+            return result
+
+        try:
+            from openai import AsyncOpenAI
+            client = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=20.0, max_retries=0)
+            prompt = (
+                "You are the second-opinion validator for XAU/USD. "
+                "Use ONLY the supplied SIMPLE TRADING Book pattern analysis and recent OHLC candles. "
+                "Do not add ICT, FVG, order blocks, liquidity, RSI, MACD, or any other strategy. "
+                "Return JSON only with keys signal (BUY/SELL/WAIT), confidence (0-100 integer), reason (short). "
+                "If the book signal is not clearly confirmed by the supplied candles, return WAIT.\n\n" +
+                json.dumps(context, ensure_ascii=False, default=str)
+            )
+            response = await client.responses.create(model=OPENAI_MODEL, input=prompt)
+            text = getattr(response, "output_text", "").strip()
+            try:
+                parsed = json.loads(text) if text else {}
+            except Exception:
+                parsed = {}
+            sig = str(parsed.get("signal", "WAIT")).upper()
+            result = {
+                "signal": sig if sig in {"BUY", "SELL", "WAIT"} else "WAIT",
+                "confidence": max(0, min(100, int(parsed.get("confidence", 0)))),
+                "reason": str(parsed.get("reason", "OpenAI second opinion.")),
+                "mode": "openai",
+            }
+            AI_CACHE[cache_key] = (datetime.now(timezone.utc).timestamp(), result)
+            return result
+        except Exception as exc:
+            msg = str(exc)
+            low = msg.lower()
+            if "429" in low or "rate limit" in low or "too many requests" in low:
+                OPENAI_COOLDOWN_UNTIL[cache_key] = datetime.now(timezone.utc).timestamp() + OPENAI_429_COOLDOWN
+                result = {"signal": "WAIT", "confidence": 0,
+                          "reason": "OpenAI rate limit (429). Keyingi candle/urinishda avtomatik davom etadi.",
+                          "mode": "openai_rate_limited"}
+            else:
+                result = {"signal": "WAIT", "confidence": 0,
+                          "reason": f"OpenAI vaqtincha mavjud emas: {msg[:180]}",
+                          "mode": "fallback"}
+            # Cache fallback briefly so concurrent page requests don't hammer OpenAI.
+            AI_CACHE[cache_key] = (datetime.now(timezone.utc).timestamp(), result)
+            return result
+
+
 async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, Any]:
-    """Book-pattern signal + OpenAI second opinion, both using the same chart candle feed."""
+    """Book-pattern signal + rate-limit-safe OpenAI second opinion."""
     symbol = clean_symbol(symbol)
     interval = validate_interval(interval)
     candles_data, mode, warning = await get_candles(symbol, interval, 220)
@@ -1636,6 +1778,10 @@ async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, An
 
     book = book_signal(candles_data)
     recent = candles_data[-80:]
+    # Cache by candle bucket, not by the entire candle payload. This prevents every
+    # live refresh of the forming candle from creating a new OpenAI request.
+    candle_key = str(candles_data[-1].get("time") or candles_data[-1].get("timestamp") or len(candles_data))
+    cache_key = f"book-openai:{symbol}:{interval}:{candle_key}:{book['signal']}"
     context = {
         "symbol": symbol,
         "timeframe": interval,
@@ -1646,41 +1792,10 @@ async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, An
         "recent_candles": recent,
         "rule": "Validate ONLY the supplied SIMPLE TRADING Book pattern result and candle data. Return BUY, SELL or WAIT. Do not invent other strategies.",
     }
-    ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI unavailable."}
-    if OPENAI_API_KEY:
-        try:
-            from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-            prompt = (
-                "You are the second-opinion validator for XAU/USD. "
-                "Use ONLY the supplied book-pattern analysis and recent OHLC candles. "
-                "Do not add ICT, FVG, order blocks, liquidity, RSI, MACD, or any other strategy. "
-                "Return JSON only with keys signal (BUY/SELL/WAIT), confidence (0-100 integer), reason (short). "
-                "If the book signal is not clearly confirmed by the supplied candles, return WAIT.\n\n" +
-                json.dumps(context, ensure_ascii=False, default=str)
-            )
-            response = await client.responses.create(model=OPENAI_MODEL, input=prompt)
-            text = getattr(response, "output_text", "").strip()
-            if text:
-                try:
-                    parsed = json.loads(text)
-                    sig = str(parsed.get("signal", "WAIT")).upper()
-                    ai = {
-                        "signal": sig if sig in {"BUY", "SELL", "WAIT"} else "WAIT",
-                        "confidence": max(0, min(100, int(parsed.get("confidence", 0)))),
-                        "reason": str(parsed.get("reason", "OpenAI second opinion.")),
-                        "mode": "openai",
-                    }
-                except Exception:
-                    ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI returned an invalid structured result.", "mode": "openai"}
-        except Exception as exc:
-            ai = {"signal": "WAIT", "confidence": 0, "reason": f"OpenAI unavailable: {exc}", "mode": "fallback"}
-    else:
-        ai["mode"] = "fallback"
+    ai = await _openai_book_validate(cache_key, context, book["signal"])
 
     final_signal = book["signal"] if book["signal"] in {"BUY", "SELL"} and ai["signal"] == book["signal"] else "WAIT"
     price = float(candles_data[-1]["close"])
-    # Risk levels are derived from the same live candle range; they are not a new strategy.
     atr_value = max(_atr_local(candles_data), price * 0.0002)
     if final_signal == "BUY":
         entry, sl, tp = price, price - 1.2 * atr_value, [price + 2.0 * atr_value, price + 3.0 * atr_value]
@@ -2023,6 +2138,11 @@ async def candles(symbol: str, interval: str = Query(DEFAULT_INTERVAL), limit: i
 async def quote(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
     interval = validate_interval(interval)
     symbol = clean_symbol(symbol); errors=[]
+    try:
+        price = await fetch_tradingview_price(symbol)
+        return {"symbol":symbol,"price":price,"mode":"live","provider":"TradingView OANDA:XAUUSD","timestamp":datetime.now(timezone.utc).isoformat()}
+    except MarketDataError as exc:
+        errors.append(f"tradingview: {exc}")
     try:
         node_url=f"{NODE_MARKET_URL}/market/price?symbol={urlquote(symbol)}"
         async with httpx.AsyncClient(timeout=NODE_QUOTE_TIMEOUT) as client:
