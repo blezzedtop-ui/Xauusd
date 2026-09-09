@@ -15,29 +15,50 @@ async function nodeMarketHealth(){if(!NODE_MARKET_URL)return null;try{const r=aw
 async function api(path,opt={}){const headers={'Content-Type':'application/json',...(opt.headers||{})};if(token)headers.Authorization='Bearer '+token;let last;for(const base of API_CANDIDATES){try{const url=path.startsWith('http')?path:base+path;const r=await fetch(url,{...opt,headers,cache:'no-store'});let d={};try{d=await r.json()}catch{}if(!r.ok)throw Error(d.detail||d.message||'HTTP '+r.status);return d}catch(e){last=e}}if(last instanceof TypeError){throw Error('Cloud backendga ulanib bo‘lmadi. Saytning cloud serveri ulanmagan yoki hozircha ishlamayapti.') }throw last}
 function tvInterval(tf){return ({'1min':'1','5min':'5','15min':'15','30min':'30','1h':'60','4h':'240','1day':'D'})[tf]||'5'}
 function mountTradingView(id, tf=interval){
- const el=$(id); if(!el || !window.LightweightCharts)return;
+ const el=$(id); if(!el)return;
  el.innerHTML='';
- const c=LightweightCharts.createChart(el,{layout:{background:{type:'solid',color:'#090d12'},textColor:'#b9c2cf'},grid:{vertLines:{color:'#151b24'},horzLines:{color:'#151b24'}},rightPriceScale:{borderColor:'#28313d'},timeScale:{borderColor:'#28313d',timeVisible:true,secondsVisible:false},crosshair:{mode:LightweightCharts.CrosshairMode.Normal}});
- const s=c.addCandlestickSeries({upColor:'#20c997',downColor:'#ff5363',borderUpColor:'#20c997',borderDownColor:'#ff5363',wickUpColor:'#20c997',wickDownColor:'#ff5363'});
- if(id==='chart'){chart=c;series=s}else{chart2=c;series2=s}
- c.timeScale().fitContent();
- return c;
+ const wrap=document.createElement('div');
+ wrap.className='tradingview-widget-container';
+ wrap.style.cssText='height:100%;width:100%';
+ const widget=document.createElement('div');
+ widget.className='tradingview-widget-container__widget';
+ widget.style.cssText='height:100%;width:100%';
+ wrap.appendChild(widget); el.appendChild(wrap);
+ const script=document.createElement('script');
+ script.type='text/javascript'; script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js'; script.async=true;
+ const cfg={
+   autosize:true,
+   symbol:'OANDA:XAUUSD',
+   interval:tvInterval(tf),
+   timezone:'Etc/UTC',
+   theme:'dark',
+   style:'1',
+   locale:'en',
+   withdateranges:true,
+   hide_side_toolbar:false,
+   allow_symbol_change:false,
+   save_image:false,
+   calendar:false,
+   details:false,
+   hotlist:false,
+   studies:[],
+   support_host:'https://www.tradingview.com'
+ };
+ script.innerHTML=JSON.stringify(cfg);
+ wrap.appendChild(script);
+ $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
+ return true;
 }
 function applyChart(candles,mode){
  const data=(candles||[]).map(x=>({time:Number(x.time),open:+x.open,high:+x.high,low:+x.low,close:+x.close})).filter((x,i,a)=>i===0||x.time>a[i-1].time);
  liveCandle=data[data.length-1]||null;
- if(series) series.setData(data);
- if(series2) series2.setData(data);
- if(chart) chart.timeScale().fitContent();
- if(chart2) chart2.timeScale().fitContent();
- if(data.length){const first=data[0].time,last=data[data.length-1].time,days=Math.max(1,Math.round((last-first)/86400));$('change').textContent=`${data.length.toLocaleString()} candles · ${days} days history`;$('historyInfo').textContent=`${days}+ days · ${data.length.toLocaleString()} candles`;}
- $('mode').textContent=mode==='live'?'LIVE MARKET':'LIVE RETRY'; $('mode').style.color=mode==='live'?'var(--green)':'var(--amber)'; $('chartStatus').textContent=mode==='live'?'LIVE MARKET':'RETRYING';
+ if(data.length){const first=data[0].time,last=data[data.length-1].time,days=Math.max(1,Math.round((last-first)/86400));$('change').textContent=`TradingView LIVE · ${data.length.toLocaleString()} candles · ${days} days history`;$('historyInfo').textContent=`TradingView LIVE · ${days}+ days · ${data.length.toLocaleString()} candles`;}
+ $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
 }
 function markSignal(signal, candleTime){
- if(!series)return;
- const color=signal==='BUY'?'#20c997':signal==='SELL'?'#ff5363':'#f5c15d';
- series.setMarkers(signal==='WAIT'?[]:[{time:Number(candleTime),position:signal==='BUY'?'belowBar':'aboveBar',color,shape:signal==='BUY'?'arrowUp':'arrowDown',text:signal}]);
- if(series2) series2.setMarkers(signal==='WAIT'?[]:[{time:Number(candleTime),position:signal==='BUY'?'belowBar':'aboveBar',color,shape:signal==='BUY'?'arrowUp':'arrowDown',text:signal}]);
+ // TradingView Advanced Chart is an isolated live widget, so backend markers are
+ // intentionally kept out of the iframe. Signal details remain in the dashboard.
+ return;
 }
 function setTf(v){
  interval=v; liveCandle=null;
@@ -178,7 +199,7 @@ function updateLiveCandle(price, ts){
   } else {
     liveCandle.high=Math.max(liveCandle.high,price);liveCandle.low=Math.min(liveCandle.low,price);liveCandle.close=price;
   }
-  $('price').textContent=fmt(price); $('change').textContent='Real-time tick'; $('change').className='change up'; if(series)series.update(liveCandle); if(series2)series2.update(liveCandle); lastTickTs=Date.now();
+  $('price').textContent=fmt(price); $('change').textContent='TradingView LIVE · Real-time'; $('change').className='change up'; lastTickTs=Date.now();
 }
 function closeMarketStream(){try{marketWS?.close()}catch(e){} marketWS=null;streamKey=''}
 async function quoteHeartbeat(){
@@ -202,8 +223,10 @@ async function quoteHeartbeat(){
     }
     throw Error(q?.warning||'Live quote unavailable');
   }catch(e){
-    if(!marketWS||marketWS.readyState!==WebSocket.OPEN){ $('mode').textContent='LIVE RETRY'; $('mode').style.color='var(--amber)'; $('chartStatus').textContent='RETRYING'; }
-    $('change').textContent=e.message||'Live quote unavailable';
+    // The TradingView chart remains independently live even if our backend quote
+    // heartbeat is temporarily unavailable.
+    $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
+    $('change').textContent='TradingView live chart · backend quote retrying';
     return false;
   }
 }
@@ -219,7 +242,7 @@ function connectMarketStream(){
    marketWS.onopen=()=>{ $('mode').textContent='LIVE STREAM'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE'; $('change').textContent='WebSocket real-time tick'; };
    marketWS.onmessage=ev=>{
      const m=JSON.parse(ev.data);
-     if(m.type==='tick') updateLiveCandle(+m.price,+m.timestamp); if(m.type==='candle'&&m.candle){ const cc=m.candle; liveCandle=cc; if(series)series.update(cc); if(series2)series2.update(cc); $('price').textContent=fmt(+m.price); loadMain(true).catch(()=>{}); }
+     if(m.type==='tick') updateLiveCandle(+m.price,+m.timestamp); if(m.type==='candle'&&m.candle){ liveCandle=m.candle; $('price').textContent=fmt(+m.price); loadMain(true).catch(()=>{}); }
      if(m.type==='reconnecting'){ if(Date.now()-lastTickTs>20000){ $('mode').textContent='RECONNECTING'; $('mode').style.color='var(--amber)'; } } if(m.type==='error'){ $('mode').textContent='LIVE ERROR'; showToast(m.message||'Stream error'); }
    };
    marketWS.onclose=()=>{ $('chartStatus').textContent='RECONNECTING'; $('mode').textContent='RECONNECTING'; setTimeout(()=>{if(document.visibilityState!=='hidden')connectMarketStream()},500)};
