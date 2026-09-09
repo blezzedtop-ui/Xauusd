@@ -58,9 +58,13 @@ APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8000").strip().rstrip
 REQUIRE_EMAIL_DELIVERY = os.getenv("REQUIRE_EMAIL_DELIVERY", "false").lower() == "true"
 SMTP_USE_STARTTLS = os.getenv("SMTP_USE_STARTTLS", "true").lower() == "true"
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
-AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", "60"))
-OPENAI_MIN_INTERVAL = max(5, int(os.getenv("OPENAI_MIN_INTERVAL", "20")))
-OPENAI_429_COOLDOWN = max(15, int(os.getenv("OPENAI_429_COOLDOWN", "60")))
+AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", "10"))
+# Book/OpenAI second-opinion cache: one OpenAI call per newly closed/current candle.
+BOOK_OPENAI_CACHE_TTL = int(os.getenv("BOOK_OPENAI_CACHE_TTL", "300"))
+BOOK_OPENAI_COOLDOWN = int(os.getenv("BOOK_OPENAI_COOLDOWN", "45"))
+BOOK_OPENAI_CACHE: dict[str, tuple[float, int | None, dict[str, Any]]] = {}
+BOOK_OPENAI_LOCKS: dict[str, asyncio.Lock] = {}
+BOOK_OPENAI_LOCKS_GUARD = asyncio.Lock()
 CANDLE_LIMIT = max(50, min(int(os.getenv("CANDLE_LIMIT", "220")), 500))
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "12"))
 NODE_MARKET_URL = os.getenv("NODE_MARKET_URL", "http://127.0.0.1:3001").strip().rstrip("/")
@@ -217,10 +221,6 @@ TIMEFRAME_SECONDS = {
 }
 VALID_INTERVALS = tuple(TIMEFRAME_SECONDS.keys())
 AI_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-OPENAI_INFLIGHT: dict[str, asyncio.Task] = {}
-OPENAI_LAST_CALL: dict[str, float] = {}
-OPENAI_COOLDOWN_UNTIL: dict[str, float] = {}
-OPENAI_LOCK = asyncio.Lock()
 MARKET_HISTORY_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 MARKET_HISTORY_CACHE_TTL = int(os.getenv("MARKET_HISTORY_CACHE_TTL", "5"))
 LIVE_PRICE_CACHE: dict[str, tuple[float, float, str]] = {}
@@ -869,15 +869,14 @@ async def get_chart_history(symbol: str, interval: str, days: int = 31) -> tuple
 
 
 async def fetch_tradingview_price(symbol: str) -> float:
-    """Fetch the same OANDA:XAUUSD last price used by the embedded TradingView chart.
+    """Return the TradingView/OANDA XAUUSD quote used by the embedded chart.
 
-    TradingView's public scanner endpoint is used only for the live quote. The chart
-    itself remains the official Advanced Chart widget. Keeping the dashboard quote
-    on the same symbol/feed prevents a visible price mismatch with OANDA:XAUUSD.
+    OANDA:XAUUSD is a CFD/metal symbol, so try TradingView's CFD scanner first.
+    The forex scanner is retained only as a compatibility fallback.  We NEVER
+    fall back to RealMarketAPI here: a different provider would create a visible
+    price mismatch between the dashboard and the TradingView chart.
     """
     tv_symbol = os.getenv("TRADINGVIEW_SYMBOL", "OANDA:XAUUSD").strip() or "OANDA:XAUUSD"
-    # OANDA instruments are exposed through TradingView's forex scanner.
-    url = "https://scanner.tradingview.com/forex/scan"
     payload = {
         "filter": [],
         "options": {"lang": "en"},
@@ -890,25 +889,26 @@ async def fetch_tradingview_price(symbol: str) -> float:
         "Content-Type": "application/json",
         "User-Agent": "Mozilla/5.0 (compatible; GOLD-Trading-SaaS/1.0)",
     }
-    try:
-        async with httpx.AsyncClient(timeout=min(REQUEST_TIMEOUT, 6.0)) as client:
-            r = await client.post(url, json=payload, headers=headers)
-            if r.status_code >= 400:
-                raise MarketDataError(f"TradingView scanner HTTP {r.status_code}: {r.text[:300]}")
-            data = r.json()
-    except httpx.HTTPError as exc:
-        raise MarketDataError(f"TradingView scanner request failed: {exc}") from exc
-    except ValueError as exc:
-        raise MarketDataError("TradingView scanner returned invalid JSON") from exc
-
-    rows = data.get("data") if isinstance(data, dict) else None
-    if not rows:
-        raise MarketDataError("TradingView scanner returned no OANDA:XAUUSD quote")
-    row = rows[0]
-    values = row.get("d") if isinstance(row, dict) else None
-    if not isinstance(values, list) or not values:
-        raise MarketDataError("TradingView scanner returned no close value")
-    return to_float(values[0])
+    errors = []
+    async with httpx.AsyncClient(timeout=min(REQUEST_TIMEOUT, 6.0)) as client:
+        for market in ("cfd", "forex"):
+            try:
+                r = await client.post(f"https://scanner.tradingview.com/{market}/scan", json=payload, headers=headers)
+                if r.status_code >= 400:
+                    errors.append(f"{market} HTTP {r.status_code}")
+                    continue
+                data = r.json()
+                rows = data.get("data") if isinstance(data, dict) else None
+                if not rows:
+                    errors.append(f"{market}: no rows")
+                    continue
+                values = rows[0].get("d") if isinstance(rows[0], dict) else None
+                if isinstance(values, list) and values and values[0] is not None:
+                    return to_float(values[0])
+                errors.append(f"{market}: no close")
+            except Exception as exc:
+                errors.append(f"{market}: {type(exc).__name__}: {exc}")
+    raise MarketDataError("TradingView OANDA:XAUUSD quote unavailable. " + " | ".join(errors))
 
 
 async def fetch_realmarket_price(symbol: str, interval: str = DEFAULT_INTERVAL) -> float:
@@ -1683,93 +1683,13 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
 
 
 
-async def _openai_book_validate(cache_key: str, context: dict[str, Any], book_signal_value: str) -> dict[str, Any]:
-    """Rate-limit-safe OpenAI validator. One request per candle/key, with cooldowns."""
-    now = datetime.now(timezone.utc).timestamp()
-    cached = AI_CACHE.get(cache_key)
-    if cached and now - cached[0] < AI_CACHE_TTL:
-        return cached[1]
-
-    # Never spend an OpenAI request when the Book itself has no confirmed signal.
-    if book_signal_value not in {"BUY", "SELL"}:
-        result = {"signal": "WAIT", "confidence": 0,
-                  "reason": "Book pattern tasdiqlanmadi — OpenAI so‘rovi yuborilmadi.",
-                  "mode": "book_wait"}
-        AI_CACHE[cache_key] = (now, result)
-        return result
-
-    cooldown_until = OPENAI_COOLDOWN_UNTIL.get(cache_key, 0.0)
-    if now < cooldown_until:
-        result = {"signal": "WAIT", "confidence": 0,
-                  "reason": "OpenAI rate limitdan keyin vaqtincha kutish rejimi.",
-                  "mode": "openai_cooldown"}
-        return result
-
-    async with OPENAI_LOCK:
-        # Another request may have completed while we waited for the lock.
-        now = datetime.now(timezone.utc).timestamp()
-        cached = AI_CACHE.get(cache_key)
-        if cached and now - cached[0] < AI_CACHE_TTL:
-            return cached[1]
-        last = OPENAI_LAST_CALL.get("global", 0.0)
-        if now - last < OPENAI_MIN_INTERVAL:
-            result = {"signal": "WAIT", "confidence": 0,
-                      "reason": "OpenAI so‘rovi juda tez-tez yuborilmasligi uchun kutish rejimi.",
-                      "mode": "openai_throttled"}
-            return result
-        OPENAI_LAST_CALL["global"] = now
-
-        if not OPENAI_API_KEY:
-            result = {"signal": "WAIT", "confidence": 0,
-                      "reason": "OPENAI_API_KEY sozlanmagan.", "mode": "fallback"}
-            AI_CACHE[cache_key] = (now, result)
-            return result
-
-        try:
-            from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=20.0, max_retries=0)
-            prompt = (
-                "You are the second-opinion validator for XAU/USD. "
-                "Use ONLY the supplied SIMPLE TRADING Book pattern analysis and recent OHLC candles. "
-                "Do not add ICT, FVG, order blocks, liquidity, RSI, MACD, or any other strategy. "
-                "Return JSON only with keys signal (BUY/SELL/WAIT), confidence (0-100 integer), reason (short). "
-                "If the book signal is not clearly confirmed by the supplied candles, return WAIT.\n\n" +
-                json.dumps(context, ensure_ascii=False, default=str)
-            )
-            response = await client.responses.create(model=OPENAI_MODEL, input=prompt)
-            text = getattr(response, "output_text", "").strip()
-            try:
-                parsed = json.loads(text) if text else {}
-            except Exception:
-                parsed = {}
-            sig = str(parsed.get("signal", "WAIT")).upper()
-            result = {
-                "signal": sig if sig in {"BUY", "SELL", "WAIT"} else "WAIT",
-                "confidence": max(0, min(100, int(parsed.get("confidence", 0)))),
-                "reason": str(parsed.get("reason", "OpenAI second opinion.")),
-                "mode": "openai",
-            }
-            AI_CACHE[cache_key] = (datetime.now(timezone.utc).timestamp(), result)
-            return result
-        except Exception as exc:
-            msg = str(exc)
-            low = msg.lower()
-            if "429" in low or "rate limit" in low or "too many requests" in low:
-                OPENAI_COOLDOWN_UNTIL[cache_key] = datetime.now(timezone.utc).timestamp() + OPENAI_429_COOLDOWN
-                result = {"signal": "WAIT", "confidence": 0,
-                          "reason": "OpenAI rate limit (429). Keyingi candle/urinishda avtomatik davom etadi.",
-                          "mode": "openai_rate_limited"}
-            else:
-                result = {"signal": "WAIT", "confidence": 0,
-                          "reason": f"OpenAI vaqtincha mavjud emas: {msg[:180]}",
-                          "mode": "fallback"}
-            # Cache fallback briefly so concurrent page requests don't hammer OpenAI.
-            AI_CACHE[cache_key] = (datetime.now(timezone.utc).timestamp(), result)
-            return result
-
-
 async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, Any]:
-    """Book-pattern signal + rate-limit-safe OpenAI second opinion."""
+    """Book-pattern result + OpenAI second opinion using the same live candle feed.
+
+    OpenAI is intentionally called even when Book currently says WAIT, so the UI
+    can show the independent second opinion. To prevent 429 bursts, the result is
+    cached per symbol/timeframe/candle and concurrent requests are coalesced.
+    """
     symbol = clean_symbol(symbol)
     interval = validate_interval(interval)
     candles_data, mode, warning = await get_candles(symbol, interval, 220)
@@ -1777,22 +1697,72 @@ async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, An
         raise MarketDataError(f"{interval} uchun kitob pattern analizi uchun yetarli candle mavjud emas")
 
     book = book_signal(candles_data)
-    recent = candles_data[-80:]
-    # Cache by candle bucket, not by the entire candle payload. This prevents every
-    # live refresh of the forming candle from creating a new OpenAI request.
-    candle_key = str(candles_data[-1].get("time") or candles_data[-1].get("timestamp") or len(candles_data))
-    cache_key = f"book-openai:{symbol}:{interval}:{candle_key}:{book['signal']}"
-    context = {
-        "symbol": symbol,
-        "timeframe": interval,
-        "current_price": candles_data[-1]["close"],
-        "book_signal": book["signal"],
-        "book_reason": book["reason"],
-        "book_patterns": book["patterns"],
-        "recent_candles": recent,
-        "rule": "Validate ONLY the supplied SIMPLE TRADING Book pattern result and candle data. Return BUY, SELL or WAIT. Do not invent other strategies.",
-    }
-    ai = await _openai_book_validate(cache_key, context, book["signal"])
+    last_candle_time = candles_data[-1].get("time")
+    cache_key = f"{symbol}|{interval}"
+
+    async with BOOK_OPENAI_LOCKS_GUARD:
+        lock = BOOK_OPENAI_LOCKS.setdefault(cache_key, asyncio.Lock())
+
+    async with lock:
+        now = datetime.now(timezone.utc).timestamp()
+        cached = BOOK_OPENAI_CACHE.get(cache_key)
+        if cached:
+            cached_at, cached_candle_time, cached_ai = cached
+            # Reuse the exact same AI result while the current candle is unchanged.
+            if cached_candle_time == last_candle_time and now - cached_at < BOOK_OPENAI_CACHE_TTL:
+                ai = dict(cached_ai)
+            else:
+                ai = None
+        else:
+            ai = None
+
+        context = {
+            "symbol": symbol,
+            "timeframe": interval,
+            "current_price": candles_data[-1]["close"],
+            "book_signal": book["signal"],
+            "book_reason": book["reason"],
+            "book_patterns": book["patterns"],
+            "recent_candles": candles_data[-80:],
+            "rule": "Validate ONLY the supplied SIMPLE TRADING Book pattern result and supplied OHLC candles. You may return BUY, SELL or WAIT. Do not invent ICT, FVG, order blocks, liquidity, RSI, MACD, or other strategies.",
+        }
+
+        if ai is None:
+            ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI unavailable.", "mode": "fallback"}
+            if OPENAI_API_KEY:
+                try:
+                    from openai import AsyncOpenAI
+                    client = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=REQUEST_TIMEOUT, max_retries=0)
+                    prompt = (
+                        "You are the second-opinion validator for XAU/USD. "
+                        "Use ONLY the supplied SIMPLE TRADING Book pattern result and recent OHLC candles. "
+                        "Even if the Book signal is WAIT, still evaluate the supplied Book patterns and candles and return your own second opinion as BUY, SELL, or WAIT. "
+                        "Do not add ICT, FVG, order blocks, liquidity, RSI, MACD, or any other strategy. "
+                        "Return JSON only with keys signal (BUY/SELL/WAIT), confidence (0-100 integer), reason (short). "
+                        "Do not invent price data.\n\n" +
+                        json.dumps(context, ensure_ascii=False, default=str)
+                    )
+                    response = await client.responses.create(model=OPENAI_MODEL, input=prompt)
+                    text = getattr(response, "output_text", "").strip()
+                    if text:
+                        try:
+                            parsed = json.loads(text)
+                            sig = str(parsed.get("signal", "WAIT")).upper()
+                            ai = {
+                                "signal": sig if sig in {"BUY", "SELL", "WAIT"} else "WAIT",
+                                "confidence": max(0, min(100, int(parsed.get("confidence", 0)))),
+                                "reason": str(parsed.get("reason", "OpenAI second opinion.")),
+                                "mode": "openai",
+                            }
+                        except Exception:
+                            ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI returned an invalid structured result.", "mode": "openai"}
+                except Exception as exc:
+                    msg = str(exc)
+                    if "429" in msg or "rate limit" in msg.lower():
+                        ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI rate limit (429). Natijani cache qilish va keyingi candle'da qayta tekshirish.", "mode": "rate_limited"}
+                    else:
+                        ai = {"signal": "WAIT", "confidence": 0, "reason": f"OpenAI unavailable: {msg}", "mode": "fallback"}
+            BOOK_OPENAI_CACHE[cache_key] = (now, last_candle_time, dict(ai))
 
     final_signal = book["signal"] if book["signal"] in {"BUY", "SELL"} and ai["signal"] == book["signal"] else "WAIT"
     price = float(candles_data[-1]["close"])
@@ -1809,407 +1779,9 @@ async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, An
         "signal": final_signal, "entry": round(entry, 4) if entry is not None else None,
         "stop_loss": round(sl, 4) if sl is not None else None,
         "take_profit": [round(x, 4) for x in tp],
+        "candle": candles_data[-1], "candles": candles_data,
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "candle": candle_countdown(interval),
-        "candles": candles_data,
     }
-
-
-def _atr_local(candles_data: list[dict[str, Any]], n: int = 14) -> float:
-    if len(candles_data) < 2:
-        return 0.0
-    trs=[]
-    for i in range(max(1, len(candles_data)-n), len(candles_data)):
-        c, p = candles_data[i], candles_data[i-1]
-        trs.append(max(float(c["high"])-float(c["low"]), abs(float(c["high"])-float(p["close"])), abs(float(c["low"])-float(p["close"]))))
-    return sum(trs)/max(1,len(trs))
-
-async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
-    symbol = clean_symbol(symbol)
-    interval = validate_interval(interval)
-    candles_data, mode, warning = await get_candles(symbol, interval, 160)
-    if len(candles_data) < 2:
-        raise MarketDataError(f"{interval} uchun yetarli candle mavjud emas")
-    current = candles_data[-1]["close"]
-    previous_close = candles_data[-2]["close"] if len(candles_data) > 1 else current
-    change_pct = ((current - previous_close) / previous_close * 100) if previous_close else 0
-
-    levels, pivot_warning = await calculate_pivot_for_interval(symbol, interval)
-    calendar = await economic_calendar(2)
-    blocked, news_reason = news_blackout(calendar.get("events", []))
-    setup = build_key_level_signal(candles_data, levels, news_blocked=blocked)
-    ta = technical_analysis(candles_data, levels, setup)
-
-    # Prefer RealMarketAPI Intelligence when the user's plan exposes it.
-    confluence = await fetch_rm_confluence(symbol, interval)
-    rm_trend = await fetch_rm_trend(symbol, interval)
-    if confluence:
-        setup["provider_confluence_signal"] = str(confluence.get("signal") or "").upper() or None
-        setup["provider_score"] = confluence.get("score")
-        setup["provider_strength"] = confluence.get("strength")
-
-    mtf = await multi_timeframe(symbol)
-    ai_context = {
-        "bias": levels["bias"], "signal": setup["signal"], "setup": setup["setup"],
-        "rsi": ta["rsi"], "mtf_overall": mtf["overall"], "levels": levels,
-        "timeframe": interval, "provider_confluence": confluence or {}, "provider_trend": rm_trend or {},
-    }
-    ai = await ai_smart_analysis(ai_context)
-    if setup["signal"] == "SELL":
-        headline = f"SELL • {interval.upper()} • Target {levels['s1']:.2f}"
-    elif setup["signal"] == "BUY":
-        headline = f"BUY • {interval.upper()} • Target {levels['r1']:.2f}"
-    else:
-        headline = f"WAIT • {interval.upper()} • {levels['bias']} bias"
-
-    combined_warning = " | ".join(x for x in [
-        warning, pivot_warning, calendar.get("warning"), news_reason,
-        confluence.get("warning") if confluence else None
-    ] if x)
-    return {
-        "ok": True, "symbol": symbol, "current_price": round(current, 4),
-        "change_pct": round(change_pct, 3), "headline": headline,
-        "direction": setup["signal"], "bias": levels["bias"], "preference": setup["reason"],
-        "setup": setup, "mode": mode, "warning": combined_warning or None,
-        "interval": interval, "updated_at": datetime.now(timezone.utc).isoformat(),
-        "levels": levels, "technical": ta, "multi_timeframe": mtf,
-        "ai_smart": ai, "calendar": calendar, "candle": candle_countdown(interval),
-        "provider_confluence": confluence, "provider_trend": rm_trend,
-    }
-
-
-def settle_signal_row(row: SignalHistory, candles_data: list[dict[str, Any]]) -> bool:
-    if row.outcome not in ("OPEN", "AMBIGUOUS") or row.direction not in ("BUY", "SELL"):
-        return False
-    try:
-        payload = json.loads(row.payload)
-        setup = payload.get("setup", {}) or payload.get("advanced", {})
-        entry = float(setup.get("entry") or 0)
-        sl = float(setup.get("stop_loss") or 0)
-        tps = [float(x) for x in (setup.get("take_profit") or []) if x is not None]
-    except (ValueError, TypeError, json.JSONDecodeError):
-        return False
-    if not entry or not sl or not tps:
-        return False
-    created = row.created_at.replace(tzinfo=timezone.utc) if row.created_at.tzinfo is None else row.created_at
-    changed = False
-    for c in candles_data:
-        ts = datetime.fromtimestamp(c["time"], timezone.utc)
-        if ts <= created:
-            continue
-        tp_hit = c["high"] >= tps[0] if row.direction == "BUY" else c["low"] <= tps[0]
-        sl_hit = c["low"] <= sl if row.direction == "BUY" else c["high"] >= sl
-        if tp_hit and sl_hit:
-            row.outcome = "AMBIGUOUS"
-            row.closed_at = ts
-            changed = True
-            break
-        if tp_hit:
-            row.outcome = "TP HIT"
-            row.closed_at = ts
-            changed = True
-            break
-        if sl_hit:
-            row.outcome = "SL HIT"
-            row.closed_at = ts
-            changed = True
-            break
-    return changed
-
-
-async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 100) -> list[SignalHistory]:
-    rows = session.scalars(select(SignalHistory).where(SignalHistory.user_id == user_id).order_by(SignalHistory.created_at.asc())).all()
-    grouped: dict[tuple[str, str], list[SignalHistory]] = {}
-    for row in rows:
-        if row.outcome in ("TP HIT", "SL HIT"):
-            continue
-        grouped.setdefault((row.symbol, row.interval), []).append(row)
-    changed_any = False
-    for (sym, tf), group in grouped.items():
-        try:
-            candles_data, _, _ = await get_candles(sym, tf, 500)
-        except Exception:
-            continue
-        for row in group:
-            changed_any = settle_signal_row(row, candles_data) or changed_any
-    if changed_any:
-        session.commit()
-    return rows
-
-
-
-class MarketStream:
-    def __init__(self):
-        self.clients={}; self.tasks={}; self.lock=asyncio.Lock()
-    async def add(self,ws,symbol,interval):
-        await ws.accept(); key=(clean_symbol(symbol),validate_interval(interval))
-        async with self.lock:
-            self.clients[ws]=key
-            if key not in self.tasks or self.tasks[key].done(): self.tasks[key]=asyncio.create_task(self._run(key))
-    async def remove(self,ws):
-        async with self.lock:
-            key=self.clients.pop(ws,None)
-            if key and not any(v==key for v in self.clients.values()):
-                t=self.tasks.pop(key,None)
-                if t and not t.done(): t.cancel()
-    async def broadcast(self,key,message):
-        dead=[]
-        async with self.lock: items=[ws for ws,k in self.clients.items() if k==key]
-        for ws in items:
-            try: await ws.send_json(message)
-            except Exception: dead.append(ws)
-        for ws in dead: await self.remove(ws)
-    async def _run(self,key):
-        symbol,interval=key; backoff=1
-        while True:
-            provider=live_provider()
-            try:
-                import websockets
-                if provider=="realmarketapi":
-                    tf=realmarket_timeframe(interval)
-                    url=f"wss://api.realmarketapi.com/price?apiKey={REALMARKET_API_KEY}&symbolCode={realmarket_symbol(symbol)}&timeFrame={tf}"
-                    async with websockets.connect(url,ping_interval=15,ping_timeout=20,close_timeout=5) as ws:
-                        backoff=1; await self.broadcast(key,{"type":"status","status":"connected","provider":"realmarketapi","interval":interval})
-                        while True:
-                            msg=json.loads(await ws.recv())
-                            if isinstance(msg,dict):
-                                try:
-                                    c=_rm_candle(msg); await self.broadcast(key,{"type":"candle","symbol":symbol,"interval":interval,"candle":c,"price":c["close"],"timestamp":c["time"],"source":"realmarketapi"})
-                                except Exception:
-                                    price=msg.get("price") or msg.get("Price") or msg.get("ClosePrice")
-                                    if price is not None: await self.broadcast(key,{"type":"tick","symbol":symbol,"price":float(price),"timestamp":int(float(msg.get("timestamp") or datetime.now(timezone.utc).timestamp())),"source":"realmarketapi"})
-                elif provider=="twelvedata":
-                    url=f"wss://ws.twelvedata.com/v1/quotes/price?apikey={TWELVE_DATA_API_KEY}"
-                    async with websockets.connect(url,ping_interval=10,ping_timeout=20,close_timeout=5) as ws:
-                        await ws.send(json.dumps({"action":"subscribe","params":{"symbols":symbol}})); backoff=1
-                        await self.broadcast(key,{"type":"status","status":"connected","provider":"twelvedata","interval":interval})
-                        while True:
-                            msg=json.loads(await ws.recv())
-                            if msg.get("event")=="price": await self.broadcast(key,{"type":"tick","symbol":symbol,"price":float(msg["price"]),"timestamp":int(float(msg.get("timestamp") or datetime.now(timezone.utc).timestamp())),"source":"twelvedata"})
-                else:
-                    await self.broadcast(key,{"type":"error","code":"LIVE_NOT_CONFIGURED","message":"Set REALMARKET_API_KEY or TWELVE_DATA_API_KEY."}); return
-            except asyncio.CancelledError: raise
-            except Exception as exc:
-                await self.broadcast(key,{"type":"reconnecting","message":str(exc),"retry_in":backoff}); await asyncio.sleep(backoff); backoff=min(backoff*2,30)
-
-market_stream = MarketStream()
-
-@app.get("/api/health")
-async def health() -> dict[str, Any]:
-    return {"status":"ok","provider":live_provider() or MARKET_PROVIDER,"realmarket_configured":bool(REALMARKET_API_KEY),"twelvedata_configured":bool(TWELVE_DATA_API_KEY),"market_api_configured":bool(live_provider()),"calendar_configured":bool(FINNHUB_API_KEY),"ai_configured":bool(OPENAI_API_KEY),"database":DATABASE_URL.split(":",1)[0],"realtime_stream":bool(live_provider()),"allow_demo":ALLOW_DEMO,"timestamp":datetime.now(timezone.utc).isoformat()}
-
-@app.get("/api/market/diagnostics")
-async def market_diagnostics() -> dict[str, Any]:
-    result={"symbol":DEFAULT_SYMBOL,"providers":{},"timestamp":datetime.now(timezone.utc).isoformat()}
-    for name, configured in (("realmarketapi", REALMARKET_API_KEY),("twelvedata",TWELVE_DATA_API_KEY)):
-        item={"configured":bool(configured),"ok":False}
-        if configured:
-            try:
-                if name=="realmarketapi":
-                    item["price"]=await fetch_realmarket_price(DEFAULT_SYMBOL, DEFAULT_INTERVAL)
-                else:
-                    item["price"]=await fetch_twelvedata_price(clean_symbol(DEFAULT_SYMBOL))
-                item["ok"]=True
-            except Exception as exc:
-                item["error"]=f"{type(exc).__name__}: {exc}"
-        result["providers"][name]=item
-    result["live_ready"]=any(x.get("ok") for x in result["providers"].values())
-    return result
-
-
-@app.get("/api/email/smtp-status")
-async def smtp_status() -> dict[str, Any]:
-    return {
-        "configured": smtp_configured(),
-        "host": SMTP_HOST,
-        "port": SMTP_PORT,
-        "user_present": bool(SMTP_USER),
-        "from_present": bool(SMTP_FROM),
-        "password_present": bool(SMTP_PASSWORD),
-        "starttls": SMTP_USE_STARTTLS and not (SMTP_USE_SSL or SMTP_PORT == 465),
-        "ssl": SMTP_USE_SSL or SMTP_PORT == 465,
-        "require_delivery": REQUIRE_EMAIL_DELIVERY,
-        "note": "Gmail SMTP 535/534 auth errors normally mean App Password/2-Step Verification or account credentials are incorrect." if SMTP_HOST == "smtp.gmail.com" else "Check SMTP credentials and provider security settings.",
-    }
-
-
-@app.post("/api/auth/register")
-async def register(body: RegisterBody, session: Session = Depends(db)) -> dict[str, Any]:
-    email = body.email.strip().lower()
-    if not valid_email(email):
-        raise HTTPException(status_code=400, detail="To'g'ri elektron pochta manzilini kiriting, masalan: user@gmail.com")
-    if session.scalar(select(User).where(User.email == email)):
-        raise HTTPException(status_code=409, detail="Bu elektron pochta allaqachon ro'yxatdan o'tgan")
-
-    login_name, generated_password = generate_credentials()
-    while session.scalar(select(User).where(User.username == login_name)):
-        login_name, generated_password = generate_credentials()
-
-    # Generate a unique login/password for every email address.
-    # The normalized email address is unique and is never reused.
-    emailed, email_status = send_credentials_email(email, login_name, generated_password)
-    if REQUIRE_EMAIL_DELIVERY and not emailed:
-        raise HTTPException(status_code=503, detail=email_status + " Hisob yaratilmaydi; SMTP sozlamalarini tekshiring.")
-
-    user = User(email=email, username=login_name, password_hash=hash_password(generated_password))
-    user.subscription = Subscription(plan="free", status="active", renews_at=None)
-    session.add(user)
-    session.commit()
-    session.refresh(user)
-
-    result = {
-        "token": create_session(user.id, session),
-        "user": {"id": user.id, "login": login_name, "email": email, "plan": "free"},
-        "email_sent": emailed,
-        "email_message": email_status,
-        "credentials_delivery": "email" if emailed else "local_fallback",
-    }
-    # Only expose credentials when SMTP delivery did not succeed (development fallback).
-    if not emailed:
-        result["credentials"] = {"login": login_name, "password": generated_password}
-    return result
-
-
-@app.post("/api/auth/login")
-async def login(body: AuthBody, session: Session = Depends(db)) -> dict[str, Any]:
-    identity = body.username.strip()
-    if not identity or not body.password:
-        raise HTTPException(status_code=400, detail="Login va parolni kiriting")
-    if "@" in identity:
-        user = session.scalar(select(User).where(User.email == identity.lower()))
-    else:
-        user = session.scalar(select(User).where(User.username == identity))
-        if user is None:
-            user = session.scalar(select(User).where(User.username == identity.upper()))
-        if user is None:
-            user = session.scalar(select(User).where(User.email == identity.lower()))
-    if not user or not verify_password(body.password, user.password_hash):
-        raise HTTPException(status_code=401, detail="Login yoki parol noto'g'ri")
-    plan = user.subscription.plan if user.subscription else "free"
-    return {"token": create_session(user.id, session), "user": {"id": user.id, "login": user.username or user.email, "email": user.email, "plan": plan}}
-
-
-@app.post("/api/auth/logout")
-async def logout(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, str]:
-    if authorization and authorization.lower().startswith("bearer "):
-        raw = authorization.split(" ", 1)[1].strip()
-        row = session.scalar(select(SessionToken).where(SessionToken.token_hash == token_hash(raw)))
-        if row:
-            session.delete(row); session.commit()
-    return {"status": "ok"}
-
-
-
-@app.get("/api/auth/me")
-async def auth_me(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    user = current_user(authorization, session)
-    plan = user.subscription.plan if user.subscription else "free"
-    return {"user":{"id":user.id,"login":user.username or user.email,"email":user.email,"plan":plan},"plan":plan}
-
-
-@app.websocket("/api/v1/ws/market/{symbol:path}")
-async def market_websocket(ws: WebSocket, symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> None:
-    normalized=clean_symbol(symbol)
-    if not REALMARKET_API_KEY:
-        await ws.accept(); await ws.send_json({"type":"error","code":"LIVE_NOT_CONFIGURED","message":"LIVE market stream requires REALMARKET_API_KEY."}); await ws.close(code=1013); return
-    await market_stream.add(ws,normalized,interval)
-    try:
-        await ws.send_json({"type":"status","status":"connecting","symbol":normalized,"interval":validate_interval(interval)})
-        while True: await ws.receive_text()
-    except WebSocketDisconnect: pass
-    except Exception: pass
-    finally: await market_stream.remove(ws)
-
-
-@app.get("/api/v1/candles/{symbol:path}")
-async def candles(symbol: str, interval: str = Query(DEFAULT_INTERVAL), limit: int = Query(CANDLE_LIMIT, ge=50, le=500)) -> dict[str, Any]:
-    interval = validate_interval(interval)
-    symbol = clean_symbol(symbol)
-    try:
-        data, mode, provider_name = await get_chart_history(symbol, interval, 31)
-        warning = provider_name if mode == "live" else provider_name
-        return {"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"count":len(data),"candles":data,"candle":candle_countdown(interval),"history_days":31 if mode=="live" else None,"provider":provider_name}
-    except MarketDataError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
-    return {"symbol": symbol, "interval": interval, "mode": mode, "warning": warning, "count": len(data), "candles": data, "candle": candle_countdown(interval), "history_days": None}
-
-
-@app.get("/api/v1/quote/{symbol:path}")
-async def quote(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
-    interval = validate_interval(interval)
-    symbol = clean_symbol(symbol); errors=[]
-    try:
-        price = await fetch_tradingview_price(symbol)
-        return {"symbol":symbol,"price":price,"mode":"live","provider":"TradingView OANDA:XAUUSD","timestamp":datetime.now(timezone.utc).isoformat()}
-    except MarketDataError as exc:
-        errors.append(f"tradingview: {exc}")
-    try:
-        node_url=f"{NODE_MARKET_URL}/market/price?symbol={urlquote(symbol)}"
-        async with httpx.AsyncClient(timeout=NODE_QUOTE_TIMEOUT) as client:
-            r=await client.get(node_url); data=r.json() if r.content else {}
-        if r.is_success and isinstance(data,dict) and data.get("price") is not None:
-            return {"symbol":symbol,"price":to_float(data["price"]),"mode":"live","provider":data.get("provider","node-market-gateway"),"timestamp":datetime.now(timezone.utc).isoformat()}
-        errors.append(f"node: {data.get('error','no live cached quote') if isinstance(data,dict) else 'invalid response'}")
-    except Exception as exc: errors.append(f"node: {type(exc).__name__}: {exc}")
-    if live_provider() == "yahoo":
-        try:
-            price = await fetch_yahoo_price(symbol)
-            return {"symbol":symbol,"price":price,"mode":"live","provider":"yahoo-gold","timestamp":datetime.now(timezone.utc).isoformat()}
-        except MarketDataError as exc:
-            errors.append(f"yahoo: {exc}")
-    try:
-        price=await fetch_realmarket_price(symbol, interval)
-        return {"symbol":symbol,"price":price,"mode":"live","provider":"realmarketapi","timestamp":datetime.now(timezone.utc).isoformat()}
-    except MarketDataError as exc:
-        errors.append(f"realmarketapi /price: {exc}")
-        # Stable fallback: the latest provider candle close is still current market
-        # data and is enough to keep the dashboard/Book/OpenAI pipeline alive.
-        try:
-            bars = await fetch_realmarket_candles(symbol, interval, 3)
-            if bars:
-                return {"symbol":symbol,"price":float(bars[-1]["close"]),"mode":"live","provider":"realmarketapi-candle","timestamp":datetime.now(timezone.utc).isoformat()}
-        except MarketDataError as candle_exc:
-            errors.append(f"realmarketapi /candle: {candle_exc}")
-    try:
-        bars = await fetch_yahoo_candles(symbol, interval, 3)
-        if bars:
-            return {"symbol":symbol,"price":float(bars[-1]["close"]),"mode":"live","provider":"yahoo-gold-proxy-candle","timestamp":datetime.now(timezone.utc).isoformat()}
-    except MarketDataError as exc:
-        errors.append(f"yahoo candle: {exc}")
-    raise HTTPException(status_code=503, detail="No live quote available. " + " | ".join(errors))
-
-
-@app.get("/api/v1/market/snapshot/{symbol:path}")
-async def market_snapshot(symbol: str, interval: str = Query(DEFAULT_INTERVAL), limit: int = Query(160, ge=50, le=500)) -> dict[str, Any]:
-    """Single canonical market snapshot: the same RealMarketAPI candles feed chart metadata and analysis consumers."""
-    interval = validate_interval(interval); symbol = clean_symbol(symbol)
-    candles_data, mode, warning = await get_candles(symbol, interval, limit)
-    analysis = await build_full_analysis(symbol, interval)
-    return {"symbol":symbol,"interval":interval,"mode":mode,"provider":live_provider() or "market","warning":warning,"candles":candles_data,"analysis":analysis,"generated_at":datetime.now(timezone.utc).isoformat()}
-
-
-@app.get("/api/v1/analysis/{symbol:path}")
-async def get_symbol_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
-    try:
-        return await build_full_analysis(symbol, interval)
-    except Exception as exc:
-        # Keep the dashboard usable and show the real backend cause instead of
-        # silently leaving Signal/Pivot fields as dashes.
-        return {
-            "ok": False,
-            "mode": "error",
-            "provider": live_provider() or "none",
-            "error": str(exc),
-            "symbol": clean_symbol(symbol),
-            "interval": validate_interval(interval),
-            "direction": "WAIT",
-            "headline": "Analysis unavailable: " + str(exc),
-            "setup": {"signal":"WAIT","entry":None,"stop_loss":None,"take_profit":[],"reason":str(exc)},
-            "levels": {},
-            "technical": {},
-            "multi_timeframe": {"overall":"UNAVAILABLE","timeframes":{},"errors":{"analysis":str(exc)}},
-            "ai_smart": {"mode":"fallback","summary":"Backend analysis error","bias":"NEUTRAL","confidence":0,"advice":"Check market-data provider."},
-        }
 
 
 @app.get("/api/v1/book-openai-analysis/{symbol:path}")

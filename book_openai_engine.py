@@ -5,8 +5,7 @@ import json
 import math
 
 
-def _f(c: dict[str, Any], k: str = "close") -> float:
-    """Read a candle field; default to close for backward-compatible callers."""
+def _f(c: dict[str, Any], k: str) -> float:
     return float(c[k])
 
 

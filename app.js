@@ -75,7 +75,8 @@ async function loadMain(force=false){
   try{
     const d=await api(`/api/v1/book-openai-analysis/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}${force?'&fresh=1':''}`);
     renderBookOpenAI(d);
-    if(d.current_price!=null) $('price').textContent=fmt(d.current_price);
+    // The price beside the chart is updated only by the canonical TradingView/OANDA quote heartbeat.
+    // Do not paint the Book candle-feed price here: it can be a different provider/feed.
     countdownData=d.candle||countdownData; updateCountdown();
     if(d.signal) markSignal(d.signal, d.candles?.[d.candles.length-1]?.time || Math.floor(Date.now()/1000));
     return d;
