@@ -442,6 +442,139 @@ def atr(candles: list[dict[str, Any]], period: int = 14) -> float:
     return sum(values) / len(values) if values else 0.0
 
 
+
+def ema(values: list[float], period: int) -> float:
+    if not values:
+        return 0.0
+    period = max(1, int(period))
+    k = 2.0 / (period + 1.0)
+    value = float(values[0])
+    for v in values[1:]:
+        value = float(v) * k + value * (1.0 - k)
+    return value
+
+
+def ema_series(values: list[float], period: int) -> list[float]:
+    if not values:
+        return []
+    period = max(1, int(period))
+    k = 2.0 / (period + 1.0)
+    out = [float(values[0])]
+    for v in values[1:]:
+        out.append(float(v) * k + out[-1] * (1.0 - k))
+    return out
+
+
+def macd(candles: list[dict[str, Any]], fast_period: int = 12, slow_period: int = 26, signal_period: int = 9) -> dict[str, float | str]:
+    closes = [float(c["close"]) for c in candles]
+    if len(closes) < slow_period + signal_period:
+        return {"macd": 0.0, "signal": 0.0, "histogram": 0.0, "state": "UNAVAILABLE"}
+    fast = ema_series(closes, fast_period)
+    slow = ema_series(closes, slow_period)
+    line = [a - b for a, b in zip(fast, slow)]
+    sig = ema_series(line, signal_period)
+    m, sg = line[-1], sig[-1]
+    state = "BULLISH" if m > sg and m > 0 else "BEARISH" if m < sg and m < 0 else "MIXED"
+    return {"macd": round(m, 5), "signal": round(sg, 5), "histogram": round(m - sg, 5), "state": state}
+
+
+def bollinger(candles: list[dict[str, Any]], period: int = 20, std_mult: float = 2.0) -> dict[str, float | str]:
+    closes = [float(c["close"]) for c in candles]
+    if len(closes) < period:
+        return {"middle": 0.0, "upper": 0.0, "lower": 0.0, "width": 0.0, "position": 50.0, "state": "UNAVAILABLE"}
+    window = closes[-period:]
+    middle = sum(window) / period
+    variance = sum((x - middle) ** 2 for x in window) / period
+    sd = math.sqrt(max(variance, 0.0))
+    upper, lower = middle + std_mult * sd, middle - std_mult * sd
+    width = ((upper - lower) / middle * 100.0) if middle else 0.0
+    current = closes[-1]
+    position = ((current - lower) / (upper - lower) * 100.0) if upper > lower else 50.0
+    position = max(0.0, min(100.0, position))
+    state = "UPPER_BAND" if position >= 85 else "LOWER_BAND" if position <= 15 else "MID_RANGE"
+    return {"middle": round(middle, 4), "upper": round(upper, 4), "lower": round(lower, 4), "width": round(width, 3), "position": round(position, 1), "state": state}
+
+
+def stochastic(candles: list[dict[str, Any]], period: int = 14, smooth: int = 3) -> dict[str, float | str]:
+    if len(candles) < period:
+        return {"k": 50.0, "d": 50.0, "state": "UNAVAILABLE"}
+    ks = []
+    for i in range(period - 1, len(candles)):
+        window = candles[i - period + 1:i + 1]
+        hi = max(float(x["high"]) for x in window)
+        lo = min(float(x["low"]) for x in window)
+        close = float(candles[i]["close"])
+        ks.append(50.0 if hi == lo else (close - lo) / (hi - lo) * 100.0)
+    k = ks[-1]
+    d = sum(ks[-smooth:]) / min(smooth, len(ks))
+    state = "OVERBOUGHT" if k >= 80 else "OVERSOLD" if k <= 20 else "NEUTRAL"
+    return {"k": round(k, 2), "d": round(d, 2), "state": state}
+
+
+def adx(candles: list[dict[str, Any]], period: int = 14) -> dict[str, float | str]:
+    if len(candles) < period + 2:
+        return {"adx": 0.0, "plus_di": 0.0, "minus_di": 0.0, "state": "UNAVAILABLE"}
+    trs, plus_dm, minus_dm = [], [], []
+    for i in range(1, len(candles)):
+        cur, prev = candles[i], candles[i - 1]
+        hi, lo, pc = float(cur["high"]), float(cur["low"]), float(prev["close"])
+        ph, pl = float(prev["high"]), float(prev["low"])
+        trs.append(max(hi - lo, abs(hi - pc), abs(lo - pc)))
+        up, down = hi - ph, pl - lo
+        plus_dm.append(up if up > down and up > 0 else 0.0)
+        minus_dm.append(down if down > up and down > 0 else 0.0)
+    tr = sum(trs[-period:]) / period
+    pdm = sum(plus_dm[-period:]) / period
+    mdm = sum(minus_dm[-period:]) / period
+    if tr <= 0:
+        return {"adx": 0.0, "plus_di": 0.0, "minus_di": 0.0, "state": "RANGE"}
+    pdi, mdi = 100.0 * pdm / tr, 100.0 * mdm / tr
+    dx = 100.0 * abs(pdi - mdi) / max(pdi + mdi, 1e-9)
+    state = "STRONG_BULLISH" if dx >= 25 and pdi > mdi else "STRONG_BEARISH" if dx >= 25 and mdi > pdi else "RANGE"
+    return {"adx": round(dx, 2), "plus_di": round(pdi, 2), "minus_di": round(mdi, 2), "state": state}
+
+
+def momentum(candles: list[dict[str, Any]], period: int = 10) -> dict[str, float | str]:
+    closes = [float(c["close"]) for c in candles]
+    if len(closes) <= period:
+        return {"value": 0.0, "percent": 0.0, "state": "UNAVAILABLE"}
+    base = closes[-period - 1]
+    value = closes[-1] - base
+    pct = value / base * 100.0 if base else 0.0
+    state = "BULLISH" if pct > 0.05 else "BEARISH" if pct < -0.05 else "NEUTRAL"
+    return {"value": round(value, 4), "percent": round(pct, 3), "state": state}
+
+
+def technical_confluence(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dict[str, Any]:
+    closes = [float(c["close"]) for c in candles]
+    current = closes[-1]
+    e20, e50, e200 = ema(closes, 20), ema(closes, 50), ema(closes, 200)
+    m = macd(candles); a = adx(candles); st = stochastic(candles); bb = bollinger(candles); mom = momentum(candles)
+    score = 0
+    reasons = []
+    if current > e20: score += 1; reasons.append("price above EMA20")
+    elif current < e20: score -= 1; reasons.append("price below EMA20")
+    if e20 > e50: score += 2; reasons.append("EMA20 > EMA50")
+    elif e20 < e50: score -= 2; reasons.append("EMA20 < EMA50")
+    if e50 > e200: score += 2; reasons.append("EMA50 > EMA200")
+    elif e50 < e200: score -= 2; reasons.append("EMA50 < EMA200")
+    if m["state"] == "BULLISH": score += 2; reasons.append("MACD bullish")
+    elif m["state"] == "BEARISH": score -= 2; reasons.append("MACD bearish")
+    if a["state"] == "STRONG_BULLISH": score += 2; reasons.append("ADX directional bullish")
+    elif a["state"] == "STRONG_BEARISH": score -= 2; reasons.append("ADX directional bearish")
+    if mom["state"] == "BULLISH": score += 1
+    elif mom["state"] == "BEARISH": score -= 1
+    if st["state"] == "OVERBOUGHT" and st["k"] < st["d"]: score -= 1; reasons.append("stochastic bearish turn")
+    elif st["state"] == "OVERSOLD" and st["k"] > st["d"]: score += 1; reasons.append("stochastic bullish turn")
+    if current > float(levels["pivot"]): score += 1
+    elif current < float(levels["pivot"]): score -= 1
+    direction = "BULLISH" if score >= 4 else "BEARISH" if score <= -4 else "MIXED"
+    strength = min(99, 50 + abs(score) * 5)
+    return {"score": score, "direction": direction, "strength": strength,
+            "ema20": round(e20, 4), "ema50": round(e50, 4), "ema200": round(e200, 4),
+            "macd": m, "adx": a, "stochastic": st, "bollinger": bb, "momentum": mom,
+            "reasons": reasons}
+
 def calculate_pivot_levels(high: float, low: float, close: float, current: float) -> dict[str, Any]:
     pivot = (high + low + close) / 3.0
     return {
@@ -900,10 +1033,12 @@ def demo_candles() -> list[dict[str, Any]]:
 
 
 async def fetch_live_price_any(symbol: str) -> tuple[float, str]:
-    """Return a fresh shared quote for all analysis modules.
+    """Return a fresh quote using the SAME candle feed used by analysis.
 
-    A tiny cache prevents MTF/Signal/TA/Pivot from making seven identical quote
-    requests at once while still refreshing fast enough for live analysis.
+    RealMarketAPI's standalone /price endpoint has produced provider-side
+    validation errors in some plans. To prevent the dashboard quote from
+    diverging from the analysis feed, use the latest real 1-minute candle close
+    as the primary quote, then Twelve Data as a secondary provider.
     """
     key = clean_symbol(symbol)
     now_mono = asyncio.get_running_loop().time()
@@ -913,11 +1048,13 @@ async def fetch_live_price_any(symbol: str) -> tuple[float, str]:
     errors = []
     if REALMARKET_API_KEY:
         try:
-            price = await fetch_realmarket_price(symbol)
-            LIVE_PRICE_CACHE[key] = (now_mono, price, "RealMarketAPI")
-            return price, "RealMarketAPI"
+            rows = await fetch_realmarket_candles(symbol, "1min", 3)
+            if rows:
+                price = float(rows[-1]["close"])
+                LIVE_PRICE_CACHE[key] = (now_mono, price, "RealMarketAPI M1 candle")
+                return price, "RealMarketAPI M1 candle"
         except Exception as exc:
-            errors.append(f"RealMarketAPI: {exc}")
+            errors.append(f"RealMarketAPI M1 candle: {exc}")
     if TWELVE_DATA_API_KEY:
         try:
             price = await fetch_twelvedata_price(symbol)
@@ -925,6 +1062,14 @@ async def fetch_live_price_any(symbol: str) -> tuple[float, str]:
             return price, "Twelve Data"
         except Exception as exc:
             errors.append(f"Twelve Data: {exc}")
+    try:
+        rows = await fetch_yahoo_candles(symbol, "5min", 2)
+        if rows:
+            price = float(rows[-1]["close"])
+            LIVE_PRICE_CACHE[key] = (now_mono, price, "Yahoo gold proxy")
+            return price, "Yahoo gold proxy"
+    except Exception as exc:
+        errors.append(f"Yahoo: {exc}")
     raise MarketDataError("Fresh live price unavailable. " + " | ".join(errors))
 
 
@@ -1274,12 +1419,16 @@ def technical_analysis(candles_data: list[dict[str, Any]], levels: dict[str, Any
         rsi_state = "OVERSOLD"
     else:
         rsi_state = "NEUTRAL"
+    confluence = technical_confluence(candles_data, levels)
+    aligned = (setup["signal"] == "BUY" and confluence["direction"] == "BULLISH") or (setup["signal"] == "SELL" and confluence["direction"] == "BEARISH")
+    confidence = max(35, min(95, int(confluence["strength"] + (8 if aligned else -3 if setup["signal"] != "WAIT" else 0))))
     return {
         "rsi": round(r, 2), "rsi_state": rsi_state, "atr": round(a, 4),
         "pivot": levels["pivot"], "support": [levels["s1"], levels["s2"], levels["s3"]],
         "resistance": [levels["r1"], levels["r2"], levels["r3"]],
         "trend": levels["bias"], "signal": setup["signal"],
-        "summary": f"RSI {r:.1f} ({rsi_state}); Pivot {levels['pivot']:.2f}; trend {levels['bias']}; setup {setup['setup']}.",
+        "confluence": confluence, "confluence_confidence": confidence, "signal_aligned": aligned,
+        "summary": f"RSI {r:.1f} ({rsi_state}); EMA/MACD/ADX {confluence['direction']} ({confluence['score']:+d}); Pivot {levels['pivot']:.2f}; setup {setup['setup']}.",
     }
 
 
@@ -1316,134 +1465,111 @@ async def fetch_rm_trend(symbol: str, interval: str) -> dict[str, Any] | None:
         return None
 
 async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict[str, Any], str | None]:
-    """Classic Pivot levels based on the previous completed candle of the selected timeframe.
-    This intentionally does NOT force D1 for every timeframe.
+    """Calculate the classic pivot reference ONLY from the selected timeframe.
+
+    No cross-timeframe fallback is allowed: M5 must use M5, M15 uses M15,
+    M30 is built from M15 candles into true M30 bars, and so on.
     """
     interval = validate_interval(interval)
-    source_interval = interval
-    warning = None
-    try:
-        data, _, _ = await get_candles(symbol, interval, 80)
-    except Exception as exc:
-        # M30 is locally built from M15. If a very short timeframe is unavailable,
-        # use M5 as an explicitly labelled fallback rather than returning empty levels.
-        source_interval = "5min" if interval in {"1min", "30min"} else "1h"
-        data, _, _ = await get_candles(symbol, source_interval, 80)
-        warning = f"{interval} Pivot {source_interval} ma'lumotidan hisoblandi: {exc}"
-    if interval == "30min" and source_interval == "30min":
-        pass
-    if len(data) < 2:
-        raise MarketDataError(f"{interval} uchun Pivot hisoblashga yetarli candle yo'q")
+    data, _, provider = await get_candles(symbol, interval, 100)
+    if len(data) < 3:
+        raise MarketDataError(f"{interval} uchun Pivot hisoblashga yetarli real candle yo'q")
     ref = data[-2]
     current = float(data[-1]["close"])
     levels = calculate_pivot_levels(float(ref["high"]), float(ref["low"]), float(ref["close"]), current)
     levels["timeframe"] = interval
-    levels["source_timeframe"] = source_interval
+    levels["source_timeframe"] = interval
     levels["reference_time"] = ref.get("time")
-    levels["warning"] = warning
-    return levels, warning
+    levels["provider"] = provider
+    levels["warning"] = None
+    return levels, None
 
 
-def _cluster_price_points(points: list[tuple[float, str]], tolerance: float) -> list[dict[str, Any]]:
-    """Cluster real swing prices into objective price zones."""
-    if not points:
-        return []
-    pts=sorted(points, key=lambda x:x[0])
+
+def _zone_weight(kind: str) -> int:
+    return {"swing_high":18,"swing_low":18,"previous_high":16,"previous_low":16,"rejection_high":20,"rejection_low":20,"fvg_bullish":15,"fvg_bearish":15,"order_block_bullish":22,"order_block_bearish":22,"range_high":14,"range_low":14,"liquidity_high":12,"liquidity_low":12,"pivot_r1":8,"pivot_r2":8,"pivot_s1":8,"pivot_s2":8}.get(kind,8)
+
+def _build_zone_clusters(points: list[dict[str, Any]], side: str, current: float, atr_value: float) -> list[dict[str, Any]]:
+    tolerance=max(atr_value*0.28,current*0.00020)
+    pts=sorted(points,key=lambda x:float(x["price"]))
     clusters=[]
-    for price, kind in pts:
-        if not clusters or abs(price-clusters[-1]["center"]) > tolerance:
-            clusters.append({"prices":[price],"kinds":[kind],"center":price})
+    for point in pts:
+        price=float(point["price"])
+        if side=="support" and price>=current-atr_value*0.06: continue
+        if side=="resistance" and price<=current+atr_value*0.06: continue
+        if not clusters or abs(price-clusters[-1]["center"])>tolerance:
+            clusters.append({"points":[point],"center":price})
         else:
-            clusters[-1]["prices"].append(price)
-            clusters[-1]["kinds"].append(kind)
-            clusters[-1]["center"]=sum(clusters[-1]["prices"])/len(clusters[-1]["prices"])
-    return clusters
+            clusters[-1]["points"].append(point)
+            clusters[-1]["center"]=sum(float(x["price"]) for x in clusters[-1]["points"])/len(clusters[-1]["points"])
+    out=[]
+    for c in clusters:
+        ps=c["points"]; center=float(c["center"]); touches=len(ps)
+        weight=sum(_zone_weight(str(x.get("kind",""))) for x in ps)
+        recency=sum(float(x.get("recency",0)) for x in ps)/max(1,touches)
+        width=max(atr_value*0.10,min(atr_value*0.36,tolerance*0.72))
+        strength=min(100,int(28+min(32,weight*.32)+min(24,(touches-1)*8)+recency*16))
+        out.append({"id":None,"min":round(center-width,2),"max":round(center+width,2),"center":round(center,2),"strength":strength,"touches":touches,"evidence":sorted(set(str(x.get("kind")) for x in ps)),"distance":round(abs(current-center),4),"role":"DEMAND" if side=="support" else "SUPPLY"})
+    out.sort(key=lambda z:(-z["strength"],z["distance"]))
+    for i,z in enumerate(out[:6]): z["id"]=i
+    return out[:6]
 
-
-def build_ai_zone_candidates(candles: list[dict[str, Any]], levels: dict[str, Any], setup: dict[str, Any], ta: dict[str, Any]) -> dict[str, Any]:
-    """Build support/resistance zones strictly from the supplied real OHLC candles.
-    AI is used later to rank/name these candidates; it is never allowed to invent prices.
-    """
-    if len(candles) < 12:
-        raise MarketDataError("AI zones uchun yetarli real candle mavjud emas")
-    current=float(candles[-1]["close"])
-    a=max(float(ta.get("atr") or atr(candles)), 0.01)
-    highs,lows=_swing_points(candles[-120:], left=2, right=2)
-    offset=len(candles)-min(120,len(candles))
-    high_points=[(float(candles[i+offset]["high"]),"swing_high") for i,_ in highs]
-    low_points=[(float(candles[i+offset]["low"]),"swing_low") for i,_ in lows]
-    # Previous completed candle and classic pivot levels are candidates only; the zone engine
-    # still clusters them with actual swing/rejection prices instead of displaying raw pivots.
+def build_real_market_zones(candles: list[dict[str, Any]], levels: dict[str, Any], interval: str) -> dict[str, Any]:
+    if len(candles)<30: raise MarketDataError(f"{interval} uchun zonalarni hisoblashga yetarli real candle yo'q")
+    current=float(candles[-1]["close"]); a=max(float(atr(candles)),current*0.00025,0.01)
+    support=[]; resistance=[]; window=candles[-180:]; highs,lows=_swing_points(window,2,2); n=len(window)
+    for i,v in lows[-35:]: support.append({"price":float(v),"kind":"swing_low","recency":i/max(1,n)})
+    for i,v in highs[-35:]: resistance.append({"price":float(v),"kind":"swing_high","recency":i/max(1,n)})
     prev=candles[-2]
-    high_points += [(float(prev["high"]),"previous_high"),(float(levels["r1"]),"pivot_r1"),(float(levels["r2"]),"pivot_r2")]
-    low_points += [(float(prev["low"]),"previous_low"),(float(levels["s1"]),"pivot_s1"),(float(levels["s2"]),"pivot_s2")]
-    tol=max(a*0.35, current*0.00035)
-    def make_zones(points, side):
-        zones=[]
-        for c in _cluster_price_points(points,tol):
-            center=float(c["center"])
-            if side=="support" and center>=current+a*0.15: continue
-            if side=="resistance" and center<=current-a*0.15: continue
-            strength=min(100,35+len(c["prices"])*15+sum(1 for k in c["kinds"] if "swing" in k)*8)
-            half=max(a*0.18, (max(c["prices"])-min(c["prices"]))/2 + a*0.05)
-            zones.append({"min":round(center-half,2),"max":round(center+half,2),"center":round(center,2),"strength":int(strength),"evidence":sorted(set(c["kinds"]))})
-        zones.sort(key=lambda z:(abs(z["center"]-current),-z["strength"]))
-        return zones[:4]
-    support=make_zones(low_points,"support")
-    resistance=make_zones(high_points,"resistance")
-    # Add a demand/supply candidate from the latest confirmed rejection if available.
-    last=candles[-1]; body=abs(float(last["close"])-float(last["open"]))
-    lower_wick=min(float(last["open"]),float(last["close"]))-float(last["low"])
-    upper_wick=float(last["high"])-max(float(last["open"]),float(last["close"]))
-    rejection=None
-    if lower_wick > max(body*1.25,a*0.12):
-        rejection={"type":"DEMAND_REJECTION","min":round(float(last["low"]),2),"max":round(min(float(last["open"]),float(last["close"]))+a*0.10,2),"center":round((float(last["low"])+min(float(last["open"]),float(last["close"])))/2,2),"strength":70,"evidence":["latest_lower_wick_rejection"]}
-    elif upper_wick > max(body*1.25,a*0.12):
-        rejection={"type":"SUPPLY_REJECTION","min":round(max(float(last["open"]),float(last["close"]))-a*0.10,2),"max":round(float(last["high"]),2),"center":round((float(last["high"])+max(float(last["open"]),float(last["close"])))/2,2),"strength":70,"evidence":["latest_upper_wick_rejection"]}
-    return {"current_price":round(current,4),"atr":round(a,4),"support_zones":support,"resistance_zones":resistance,"latest_rejection":rejection,"pivot_reference":{"pivot":levels["pivot"],"r1":levels["r1"],"r2":levels["r2"],"s1":levels["s1"],"s2":levels["s2"]}}
+    support.append({"price":float(prev["low"]),"kind":"previous_low","recency":1.0}); resistance.append({"price":float(prev["high"]),"kind":"previous_high","recency":1.0})
+    for i,c in enumerate(candles[-30:],start=max(0,len(candles)-30)):
+        o,h,l,cl=map(float,(c["open"],c["high"],c["low"],c["close"])); body=abs(cl-o); lw=min(o,cl)-l; uw=h-max(o,cl); rec=i/max(1,len(candles)-1)
+        if lw>max(body*1.25,a*.12): support.append({"price":l,"kind":"rejection_low","recency":rec})
+        if uw>max(body*1.25,a*.12): resistance.append({"price":h,"kind":"rejection_high","recency":rec})
+    for size in (20,50):
+        if len(candles)>=size:
+            w=candles[-size:]; support.append({"price":min(float(c["low"]) for c in w),"kind":"range_low","recency":.9}); resistance.append({"price":max(float(c["high"]) for c in w),"kind":"range_high","recency":.9})
+    for i in range(len(candles)-1,max(1,len(candles)-50),-1):
+        a0,c=candles[i-2],candles[i]
+        if float(c["low"])>float(a0["high"]): support.append({"price":(float(a0["high"])+float(c["low"]))/2,"kind":"fvg_bullish","recency":i/max(1,len(candles)-1)}); break
+        if float(c["high"])<float(a0["low"]): resistance.append({"price":(float(c["high"])+float(a0["low"]))/2,"kind":"fvg_bearish","recency":i/max(1,len(candles)-1)}); break
+    ob=_detect_order_block(candles,a)
+    if ob.get("type")=="BULLISH": support.append({"price":(float(ob["low"])+float(ob["high"]))/2,"kind":"order_block_bullish","recency":.99})
+    elif ob.get("type")=="BEARISH": resistance.append({"price":(float(ob["low"])+float(ob["high"]))/2,"kind":"order_block_bearish","recency":.99})
+    for arr,out,kind in ((highs,resistance,"liquidity_high"),(lows,support,"liquidity_low")):
+        for j in range(max(0,len(arr)-10),len(arr)):
+            for k in range(j+1,len(arr)):
+                if abs(float(arr[j][1])-float(arr[k][1]))<=a*.22:
+                    out.append({"price":(float(arr[j][1])+float(arr[k][1]))/2,"kind":kind,"recency":.95}); break
+    support += [{"price":float(levels["s1"]),"kind":"pivot_s1","recency":.75},{"price":float(levels["s2"]),"kind":"pivot_s2","recency":.65}]
+    resistance += [{"price":float(levels["r1"]),"kind":"pivot_r1","recency":.75},{"price":float(levels["r2"]),"kind":"pivot_r2","recency":.65}]
+    return {"timeframe":interval,"current_price":round(current,4),"atr":round(a,4),"support_zones":_build_zone_clusters(support,"support",current,a),"resistance_zones":_build_zone_clusters(resistance,"resistance",current,a),"market_structure":_structure_state(candles),"liquidity":_detect_liquidity(candles,highs,lows),"pivot_evidence":{"pivot":levels["pivot"],"r1":levels["r1"],"r2":levels["r2"],"s1":levels["s1"],"s2":levels["s2"]},"data_timestamp":candles[-1].get("time"),"last_completed_timestamp":candles[-2].get("time")}
 
-
-async def ai_zone_analysis(zone_context: dict[str, Any]) -> dict[str, Any]:
-    """AI may rank/classify objective zones but must reference existing zone IDs only."""
-    cache_key="ZONE:"+json.dumps(zone_context,sort_keys=True,default=str)
-    now=datetime.now(timezone.utc).timestamp()
-    cached=AI_CACHE.get(cache_key)
-    if cached and now-cached[0] < AI_CACHE_TTL:
-        return cached[1]
-    supports=zone_context.get("support_zones",[]); resistances=zone_context.get("resistance_zones",[])
-    fallback={"mode":"rule_based","bias":"NEUTRAL","primary_support_id":0 if supports else None,"primary_resistance_id":0 if resistances else None,"entry_zone_id":None,"invalidation_zone_id":None,"target_zone_ids":[],"reasoning":["Zones are derived from real OHLC swing/rejection clusters."]}
-    if supports and resistances:
-        cur=float(zone_context["current_price"])
-        near_s=min(range(len(supports)),key=lambda i:abs(supports[i]["center"]-cur))
-        near_r=min(range(len(resistances)),key=lambda i:abs(resistances[i]["center"]-cur))
-        if cur>float(zone_context.get("pivot_reference",{}).get("pivot",cur)):
-            fallback.update(bias="BULLISH",primary_support_id=near_s,primary_resistance_id=near_r,target_zone_ids=[near_r])
-        else:
-            fallback.update(bias="BEARISH",primary_support_id=near_s,primary_resistance_id=near_r,target_zone_ids=[near_s])
-    if not OPENAI_API_KEY:
-        AI_CACHE[cache_key]=(now,fallback); return fallback
-    prompt=("You are an institutional XAU/USD zone analyst. Use ONLY the supplied objective zones from real OHLC data. "
-            "Do not invent, alter, or calculate any price. Return JSON only with keys: bias, primary_support_id, "
-            "primary_resistance_id, entry_zone_id, invalidation_zone_id, target_zone_ids, reasoning. IDs are zero-based "
-            "indexes into support_zones/resistance_zones; entry/invalidation can be null. Reasoning max 4 short items. "
-            "If evidence conflicts, choose NEUTRAL. This is technical alignment, not profit probability.\n\n"+json.dumps(zone_context,ensure_ascii=False))
+async def ai_market_zone_analysis(ctx: dict[str, Any]) -> dict[str, Any]:
+    supports=ctx.get("support_zones",[]); resistances=ctx.get("resistance_zones",[]); current=float(ctx.get("current_price",0) or 0); structure=ctx.get("market_structure",{}) or {}
+    cache_key="ZONEAI2:"+json.dumps(ctx,sort_keys=True,default=str); now=datetime.now(timezone.utc).timestamp(); cached=AI_CACHE.get(cache_key)
+    if cached and now-cached[0]<min(AI_CACHE_TTL,5): return cached[1]
+    ns=min(range(len(supports)),key=lambda i:abs(supports[i]["center"]-current)) if supports else None; nr=min(range(len(resistances)),key=lambda i:abs(resistances[i]["center"]-current)) if resistances else None
+    bias="BULLISH" if structure.get("prior_structure")=="BULLISH" else "BEARISH" if structure.get("prior_structure")=="BEARISH" else "NEUTRAL"
+    fallback={"mode":"rule_based","bias":bias,"primary_support_id":ns,"primary_resistance_id":nr,"entry_zone_id":None,"entry_side":None,"invalidation_zone_id":None,"target_zone_ids":[],"reasoning":["Real OHLC swing/rejection/consolidation zonalari klasterlandi.","Structure, liquidity, FVG, order block va pivot faqat confirmation sifatida ishlatildi."],"scenario":"Zona ichida candle confirmation kutiladi."}
+    if not OPENAI_API_KEY: AI_CACHE[cache_key]=(now,fallback); return fallback
+    prompt=("You are an institutional XAU/USD supply-demand zone analyst. The selected timeframe is PRIMARY. "
+            "Use ONLY the supplied zones derived from real OHLC. Never invent, alter or move a price. Analyze market structure, "
+            "rejection, liquidity, FVG, order block, breakout/retest and pivot evidence. Select the strongest demand and supply zones. "
+            "If evidence conflicts, return NEUTRAL. Return JSON only: bias, primary_support_id, primary_resistance_id, entry_zone_id, "
+            "entry_side, invalidation_zone_id, target_zone_ids, reasoning, scenario. IDs must reference existing candidates.")
     try:
         from openai import AsyncOpenAI
-        client=AsyncOpenAI(api_key=OPENAI_API_KEY)
-        response=await client.responses.create(model=OPENAI_MODEL,input=prompt)
-        text=getattr(response,"output_text","").strip()
-        parsed=json.loads(text) if text else {}
-        # Validate every referenced index so AI cannot create an arbitrary price zone.
-        for key,maxlen in [("primary_support_id",len(supports)),("primary_resistance_id",len(resistances)),("entry_zone_id",len(supports)+len(resistances)),("invalidation_zone_id",len(supports)+len(resistances))]:
-            v=parsed.get(key)
-            if v is not None and (not isinstance(v,int) or v<0 or v>=maxlen): parsed[key]=None
-        ids=parsed.get("target_zone_ids",[])
-        parsed["target_zone_ids"]=[i for i in ids if isinstance(i,int) and 0<=i<max(len(supports),len(resistances))][:3]
+        response=await AsyncOpenAI(api_key=OPENAI_API_KEY).responses.create(model=OPENAI_MODEL,input=prompt+"\n\nREAL MARKET CONTEXT:\n"+json.dumps(ctx,ensure_ascii=False))
+        raw=getattr(response,"output_text","").strip(); parsed=json.loads(raw) if raw else {}
+        def valid(v,n): return v if isinstance(v,int) and 0<=v<n else None
+        parsed["primary_support_id"]=valid(parsed.get("primary_support_id"),len(supports)); parsed["primary_resistance_id"]=valid(parsed.get("primary_resistance_id"),len(resistances))
+        total=len(supports)+len(resistances); parsed["entry_zone_id"]=valid(parsed.get("entry_zone_id"),total); parsed["invalidation_zone_id"]=valid(parsed.get("invalidation_zone_id"),total)
+        parsed["target_zone_ids"]=[i for i in parsed.get("target_zone_ids",[]) if isinstance(i,int) and 0<=i<total][:3]
+        if parsed.get("bias") not in {"BUY","SELL","BULLISH","BEARISH","NEUTRAL"}: parsed["bias"]=bias
         result={**fallback,**parsed,"mode":"openai"}
-        AI_CACHE[cache_key]=(now,result); return result
-    except Exception as exc:
-        fallback["warning"]=f"AI zone ranking unavailable: {exc}"
-        AI_CACHE[cache_key]=(now,fallback); return fallback
+    except Exception as exc: result={**fallback,"warning":f"AI zone ranking unavailable: {exc}"}
+    AI_CACHE[cache_key]=(now,result); return result
 
 async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
     cache_key = json.dumps(analysis_context, sort_keys=True, default=str)
@@ -1452,13 +1578,9 @@ async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
     if cached and now - cached[0] < AI_CACHE_TTL:
         return cached[1]
     prompt = (
-        "You are a disciplined professional XAU/USD chart analyst. "
-        "Use ONLY the supplied REAL_CHART_OHLC candles and calculated technical context. "
-        "Do not invent, alter, estimate, or hardcode any market price, pivot, support, resistance, entry, SL, or TP. "
-        "The numeric technical_score/confidence is an INTERNAL TECHNICAL ALIGNMENT SCORE, NOT a probability of profit. "
-        "Return JSON with keys: summary, bias, confidence, advice. "
-        "Confidence must be an integer 0-100 and must describe technical alignment only. "
-        "Do not claim certainty or guaranteed profits.\n\n" + json.dumps(analysis_context, ensure_ascii=False)
+        "You are a disciplined market-analysis assistant. Based ONLY on the supplied XAU/USD technical context, "
+        "give a concise non-guaranteed trading analysis. Return JSON with keys: summary, bias, confidence, advice. "
+        "Confidence must be an integer 0-100. Do not claim certainty or guaranteed profits.\n\n" + json.dumps(analysis_context, ensure_ascii=False)
     )
     if OPENAI_API_KEY:
         try:
@@ -1640,6 +1762,11 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
         reasons.append("Malaysia SNR range context")
     if r>=55: score+=1
     elif r<=45: score-=1
+    tech = technical_confluence(candles, {"pivot": current})
+    # Add independent momentum/trend confirmation without allowing one indicator to dominate.
+    score += max(-3, min(3, int(round(tech["score"] / 3))))
+    if tech["direction"] == "BULLISH": reasons.append("EMA/MACD/ADX bullish confluence")
+    elif tech["direction"] == "BEARISH": reasons.append("EMA/MACD/ADX bearish confluence")
     # Explicit SNR breakout bonus/penalty.
     if current>snr["resistance"]: score+=2; reasons.append("SNR resistance breakout")
     elif current<snr["support"]: score-=2; reasons.append("SNR support breakdown")
@@ -1662,7 +1789,7 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
         "interval":interval,"signal":direction,"entry":round(entry,4),"stop_loss":round(sl,4) if sl is not None else None,
         "take_profit":[round(x,4) for x in tp],"confidence":confidence,"score":score,"setup":setup,
         "components":{"ICT":ict_bias,"SNR":snr,"SNR Malaysia":msnr,"Order Block":ob,"FVG":fvg,"Liquidity":liq,
-                       "Trend Line":trend,"Global Trend Line":global_trend,"BOS":structure["bos"],"CHOCH":structure["choch"],"Internal Structure":structure["internal_structure"]},
+                       "Trend Line":trend,"Global Trend Line":global_trend,"BOS":structure["bos"],"CHOCH":structure["choch"],"Internal Structure":structure["internal_structure"],"Technical Confluence":tech},
         "reason":("; ".join(dict.fromkeys(reasons)) or "No strong confluence") + ("; news blackout active" if news_blocked else ""),
         "rsi":round(r,2),"atr":round(avtr,4),"current_price":round(current,4),
         "evaluated_at":datetime.now(timezone.utc).isoformat()
@@ -1700,372 +1827,306 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
 
 
 
-
-def ema(values: list[float], period: int) -> float:
-    if not values:
-        return 0.0
-    k = 2.0 / (period + 1.0)
-    e = float(values[0])
-    for v in values[1:]:
-        e = float(v) * k + e * (1.0 - k)
-    return e
-
-def macd_values(candles: list[dict[str, Any]]) -> dict[str, float]:
-    closes = [float(c["close"]) for c in candles]
-    if len(closes) < 35:
-        return {"line": 0.0, "signal": 0.0, "histogram": 0.0}
-    fast_series = []
-    slow_series = []
-    ef, es = closes[0], closes[0]
-    kf, ks = 2/(12+1), 2/(26+1)
-    for v in closes:
-        ef = v*kf + ef*(1-kf)
-        es = v*ks + es*(1-ks)
-        fast_series.append(ef)
-        slow_series.append(es)
-    line_series = [a-b for a,b in zip(fast_series, slow_series)]
-    signal = ema(line_series, 9)
-    line = line_series[-1]
-    return {"line": round(line, 5), "signal": round(signal, 5), "histogram": round(line-signal, 5)}
-
-def bollinger_values(candles: list[dict[str, Any]], period: int = 20, mult: float = 2.0) -> dict[str, float]:
-    closes = [float(c["close"]) for c in candles]
-    sample = closes[-period:] if len(closes) >= period else closes
-    mid = sum(sample) / len(sample) if sample else 0.0
-    variance = sum((x-mid)**2 for x in sample) / len(sample) if sample else 0.0
-    sd = math.sqrt(variance)
-    upper, lower = mid + mult*sd, mid - mult*sd
-    width = upper - lower
-    return {"upper": round(upper,4), "middle": round(mid,4), "lower": round(lower,4), "width": round(width,4)}
-
-def build_professional_chart_setup(
-    candles: list[dict[str, Any]],
-    levels: dict[str, Any],
-    news_blocked: bool = False
-) -> dict[str, Any]:
-    if len(candles) < 60:
-        raise MarketDataError("Professional chart analysis uchun kamida 60 ta real candle kerak")
-
-    current = float(candles[-1]["close"])
-    prev = candles[-2]
-    closes = [float(c["close"]) for c in candles]
-    ma20 = sma(closes, 20)
-    ma50 = sma(closes, 50)
-    r = rsi(candles)
-    a = max(atr(candles), current * 0.00015)
-    m = macd_values(candles)
-    bb = bollinger_values(candles)
-    structure = _structure_state(candles)
-    snr = _snr(candles)
-    highs, lows = _swing_points(candles[-160:], 2, 2)
-
-    # Nearest real support/resistance from swing structure.
-    real_supports = sorted({round(v, 2) for _, v in lows if v < current}, key=lambda x: current-x)
-    real_resistances = sorted({round(v, 2) for _, v in highs if v > current}, key=lambda x: x-current)
-    supports = real_supports[:4]
-    resistances = real_resistances[:4]
-    if not supports:
-        supports = [float(levels["s1"]), float(levels["s2"])]
-    if not resistances:
-        resistances = [float(levels["r1"]), float(levels["r2"])]
-
-    buy = sell = 0
-    reasons_buy, reasons_sell = [], []
-
-    # Market structure: strongest factor.
-    if structure["prior_structure"] == "BULLISH":
-        buy += 15; reasons_buy.append("HH/HL bullish structure")
-    elif structure["prior_structure"] == "BEARISH":
-        sell += 15; reasons_sell.append("LH/LL bearish structure")
-
-    if structure["bos"] == "BULLISH":
-        buy += 7; reasons_buy.append("bullish BOS")
-    elif structure["bos"] == "BEARISH":
-        sell += 7; reasons_sell.append("bearish BOS")
-
-    if structure["choch"] == "BULLISH":
-        buy += 5; reasons_buy.append("bullish CHOCH")
-    elif structure["choch"] == "BEARISH":
-        sell += 5; reasons_sell.append("bearish CHOCH")
-
-    if current > ma20:
-        buy += 5
-    else:
-        sell += 5
-    if ma20 > ma50:
-        buy += 10; reasons_buy.append("MA20 above MA50")
-    elif ma20 < ma50:
-        sell += 10; reasons_sell.append("MA20 below MA50")
-
-    # Pivot
-    if current > float(levels["pivot"]):
-        buy += 8; reasons_buy.append("price above Pivot")
-    elif current < float(levels["pivot"]):
-        sell += 8; reasons_sell.append("price below Pivot")
-
-    # RSI
-    if r > 55:
-        buy += 6; reasons_buy.append(f"RSI {r:.1f} bullish")
-    elif r < 45:
-        sell += 6; reasons_sell.append(f"RSI {r:.1f} bearish")
-
-    # MACD
-    if m["line"] > m["signal"]:
-        buy += 7; reasons_buy.append("MACD bullish")
-    elif m["line"] < m["signal"]:
-        sell += 7; reasons_sell.append("MACD bearish")
-    if m["histogram"] > 0:
-        buy += 2
-    elif m["histogram"] < 0:
-        sell += 2
-
-    # Bollinger / current candle confirmation
-    last = candles[-1]
-    body = abs(float(last["close"]) - float(last["open"]))
-    candle_range = max(float(last["high"]) - float(last["low"]), 1e-9)
-    if current > bb["middle"]:
-        buy += 3
-    elif current < bb["middle"]:
-        sell += 3
-    if body / candle_range > 0.55:
-        if last["close"] > last["open"]:
-            buy += 2
-        elif last["close"] < last["open"]:
-            sell += 2
-
-    # Real support/resistance proximity and rejection.
-    nearest_s = supports[0] if supports else None
-    nearest_r = resistances[0] if resistances else None
-    near_s = nearest_s is not None and abs(current-nearest_s) <= max(a*0.75, current*0.0006)
-    near_r = nearest_r is not None and abs(current-nearest_r) <= max(a*0.75, current*0.0006)
-    if near_s and last["close"] > last["open"]:
-        buy += 5; reasons_buy.append("support rejection on real candle")
-    if near_r and last["close"] < last["open"]:
-        sell += 5; reasons_sell.append("resistance rejection on real candle")
-
-    signal = "NEUTRAL"
-    if not news_blocked:
-        margin = 10
-        if buy - sell >= margin:
-            signal = "BUY"
-        elif sell - buy >= margin:
-            signal = "SELL"
-    setup_name = "REAL_CHART_CONFLUENCE"
-    if news_blocked:
-        setup_name = "NEWS_BLACKOUT"
-
-    score = max(buy, sell)
-    strength = "VERY STRONG" if score >= 75 else "STRONG" if score >= 60 else "MODERATE" if score >= 45 else "WEAK"
-
-    entry = current
-    sl = None
-    tps = []
-    invalidation = None
-    primary_reason = "Real chart has insufficient directional confirmation."
-    alternative = "Wait for a confirmed breakout or rejection at the nearest real support/resistance."
-
-    if signal == "BUY":
-        sl_base = min(nearest_s if nearest_s is not None else current-a*1.5, current-a*1.2)
-        sl = sl_base - a*0.15
-        candidates = [x for x in resistances + [levels["r1"], levels["r2"], levels["r3"]] if x > current]
-        tps = [round(x,2) for x in sorted(set(candidates), key=lambda x:x-current)[:3]]
-        if len(tps) < 2:
-            risk = max(current-sl, a*1.2)
-            tps = [current+risk*1.5, current+risk*2.2]
-        invalidation = sl
-        primary_reason = f"The upside prevails while {nearest_s:.2f} support holds." if nearest_s else "The upside prevails while the structural support holds."
-        alternative = f"A confirmed break below {nearest_s:.2f} would invalidate the bullish scenario." if nearest_s else "A confirmed break below structural support would invalidate the bullish scenario."
-    elif signal == "SELL":
-        sl_base = max(nearest_r if nearest_r is not None else current+a*1.5, current+a*1.2)
-        sl = sl_base + a*0.15
-        candidates = [x for x in supports + [levels["s1"], levels["s2"], levels["s3"]] if x < current]
-        tps = [round(x,2) for x in sorted(set(candidates), key=lambda x:current-x)[:3]]
-        if len(tps) < 2:
-            risk = max(sl-current, a*1.2)
-            tps = [current-risk*1.5, current-risk*2.2]
-        invalidation = sl
-        primary_reason = f"The downside prevails while {nearest_r:.2f} resistance remains resistance." if nearest_r else "The downside prevails while structural resistance remains intact."
-        alternative = f"A confirmed breakout above {nearest_r:.2f} would invalidate the bearish scenario." if nearest_r else "A confirmed breakout above structural resistance would invalidate the bearish scenario."
-
-    return {
-        "signal": signal,
-        "setup": setup_name,
-        "entry": round(entry,4),
-        "stop_loss": round(sl,4) if sl is not None else None,
-        "take_profit": tps,
-        "invalidation": round(invalidation,4) if invalidation is not None else None,
-        "technical_score": int(score),
-        "buy_score": int(buy),
-        "sell_score": int(sell),
-        "signal_strength": strength,
-        "reason": primary_reason,
-        "alternative_scenario": alternative,
-        "components": {
-            "market_structure": structure,
-            "support": supports,
-            "resistance": resistances,
-            "pivot": levels,
-            "ma20": round(ma20,4),
-            "ma50": round(ma50,4),
-            "rsi": round(r,2),
-            "macd": m,
-            "bollinger": bb,
-            "atr": round(a,4)
-        },
-        "reasoning": list(dict.fromkeys((reasons_buy if signal=="BUY" else reasons_sell if signal=="SELL" else reasons_buy[:2]+reasons_sell[:2])))[:6],
-        "evaluated_at": datetime.now(timezone.utc).isoformat(),
-    }
-
-
 async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
     symbol = clean_symbol(symbol)
     interval = validate_interval(interval)
-
-    # ONE canonical real-candle snapshot is used by chart-analysis, levels and AI.
-    candles_data, mode, warning = await get_candles(symbol, interval, 260)
-    if len(candles_data) < 60:
-        raise MarketDataError(f"{interval} uchun professional real-chart analysisga yetarli candle yo'q")
-
-    current = float(candles_data[-1]["close"])
-    previous_close = float(candles_data[-2]["close"])
-    change_pct = ((current - previous_close) / previous_close * 100) if previous_close else 0.0
+    candles_data, mode, warning = await get_candles(symbol, interval, 160)
+    if len(candles_data) < 2:
+        raise MarketDataError(f"{interval} uchun yetarli candle mavjud emas")
+    current = candles_data[-1]["close"]
+    previous_close = candles_data[-2]["close"] if len(candles_data) > 1 else current
+    change_pct = ((current - previous_close) / previous_close * 100) if previous_close else 0
 
     levels, pivot_warning = await calculate_pivot_for_interval(symbol, interval)
-
     calendar = await economic_calendar(2)
     blocked, news_reason = news_blackout(calendar.get("events", []))
+    setup = build_key_level_signal(candles_data, levels, news_blocked=blocked)
+    ta = technical_analysis(candles_data, levels, setup)
 
-    setup = build_professional_chart_setup(candles_data, levels, news_blocked=blocked)
-    ta = {
-        "rsi": setup["components"]["rsi"],
-        "rsi_state": "OVERBOUGHT" if setup["components"]["rsi"] >= 70 else
-                     "OVERSOLD" if setup["components"]["rsi"] <= 30 else
-                     "BULLISH" if setup["components"]["rsi"] > 50 else "BEARISH",
-        "atr": setup["components"]["atr"],
-        "pivot": levels["pivot"],
-        "support": setup["components"]["support"],
-        "resistance": setup["components"]["resistance"],
-        "trend": "BULLISH" if setup["buy_score"] > setup["sell_score"] else
-                 "BEARISH" if setup["sell_score"] > setup["buy_score"] else "NEUTRAL",
-        "ma20": setup["components"]["ma20"],
-        "ma50": setup["components"]["ma50"],
-        "macd": setup["components"]["macd"],
-        "bollinger": setup["components"]["bollinger"],
-        "summary": (
-            f"REAL {interval.upper()} chart: "
-            f"MA20 {setup['components']['ma20']:.2f}, "
-            f"MA50 {setup['components']['ma50']:.2f}, "
-            f"RSI {setup['components']['rsi']:.1f}, "
-            f"MACD {setup['components']['macd']['line']:.4f}/{setup['components']['macd']['signal']:.4f}, "
-            f"Pivot {levels['pivot']:.2f}."
-        )
-    }
+    zone_candidates = build_real_market_zones(candles_data, levels, interval)
+    zone_ai = await ai_market_zone_analysis(zone_candidates)
+    zone_context = {**zone_candidates, "ai": zone_ai}
 
-    zone_candidates = build_ai_zone_candidates(candles_data, levels, setup, ta)
-    zone_ai = await ai_zone_analysis({
-        **zone_candidates,
-        "timeframe": interval,
-        "signal": setup.get("signal"),
-        "trend": ta.get("trend"),
-        "source": "REAL_CHART_OHLC"
-    })
-
-    zone_context = {
-        **zone_candidates,
-        "ai": zone_ai,
-        "timeframe": interval,
-        "signal": setup.get("signal"),
-        "trend": ta.get("trend")
-    }
-
+    # Prefer RealMarketAPI Intelligence when the user's plan exposes it.
     confluence = await fetch_rm_confluence(symbol, interval)
     rm_trend = await fetch_rm_trend(symbol, interval)
-
     if confluence:
         setup["provider_confluence_signal"] = str(confluence.get("signal") or "").upper() or None
         setup["provider_score"] = confluence.get("score")
         setup["provider_strength"] = confluence.get("strength")
 
     mtf = await multi_timeframe(symbol)
-
-    # AI receives only the real chart snapshot and calculated technical context.
-    # It may explain/rank the analysis, but it must not invent price levels.
-    chart_tail = [
-        {
-            "time": c["time"],
-            "open": round(float(c["open"]),4),
-            "high": round(float(c["high"]),4),
-            "low": round(float(c["low"]),4),
-            "close": round(float(c["close"]),4)
-        }
-        for c in candles_data[-80:]
-    ]
     ai_context = {
-        "source": "REAL_CHART_OHLC",
-        "symbol": symbol,
-        "timeframe": interval,
-        "current_price": current,
-        "candles_last_80": chart_tail,
-        "setup": setup,
-        "technical": ta,
-        "pivot": levels,
-        "real_support": setup["components"]["support"],
-        "real_resistance": setup["components"]["resistance"],
-        "higher_timeframe": mtf,
-        "provider_confluence": confluence or {},
-        "provider_trend": rm_trend or {},
+        "bias": levels["bias"], "signal": setup["signal"], "setup": setup["setup"],
+        "rsi": ta["rsi"], "mtf_overall": mtf["overall"], "levels": levels,
+        "timeframe": interval, "provider_confluence": confluence or {}, "provider_trend": rm_trend or {},
     }
     ai = await ai_smart_analysis(ai_context)
-
     if setup["signal"] == "SELL":
-        headline = f"INTRADAY: Towards {setup['take_profit'][0]:.2f}" if setup["take_profit"] else "INTRADAY: Bearish scenario"
+        headline = f"SELL • {interval.upper()} • Target {levels['s1']:.2f}"
     elif setup["signal"] == "BUY":
-        headline = f"INTRADAY: Towards {setup['take_profit'][0]:.2f}" if setup["take_profit"] else "INTRADAY: Bullish scenario"
+        headline = f"BUY • {interval.upper()} • Target {levels['r1']:.2f}"
     else:
-        headline = f"INTRADAY: Range / Confirmation Needed"
+        headline = f"WAIT • {interval.upper()} • {levels['bias']} bias"
 
     combined_warning = " | ".join(x for x in [
         warning, pivot_warning, calendar.get("warning"), news_reason,
         confluence.get("warning") if confluence else None
     ] if x)
-
     return {
-        "ok": True,
-        "symbol": symbol,
-        "current_price": round(current, 4),
-        "change_pct": round(change_pct, 3),
-        "headline": headline,
-        "direction": setup["signal"],
-        "bias": ta["trend"],
-        "preference": setup["reason"],
-        "setup": setup,
-        "mode": mode,
-        "provider": warning,
-        "warning": combined_warning or None,
-        "interval": interval,
-        "source": "REAL_CHART_OHLC",
-        "candle_count": len(candles_data),
-        "last_candle": candles_data[-1],
-        "updated_at": datetime.now(timezone.utc).isoformat(),
-        "levels": levels,
-        "technical": ta,
-        "zones": zone_context,
-        "multi_timeframe": mtf,
-        "ai_smart": ai,
-        "calendar": calendar,
-        "professional_analysis": {
-            "primary_scenario": setup["reason"],
-            "alternative_scenario": setup["alternative_scenario"],
-            "signal_strength": setup["signal_strength"],
-            "technical_score": setup["technical_score"],
-            "buy_score": setup["buy_score"],
-            "sell_score": setup["sell_score"],
-            "entry": setup["entry"],
-            "stop_loss": setup["stop_loss"],
-            "take_profit": setup["take_profit"],
-            "invalidation": setup["invalidation"]
-        }
+        "ok": True, "symbol": symbol, "current_price": round(current, 4),
+        "change_pct": round(change_pct, 3), "headline": headline,
+        "direction": setup["signal"], "bias": levels["bias"], "preference": setup["reason"],
+        "setup": setup, "mode": mode, "warning": combined_warning or None,
+        "interval": interval, "updated_at": datetime.now(timezone.utc).isoformat(),
+        "levels": levels, "technical": ta, "zones": zone_context, "multi_timeframe": mtf,
+        "ai_smart": ai, "calendar": calendar, "candle": candle_countdown(interval),
+        "provider_confluence": confluence, "provider_trend": rm_trend,
     }
+
+
+def settle_signal_row(row: SignalHistory, candles_data: list[dict[str, Any]]) -> bool:
+    if row.outcome not in ("OPEN", "AMBIGUOUS") or row.direction not in ("BUY", "SELL"):
+        return False
+    try:
+        payload = json.loads(row.payload)
+        setup = payload.get("setup", {}) or payload.get("advanced", {})
+        entry = float(setup.get("entry") or 0)
+        sl = float(setup.get("stop_loss") or 0)
+        tps = [float(x) for x in (setup.get("take_profit") or []) if x is not None]
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return False
+    if not entry or not sl or not tps:
+        return False
+    created = row.created_at.replace(tzinfo=timezone.utc) if row.created_at.tzinfo is None else row.created_at
+    changed = False
+    for c in candles_data:
+        ts = datetime.fromtimestamp(c["time"], timezone.utc)
+        if ts <= created:
+            continue
+        tp_hit = c["high"] >= tps[0] if row.direction == "BUY" else c["low"] <= tps[0]
+        sl_hit = c["low"] <= sl if row.direction == "BUY" else c["high"] >= sl
+        if tp_hit and sl_hit:
+            row.outcome = "AMBIGUOUS"
+            row.closed_at = ts
+            changed = True
+            break
+        if tp_hit:
+            row.outcome = "TP HIT"
+            row.closed_at = ts
+            changed = True
+            break
+        if sl_hit:
+            row.outcome = "SL HIT"
+            row.closed_at = ts
+            changed = True
+            break
+    return changed
+
+
+async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 100) -> list[SignalHistory]:
+    rows = session.scalars(select(SignalHistory).where(SignalHistory.user_id == user_id).order_by(SignalHistory.created_at.asc())).all()
+    grouped: dict[tuple[str, str], list[SignalHistory]] = {}
+    for row in rows:
+        if row.outcome in ("TP HIT", "SL HIT"):
+            continue
+        grouped.setdefault((row.symbol, row.interval), []).append(row)
+    changed_any = False
+    for (sym, tf), group in grouped.items():
+        try:
+            candles_data, _, _ = await get_candles(sym, tf, 500)
+        except Exception:
+            continue
+        for row in group:
+            changed_any = settle_signal_row(row, candles_data) or changed_any
+    if changed_any:
+        session.commit()
+    return rows
+
+
+
+class MarketStream:
+    def __init__(self):
+        self.clients={}; self.tasks={}; self.lock=asyncio.Lock()
+    async def add(self,ws,symbol,interval):
+        await ws.accept(); key=(clean_symbol(symbol),validate_interval(interval))
+        async with self.lock:
+            self.clients[ws]=key
+            if key not in self.tasks or self.tasks[key].done(): self.tasks[key]=asyncio.create_task(self._run(key))
+    async def remove(self,ws):
+        async with self.lock:
+            key=self.clients.pop(ws,None)
+            if key and not any(v==key for v in self.clients.values()):
+                t=self.tasks.pop(key,None)
+                if t and not t.done(): t.cancel()
+    async def broadcast(self,key,message):
+        dead=[]
+        async with self.lock: items=[ws for ws,k in self.clients.items() if k==key]
+        for ws in items:
+            try: await ws.send_json(message)
+            except Exception: dead.append(ws)
+        for ws in dead: await self.remove(ws)
+    async def _run(self,key):
+        symbol,interval=key; backoff=1
+        while True:
+            provider=live_provider()
+            try:
+                import websockets
+                if provider=="realmarketapi":
+                    tf=realmarket_timeframe(interval)
+                    url=f"wss://api.realmarketapi.com/price?apiKey={REALMARKET_API_KEY}&symbolCode={realmarket_symbol(symbol)}&timeFrame={tf}"
+                    async with websockets.connect(url,ping_interval=15,ping_timeout=20,close_timeout=5) as ws:
+                        backoff=1; await self.broadcast(key,{"type":"status","status":"connected","provider":"realmarketapi","interval":interval})
+                        while True:
+                            msg=json.loads(await ws.recv())
+                            if isinstance(msg,dict):
+                                try:
+                                    c=_rm_candle(msg); await self.broadcast(key,{"type":"candle","symbol":symbol,"interval":interval,"candle":c,"price":c["close"],"timestamp":c["time"],"source":"realmarketapi"})
+                                except Exception:
+                                    price=msg.get("price") or msg.get("Price") or msg.get("ClosePrice")
+                                    if price is not None: await self.broadcast(key,{"type":"tick","symbol":symbol,"price":float(price),"timestamp":int(float(msg.get("timestamp") or datetime.now(timezone.utc).timestamp())),"source":"realmarketapi"})
+                elif provider=="twelvedata":
+                    url=f"wss://ws.twelvedata.com/v1/quotes/price?apikey={TWELVE_DATA_API_KEY}"
+                    async with websockets.connect(url,ping_interval=10,ping_timeout=20,close_timeout=5) as ws:
+                        await ws.send(json.dumps({"action":"subscribe","params":{"symbols":symbol}})); backoff=1
+                        await self.broadcast(key,{"type":"status","status":"connected","provider":"twelvedata","interval":interval})
+                        while True:
+                            msg=json.loads(await ws.recv())
+                            if msg.get("event")=="price": await self.broadcast(key,{"type":"tick","symbol":symbol,"price":float(msg["price"]),"timestamp":int(float(msg.get("timestamp") or datetime.now(timezone.utc).timestamp())),"source":"twelvedata"})
+                else:
+                    await self.broadcast(key,{"type":"error","code":"LIVE_NOT_CONFIGURED","message":"Set REALMARKET_API_KEY or TWELVE_DATA_API_KEY."}); return
+            except asyncio.CancelledError: raise
+            except Exception as exc:
+                await self.broadcast(key,{"type":"reconnecting","message":str(exc),"retry_in":backoff}); await asyncio.sleep(backoff); backoff=min(backoff*2,30)
+
+market_stream = MarketStream()
+
+@app.get("/api/health")
+async def health() -> dict[str, Any]:
+    return {"status":"ok","provider":live_provider() or MARKET_PROVIDER,"realmarket_configured":bool(REALMARKET_API_KEY),"twelvedata_configured":bool(TWELVE_DATA_API_KEY),"market_api_configured":bool(live_provider()),"calendar_configured":bool(FINNHUB_API_KEY),"ai_configured":bool(OPENAI_API_KEY),"database":DATABASE_URL.split(":",1)[0],"realtime_stream":bool(live_provider()),"allow_demo":ALLOW_DEMO,"timestamp":datetime.now(timezone.utc).isoformat()}
+
+@app.get("/api/market/diagnostics")
+async def market_diagnostics() -> dict[str, Any]:
+    result={"symbol":DEFAULT_SYMBOL,"providers":{},"timestamp":datetime.now(timezone.utc).isoformat()}
+    for name, configured in (("realmarketapi", REALMARKET_API_KEY),("twelvedata",TWELVE_DATA_API_KEY)):
+        item={"configured":bool(configured),"ok":False}
+        if configured:
+            try:
+                if name=="realmarketapi":
+                    item["price"]=await fetch_realmarket_price(DEFAULT_SYMBOL)
+                else:
+                    item["price"]=await fetch_twelvedata_price(clean_symbol(DEFAULT_SYMBOL))
+                item["ok"]=True
+            except Exception as exc:
+                item["error"]=f"{type(exc).__name__}: {exc}"
+        result["providers"][name]=item
+    result["live_ready"]=any(x.get("ok") for x in result["providers"].values())
+    return result
+
+
+@app.get("/api/email/smtp-status")
+async def smtp_status() -> dict[str, Any]:
+    return {
+        "configured": smtp_configured(),
+        "host": SMTP_HOST,
+        "port": SMTP_PORT,
+        "user_present": bool(SMTP_USER),
+        "from_present": bool(SMTP_FROM),
+        "password_present": bool(SMTP_PASSWORD),
+        "starttls": SMTP_USE_STARTTLS and not (SMTP_USE_SSL or SMTP_PORT == 465),
+        "ssl": SMTP_USE_SSL or SMTP_PORT == 465,
+        "require_delivery": REQUIRE_EMAIL_DELIVERY,
+        "note": "Gmail SMTP 535/534 auth errors normally mean App Password/2-Step Verification or account credentials are incorrect." if SMTP_HOST == "smtp.gmail.com" else "Check SMTP credentials and provider security settings.",
+    }
+
+
+@app.post("/api/auth/register")
+async def register(body: RegisterBody, session: Session = Depends(db)) -> dict[str, Any]:
+    email = body.email.strip().lower()
+    if not valid_email(email):
+        raise HTTPException(status_code=400, detail="To'g'ri elektron pochta manzilini kiriting, masalan: user@gmail.com")
+    if session.scalar(select(User).where(User.email == email)):
+        raise HTTPException(status_code=409, detail="Bu elektron pochta allaqachon ro'yxatdan o'tgan")
+
+    login_name, generated_password = generate_credentials()
+    while session.scalar(select(User).where(User.username == login_name)):
+        login_name, generated_password = generate_credentials()
+
+    # Generate a unique login/password for every email address.
+    # The normalized email address is unique and is never reused.
+    emailed, email_status = send_credentials_email(email, login_name, generated_password)
+    if REQUIRE_EMAIL_DELIVERY and not emailed:
+        raise HTTPException(status_code=503, detail=email_status + " Hisob yaratilmaydi; SMTP sozlamalarini tekshiring.")
+
+    user = User(email=email, username=login_name, password_hash=hash_password(generated_password))
+    user.subscription = Subscription(plan="free", status="active", renews_at=None)
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+
+    result = {
+        "token": create_session(user.id, session),
+        "user": {"id": user.id, "login": login_name, "email": email, "plan": "free"},
+        "email_sent": emailed,
+        "email_message": email_status,
+        "credentials_delivery": "email" if emailed else "local_fallback",
+    }
+    # Only expose credentials when SMTP delivery did not succeed (development fallback).
+    if not emailed:
+        result["credentials"] = {"login": login_name, "password": generated_password}
+    return result
+
+
+@app.post("/api/auth/login")
+async def login(body: AuthBody, session: Session = Depends(db)) -> dict[str, Any]:
+    identity = body.username.strip()
+    if not identity or not body.password:
+        raise HTTPException(status_code=400, detail="Login va parolni kiriting")
+    if "@" in identity:
+        user = session.scalar(select(User).where(User.email == identity.lower()))
+    else:
+        user = session.scalar(select(User).where(User.username == identity))
+        if user is None:
+            user = session.scalar(select(User).where(User.username == identity.upper()))
+        if user is None:
+            user = session.scalar(select(User).where(User.email == identity.lower()))
+    if not user or not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Login yoki parol noto'g'ri")
+    plan = user.subscription.plan if user.subscription else "free"
+    return {"token": create_session(user.id, session), "user": {"id": user.id, "login": user.username or user.email, "email": user.email, "plan": plan}}
+
+
+@app.post("/api/auth/logout")
+async def logout(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, str]:
+    if authorization and authorization.lower().startswith("bearer "):
+        raw = authorization.split(" ", 1)[1].strip()
+        row = session.scalar(select(SessionToken).where(SessionToken.token_hash == token_hash(raw)))
+        if row:
+            session.delete(row); session.commit()
+    return {"status": "ok"}
+
+
+
+@app.get("/api/auth/me")
+async def auth_me(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    user = current_user(authorization, session)
+    plan = user.subscription.plan if user.subscription else "free"
+    return {"user":{"id":user.id,"login":user.username or user.email,"email":user.email,"plan":plan},"plan":plan}
+
+
+@app.websocket("/api/v1/ws/market/{symbol:path}")
+async def market_websocket(ws: WebSocket, symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> None:
+    normalized=clean_symbol(symbol)
+    if not REALMARKET_API_KEY:
+        await ws.accept(); await ws.send_json({"type":"error","code":"LIVE_NOT_CONFIGURED","message":"LIVE market stream requires REALMARKET_API_KEY."}); await ws.close(code=1013); return
+    await market_stream.add(ws,normalized,interval)
+    try:
+        await ws.send_json({"type":"status","status":"connecting","symbol":normalized,"interval":validate_interval(interval)})
+        while True: await ws.receive_text()
+    except WebSocketDisconnect: pass
+    except Exception: pass
+    finally: await market_stream.remove(ws)
+
 
 @app.get("/api/v1/candles/{symbol:path}")
 async def candles(symbol: str, interval: str = Query(DEFAULT_INTERVAL), limit: int = Query(CANDLE_LIMIT, ge=50, le=500)) -> dict[str, Any]:
@@ -2082,50 +2143,16 @@ async def candles(symbol: str, interval: str = Query(DEFAULT_INTERVAL), limit: i
 
 @app.get("/api/v1/quote/{symbol:path}")
 async def quote(symbol: str) -> dict[str, Any]:
-    symbol = clean_symbol(symbol); errors=[]
+    symbol = clean_symbol(symbol)
+    errors=[]
+    # Return the same fresh quote source used by analysis/Pivot/Signals.
     try:
-        node_url=f"{NODE_MARKET_URL}/market/price?symbol={urlquote(symbol)}"
-        async with httpx.AsyncClient(timeout=NODE_QUOTE_TIMEOUT) as client:
-            r=await client.get(node_url); data=r.json() if r.content else {}
-        if r.is_success and isinstance(data,dict) and data.get("price") is not None:
-            return {"symbol":symbol,"price":to_float(data["price"]),"mode":"live","provider":data.get("provider","node-market-gateway"),"timestamp":datetime.now(timezone.utc).isoformat()}
-        errors.append(f"node: {data.get('error','no live cached quote') if isinstance(data,dict) else 'invalid response'}")
-    except Exception as exc: errors.append(f"node: {type(exc).__name__}: {exc}")
-    if live_provider() == "yahoo":
-        try:
-            price = await fetch_yahoo_price(symbol)
-            return {"symbol":symbol,"price":price,"mode":"live","provider":"yahoo-gold","timestamp":datetime.now(timezone.utc).isoformat()}
-        except MarketDataError as exc:
-            errors.append(f"yahoo: {exc}")
-    try:
-        price=await fetch_realmarket_price(symbol)
-        return {"symbol":symbol,"price":price,"mode":"live","provider":"realmarketapi","timestamp":datetime.now(timezone.utc).isoformat()}
-    except MarketDataError as exc: errors.append(f"realmarketapi: {exc}")
+        price, provider = await fetch_live_price_any(symbol)
+        return {"symbol":symbol,"price":price,"mode":"live","provider":provider,"timestamp":datetime.now(timezone.utc).isoformat()}
+    except MarketDataError as exc:
+        errors.append(str(exc))
     raise HTTPException(status_code=503, detail="No live quote available. " + " | ".join(errors))
 
-
-
-@app.get("/api/v1/chart-analysis/{symbol:path}")
-async def chart_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
-    """Canonical chart endpoint: returns the REAL OHLC candles plus analysis from exactly that snapshot."""
-    interval = validate_interval(interval)
-    symbol = clean_symbol(symbol)
-    try:
-        candles_data, mode, warning = await get_candles(symbol, interval, 260)
-        analysis = await build_full_analysis(symbol, interval)
-        return {
-            "ok": True,
-            "symbol": symbol,
-            "interval": interval,
-            "mode": mode,
-            "source": "REAL_CHART_OHLC",
-            "provider": warning,
-            "candles": candles_data,
-            "analysis": analysis,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-        }
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
 
 @app.get("/api/v1/market/snapshot/{symbol:path}")
 async def market_snapshot(symbol: str, interval: str = Query(DEFAULT_INTERVAL), limit: int = Query(160, ge=50, le=500)) -> dict[str, Any]:
@@ -2162,15 +2189,12 @@ async def get_symbol_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVA
 
 @app.get("/api/v1/pivots/{symbol:path}")
 async def get_pivots(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
-    selected = validate_interval(interval)
+    selected=validate_interval(interval)
     try:
-        candles_data, mode, warning = await get_candles(clean_symbol(symbol), selected, 160)
-        levels, pivot_warning = await calculate_pivot_for_interval(clean_symbol(symbol), selected)
-        setup = build_key_level_signal(candles_data, levels)
-        ta = technical_analysis(candles_data, levels, setup)
-        zones = build_ai_zone_candidates(candles_data, levels, setup, ta)
-        ai = await ai_zone_analysis({**zones, "timeframe": selected, "signal": setup.get("signal"), "trend": ta.get("trend")})
-        return {"ok":True,"symbol":clean_symbol(symbol),"selected":selected,"mode":mode,"zones":{**zones,"ai":ai},"legacy_pivot":levels,"warning":" | ".join(x for x in (warning,pivot_warning) if x) or None,"generated_at":datetime.now(timezone.utc).isoformat()}
+        clean=clean_symbol(symbol); candles_data, mode, warning=await get_candles(clean,selected,180)
+        levels,pivot_warning=await calculate_pivot_for_interval(clean,selected)
+        zones=build_real_market_zones(candles_data,levels,selected); ai=await ai_market_zone_analysis(zones)
+        return {"ok":True,"symbol":clean,"selected":selected,"mode":mode,"zones":{**zones,"ai":ai},"legacy_pivot":levels,"warning":" | ".join(x for x in (warning,pivot_warning) if x) or None,"generated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as exc:
         return {"ok":False,"symbol":clean_symbol(symbol),"selected":selected,"zones":{},"errors":{selected:str(exc)},"generated_at":datetime.now(timezone.utc).isoformat()}
 
