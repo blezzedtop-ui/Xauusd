@@ -3,5 +3,5 @@ builder = "DOCKERFILE"
 
 [deploy]
 healthcheckPath = "/api/health"
-healthcheckTimeout = 30
+healthcheckTimeout = 60
 restartPolicyType = "ALWAYS"

@@ -1,49 +1,29 @@
-# XAUUSD AI Multi-Engine — TradingView-style Red Neon
+# XAUUSD AI Multi-Engine — GitHub + Railway Ready
 
-Railway-ready XAUUSD analyzer combining:
+Real XAUUSD analysis dashboard using:
+- RealMarketAPI for live/historical XAUUSD data
+- TradingView Lightweight Charts for the candlestick chart
+- SIMPLE TRADING Book v1 pattern engine
+- Secondary 10-strategy price-action engine
+- OpenAI second-opinion validator
+- FastAPI backend + WebSocket proxy
 
-1. **SIMPLE TRADING Book v1** deterministic pattern engine.
-2. **Secondary 10-strategy engine** from the second uploaded analyzer.
-3. **OpenAI second-opinion validator**.
-4. **TradingView Lightweight Charts** frontend fed by real XAUUSD data from RealMarketAPI.
-5. **RealMarketAPI WebSocket proxy** for live candle updates, with REST snapshot on initial load.
-6. Candle countdown timer for the selected timeframe.
+## Railway Variables
+Set these in Railway > Service > Variables. Never commit real keys to GitHub.
 
-## Final signal logic
+- `REALMARKET_API_KEY`
+- `OPENAI_API_KEY`
+- `OPENAI_MODEL` = `gpt-5.6-luna`
 
-- Book + Secondary + OpenAI agree on BUY/SELL -> `CONFIRMED`.
-- One deterministic engine is WAIT and the other deterministic engine + OpenAI agree -> engine-confirmed status.
-- Conflicts -> `WAIT`.
+## Deploy from GitHub
+1. Create an empty GitHub repository.
+2. Upload the contents of this folder to the repository root. Do not upload the ZIP itself.
+3. In Railway, create/select a service and connect that GitHub repository.
+4. Railway detects `Dockerfile` and builds it automatically.
+5. Add the variables above and redeploy.
+6. Test `/api/health` and then open the generated Railway domain.
 
-## Environment variables
+## Important
+API keys stay server-side in Railway. The browser connects only to the FastAPI WebSocket/REST endpoints.
 
-```env
-REALMARKET_API_KEY=
-OPENAI_API_KEY=
-OPENAI_MODEL=gpt-5.6-luna
-```
-
-Keep both API keys server-side in Railway variables. Do not put them in frontend JavaScript.
-
-## Deploy on Railway
-
-The project uses the included `Dockerfile` and `railway.toml`.
-
-1. Create/import this repository in Railway.
-2. Add the three environment variables above.
-3. Deploy.
-4. Generate a Railway public domain.
-
-## GitHub
-
-Push the ZIP contents to a GitHub repository, then connect that repository to Railway. The application is self-contained and does not require a user's computer to stay online.
-
-## Live data
-
-The browser connects only to the app's `/ws/price` endpoint. The backend proxies the RealMarketAPI WebSocket so the API key never reaches the browser. REST is used for the initial candle snapshot and full analysis.
-
-## Notes
-
-The chart is based on TradingView's Lightweight Charts library; it is not the hosted TradingView.com chart widget. The chart itself remains a candlestick chart; the surrounding UI uses the red-neon/liquid-glass theme.
-
-RealMarketAPI WebSocket availability and timeframe availability depend on the user's RealMarketAPI plan. If WebSocket access is unavailable, the app should use the REST snapshot/analysis path instead of exposing the API key.
+The chart is TradingView Lightweight Charts with RealMarketAPI data; it is not the hosted TradingView.com widget.
