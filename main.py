@@ -2868,7 +2868,7 @@ async def save_signal(symbol: str, interval: str = DEFAULT_INTERVAL, authorizati
 
 
 @app.get("/api/v1/signals/history")
-async def signal_history(limit: int = Query(50, ge=1, le=100), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def signal_history(limit: int = Query(50, ge=1, le=200), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
     rows = await refresh_signal_outcomes(session, user.id, limit=100)
     rows = rows[-limit:][::-1]
