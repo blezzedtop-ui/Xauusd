@@ -238,11 +238,11 @@ async function loadHistory(){
     let lastSource='';
     body.innerHTML=items.map(x=>{
       const src=x.source||'Signals';
-      const group=src!==lastSource?`<tr class="history-group"><td colspan="10"><b>${src}</b></td></tr>`:'';lastSource=src;
+      const group=src!==lastSource?`<tr class="history-group"><td colspan="11"><b>${src}</b></td></tr>`:'';lastSource=src;
       const dur=x.duration_minutes!=null?(x.duration_minutes<60?`${fmt(x.duration_minutes)} min`:`${fmt(x.duration_minutes/60)} h`):'OPEN';
       const closed=x.closed_at?new Date(x.closed_at).toLocaleString():'—';
       const dir=String(x.direction||'').toUpperCase();
-      return group+`<tr><td>${new Date(x.created_at).toLocaleString()}</td><td><b>${src}</b></td><td>${x.interval}</td><td class="${dir==='BUY'?'buy':dir==='SELL'?'sell':''}"><b>${dir}</b>${x.auto_entry?' · AUTO':''}${x.confidence!=null?` · ${fmt(x.confidence)}%`:''}</td><td>${fmt(x.entry)}</td><td>${(x.tp||[]).map(fmt).join(' / ')||'—'}</td><td>${fmt(x.sl)}</td><td class="outcome-${x.outcome==='TP HIT'?'tp':x.outcome==='SL HIT'?'sl':x.outcome==='OPEN'?'open':'amb'}">${x.outcome}${x.result_price!=null?` · ${fmt(x.result_price)}`:''}</td><td>${dur}</td><td>${closed}</td></tr>`;
+      return group+`<tr><td>${new Date(x.created_at).toLocaleString()}</td><td><b>${src}</b></td><td>${x.interval}</td><td class="${dir==='BUY'?'buy':dir==='SELL'?'sell':''}"><b>${dir}</b>${x.auto_entry?' · AUTO':''}${x.confidence!=null?` · ${fmt(x.confidence)}%`:''}</td><td><span class="setup-badge ${x.strong_setup?'strong':''}">${x.setup_grade||'SETUP'} ${x.setup_strength!=null?fmt(x.setup_strength)+'%':''}</span></td><td>${fmt(x.entry)}</td><td>${(x.tp||[]).map(fmt).join(' / ')||'—'}</td><td>${fmt(x.sl)}</td><td class="outcome-${x.outcome==='TP HIT'?'tp':x.outcome==='SL HIT'?'sl':x.outcome==='OPEN'?'open':'amb'}">${x.outcome}${x.result_price!=null?` · ${fmt(x.result_price)}`:''}</td><td>${dur}</td><td>${closed}</td></tr>`;
     }).join('')||'<tr><td colspan="10">Signal yo‘q.</td></tr>';
   }catch(e){body.innerHTML=`<tr><td colspan="10">History yuklanmadi: ${e?.message||'server xatosi'}</td></tr>`;}
 }
@@ -402,6 +402,12 @@ function connectMarketStream(){
  }catch(e){ marketWS=null; }
 }
 function setAuth(mode){authMode=mode;$('authTitle').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSubmit').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSwitch').textContent=mode==='login'?'Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish':'Hisobingiz bormi? Kirish';$('email').placeholder=mode==='login'?'Login yoki elektron pochta':'Elektron pochta';$('password').required=mode==='login';$('password').style.display=mode==='login'?'block':'none';$('password').value='';$('authMsg').textContent=mode==='register'?'Email kiriting — login va parol avtomatik yaratiladi.':''}
+function bindCriticalButtons(){
+  const run=(id,fn)=>{const b=$(id);if(!b||b.dataset.directBound==='1')return;b.dataset.directBound='1';b.addEventListener('click',async e=>{e.preventDefault();e.stopPropagation();if(b.disabled)return;const old=b.innerHTML;b.disabled=true;b.innerHTML='⟳ Ishlanmoqda…';try{await fn();showToast(id==='authBtn'?'':'Yangilandi')}catch(err){console.error('DIRECT BUTTON',id,err);showToast((err?.message||'Server xatosi'))}finally{b.disabled=false;b.innerHTML=old}});};
+  const auth=$('authBtn');
+  if(auth&&auth.dataset.directBound!=='1'){auth.dataset.directBound='1';auth.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();if(String(auth.textContent||'').trim()==='Chiqish'){logoutUser();return;}setAuth('login');setText('authMsg','');$('authModal')?.classList.add('show');setTimeout(()=>$('email')?.focus(),50);});}
+  run('refreshSignalEngine',()=>loadSignalEngine()); run('refreshAIProviders',()=>loadAIProviders()); run('refreshAdvanced',()=>loadAdvancedSignals()); run('refreshICT',()=>loadICTSignals()); run('refreshClassic',()=>loadClassicTrade(classicInterval)); run('refreshSNR',()=>loadSNR(snrInterval)); run('refreshStats',async()=>{await loadStats();await loadHistory()}); run('refreshSmartAnalysis',()=>loadSmartAnalysis()); run('refreshAISignals',()=>loadAISignals()); run('refreshCalendar',()=>loadCalendar()); run('refreshHistory',async()=>{await loadStats();await loadHistory()});
+}
 function bindUIActions(){
   document.querySelectorAll('.tfbar').forEach(bar=>{if(bar.dataset.bound==='1')return;bar.dataset.bound='1';bar.addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b&&bar.contains(b))setTf(b.dataset.interval);const s=e.target.closest('[data-signal-interval]');if(s&&bar.contains(s)){document.querySelectorAll('[data-signal-interval]').forEach(x=>x.classList.toggle('active',x===s));signalInterval=s.dataset.signalInterval;loadSelectedSignal(signalInterval).catch(()=>{});}const c=e.target.closest('[data-classic-interval]');if(c&&bar.contains(c)){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===c));classicInterval=c.dataset.classicInterval;loadClassicTrade(classicInterval).catch(()=>{});}const n=e.target.closest('[data-snr-interval]');if(n&&bar.contains(n)){document.querySelectorAll('[data-snr-interval]').forEach(x=>x.classList.toggle('active',x===n));snrInterval=n.dataset.snrInterval;loadSNR(snrInterval).catch(()=>{});}})});
   document.querySelectorAll('.nav button').forEach(b=>{if(b.dataset.bound==='1')return;b.dataset.bound='1';b.addEventListener('click',e=>{e.preventDefault();openSection(b.dataset.section);});});
@@ -414,7 +420,7 @@ function bindUIActions(){
     if(actions[id]){e.preventDefault();e.stopPropagation();b.disabled=true;const old=b.innerHTML;b.innerHTML='⟳ Ishlanmoqda…';Promise.resolve().then(actions[id]).then(()=>showToast(id.startsWith('refresh')?'Yangilandi':'Bajarildi')).catch(err=>{console.error('UI ACTION ERROR',id,err);showToast((id.startsWith('refresh')?'Yangilash':'Amal')+' xatosi: '+(err?.message||'server xatosi'));}).finally(()=>{b.disabled=false;b.innerHTML=old;});}
   });
 }
-if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bindUIActions,{once:true});else bindUIActions();
+if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',()=>{bindUIActions();bindCriticalButtons()},{once:true});else {bindUIActions();bindCriticalButtons();}
 async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(()=>{});token='';localStorage.removeItem('trading_token');$('plan').textContent='Guest';$('authBtn').textContent='Kirish';loadStats();loadHistory();$('authModal').classList.remove('show');$('authMsg').textContent='';showToast('Tizimdan chiqildi')};$('authForm').onsubmit=async e=>{
  e.preventDefault();
  const identity=String($('email').value||'').trim();

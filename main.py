@@ -2665,7 +2665,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
         entry = item.get("entry")
         sl = item.get("stop_loss")
         tp = item.get("take_profit") or []
-        if direction not in ("BUY", "SELL") or confidence <= AUTO_ENTRY_THRESHOLD or entry is None or sl is None or not tp:
+        if direction not in ("BUY", "SELL") or confidence < AUTO_ENTRY_THRESHOLD or entry is None or sl is None or not tp:
             continue
 
         # One open auto-trade per timeframe. A new trade is allowed after the previous
@@ -2703,6 +2703,9 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
             "auto_entry": True,
             "confidence_threshold": AUTO_ENTRY_THRESHOLD,
             "confidence_at_entry": confidence,
+            "setup_strength": float(item.get("zone_quality") or confidence),
+            "setup_grade": "STRONG" if float(item.get("zone_quality") or confidence) >= 82 else "GOOD",
+            "strong_setup": float(item.get("zone_quality") or confidence) >= 82,
             "entry_time": now.isoformat(),
         }
         row = SignalHistory(
@@ -2740,6 +2743,30 @@ async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = D
     return {"saved":True,"id":row.id,"signal":item}
 
 
+def _setup_strength_from_payload(payload: dict[str, Any], confidence: float | None = None) -> tuple[float, str, bool]:
+    """Extract a normalized setup strength for history without changing signal logic."""
+    candidates: list[float] = []
+    for key in ("setup_strength", "zone_strength", "zone_quality", "confidence_at_entry", "confidence"):
+        v = payload.get(key)
+        try:
+            if v is not None: candidates.append(float(v))
+        except (TypeError, ValueError):
+            pass
+    resp = payload.get("response") if isinstance(payload.get("response"), dict) else {}
+    sig = payload.get("signal") if isinstance(payload.get("signal"), dict) else {}
+    for obj in (resp, sig):
+        for key in ("setup_strength", "zone_strength", "zone_quality", "confidence"):
+            try:
+                if obj.get(key) is not None: candidates.append(float(obj.get(key)))
+            except (TypeError, ValueError):
+                pass
+    strength = max(candidates) if candidates else float(confidence or 0)
+    # A signal already issued by the strong-zone engine is considered strong when
+    # its confidence/zone quality is at least 82.  This is only a history label.
+    label = "STRONG" if strength >= 82 else "GOOD" if strength >= 72 else "STANDARD"
+    return round(strength, 2), label, strength >= 82
+
+
 class ModuleSignalBody(BaseModel):
     symbol: str = DEFAULT_SYMBOL
     interval: str = DEFAULT_INTERVAL
@@ -2775,12 +2802,16 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     if existing:
         return {"saved": False, "duplicate": True, "id": existing.id}
     payload = dict(body.payload or {})
+    setup_strength, setup_grade, strong_setup = _setup_strength_from_payload(payload, body.confidence)
     payload.update({
         "source": source,
         "confidence_at_entry": body.confidence,
         "setup": {"entry": body.entry, "stop_loss": body.stop_loss, "take_profit": body.take_profit},
         "signal": {"direction": direction, "confidence": body.confidence},
         "candle_time": body.candle_time,
+        "setup_strength": setup_strength,
+        "setup_grade": setup_grade,
+        "strong_setup": strong_setup,
     })
     row = SignalHistory(
         user_id=user.id, symbol=symbol, interval=interval, direction=direction,
@@ -2853,7 +2884,8 @@ async def signal_history(limit: int = Query(50, ge=1, le=100), authorization: st
         duration_seconds = result.get("duration_seconds")
         if duration_seconds is None and closed_at:
             duration_seconds = max(0, int((closed_at - created_at).total_seconds()))
-        items.append({"id": r.id, "symbol": r.symbol, "interval": r.interval, "source": getattr(r, "source", None) or "Signals", "candle_time": getattr(r, "candle_time", None), "direction": r.direction, "entry": setup.get("entry", r.price), "tp": setup.get("take_profit", []), "sl": setup.get("stop_loss"), "headline": r.headline, "price": r.price, "outcome": r.outcome, "result_price": result.get("price"), "duration_seconds": duration_seconds, "duration_minutes": round(duration_seconds/60,2) if duration_seconds is not None else None, "auto_entry": bool(payload.get("auto_entry")), "confidence": payload.get("confidence_at_entry", payload.get("signal",{}).get("confidence")), "created_at": created_at.isoformat(), "closed_at": closed_at.isoformat() if closed_at else None})
+        setup_strength, setup_grade, strong_setup = _setup_strength_from_payload(payload, payload.get("confidence_at_entry", payload.get("signal",{}).get("confidence")))
+        items.append({"id": r.id, "symbol": r.symbol, "interval": r.interval, "source": getattr(r, "source", None) or "Signals", "candle_time": getattr(r, "candle_time", None), "direction": r.direction, "entry": setup.get("entry", r.price), "tp": setup.get("take_profit", []), "sl": setup.get("stop_loss"), "headline": r.headline, "price": r.price, "outcome": r.outcome, "result_price": result.get("price"), "duration_seconds": duration_seconds, "duration_minutes": round(duration_seconds/60,2) if duration_seconds is not None else None, "auto_entry": bool(payload.get("auto_entry")), "confidence": payload.get("confidence_at_entry", payload.get("signal",{}).get("confidence")), "setup_strength": payload.get("setup_strength", setup_strength), "setup_grade": payload.get("setup_grade", setup_grade), "strong_setup": bool(payload.get("strong_setup", strong_setup)), "created_at": created_at.isoformat(), "closed_at": closed_at.isoformat() if closed_at else None})
     return {"items": items}
 
 
