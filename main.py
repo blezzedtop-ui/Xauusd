@@ -145,6 +145,8 @@ class SignalHistory(Base):
     outcome: Mapped[str] = mapped_column(String(20), default="OPEN", index=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    source: Mapped[str] = mapped_column(String(40), default="Signals", index=True)
+    candle_time: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
 
 
 Base.metadata.create_all(engine)
@@ -160,6 +162,11 @@ def ensure_schema() -> None:
                 conn.exec_driver_sql("ALTER TABLE users ADD COLUMN username VARCHAR(80)")
             conn.exec_driver_sql("UPDATE users SET username = email WHERE username IS NULL OR username = ''")
             conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ux_users_username ON users (username)")
+            sig_cols = {c["name"] for c in inspector.get_columns("signal_history")}
+            if "source" not in sig_cols:
+                conn.exec_driver_sql("ALTER TABLE signal_history ADD COLUMN source VARCHAR(40) DEFAULT 'Signals'")
+            if "candle_time" not in sig_cols:
+                conn.exec_driver_sql("ALTER TABLE signal_history ADD COLUMN candle_time VARCHAR(40)")
     except Exception as exc:
         print(f"DB schema migration warning: {type(exc).__name__}: {exc}")
 
@@ -1400,7 +1407,8 @@ def _ema(values: list[float], period: int) -> float:
 
 def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dict[str, Any]:
     closes = [float(c["close"]) for c in candles]
-    cur = candles[-1]; prev = candles[-2]
+    # Base the Classic decision on the last COMPLETED candle; the newest candle may still be forming.
+    cur = candles[-2]; prev = candles[-3]
     price = closes[-1]
     r = rsi(candles); a = atr(candles)
     ema20 = _ema(closes[-80:], 20); ema50 = _ema(closes[-120:], 50)
@@ -1677,7 +1685,16 @@ def _snr_zone_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
     else: signal="WAIT"
     confidence=max(sup["strength"],res["strength"]) if signal!="WAIT" else round((sup["strength"]+res["strength"])/2)
     pos="ABOVE RESISTANCE" if current>res["high"] else "BELOW SUPPORT" if current<sup["low"] else "NEAR SUPPORT" if current<=sup["mid"] else "NEAR RESISTANCE" if current>=res["mid"] else "BETWEEN ZONES"
-    return {"support":sup,"resistance":res,"signal":signal,"confidence":confidence,"position":pos,"reason":f"Price {pos.lower()}; Support {sup['strength']}% · Resistance {res['strength']}%.","method":"Swing SNR · zones + retests + volatility"}
+    if signal=="BUY":
+        entry=current; stop_loss=sup["low"]; take_profit=[res["mid"], res["high"]]
+    elif signal=="SELL":
+        entry=current; stop_loss=res["high"]; take_profit=[sup["mid"], sup["low"]]
+    else:
+        entry=current; stop_loss=None; take_profit=[]
+    return {"support":sup,"resistance":res,"signal":signal,"confidence":confidence,"position":pos,
+            "entry":round(entry,4),"stop_loss":round(stop_loss,4) if stop_loss is not None else None,
+            "take_profit":[round(v,4) for v in take_profit],
+            "reason":f"Price {pos.lower()}; Support {sup['strength']}% · Resistance {res['strength']}%.","method":"Swing SNR · zones + retests + volatility"}
 
 
 def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blocked: bool=False) -> dict[str, Any]:
@@ -2018,7 +2035,7 @@ async def get_snr(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[
     try:
         candles,mode,warning=await get_candles(symbol,interval,220)
         if len(candles)<35: raise MarketDataError("SNR uchun candle yetarli emas")
-        return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(float(candles[-1]["close"]),4),"snr":_snr_zone_analysis(candles),"generated_at":datetime.now(timezone.utc).isoformat()}
+        return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(float(candles[-1]["close"]),4),"candle_time":candles[-2].get("time") if len(candles)>1 else candles[-1].get("time"),"snr":_snr_zone_analysis(candles),"generated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as exc: raise HTTPException(status_code=503,detail="SNR unavailable: "+str(exc))
 
 @app.get("/api/v1/classic-trade/{symbol:path}")
@@ -2030,7 +2047,7 @@ async def get_classic_trade(symbol: str, interval: str = Query(DEFAULT_INTERVAL)
         ref = candles[-2]; price = float(candles[-1]["close"])
         levels = calculate_pivot_levels(float(ref["high"]), float(ref["low"]), float(ref["close"]), price)
         classic = _classic_trade(candles, levels)
-        return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(price,4),"classic":classic,"generated_at":datetime.now(timezone.utc).isoformat()}
+        return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(price,4),"candle_time":ref.get("time"),"classic":classic,"generated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Classic Trade unavailable: "+str(exc))
 
@@ -2065,7 +2082,7 @@ async def get_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> 
             "ok": True, "symbol": symbol, "interval": interval, "mode": "tradingview",
             "provider": "TradingView", "source": TRADINGVIEW_SYMBOL,
             "current_price": round(float(candles_data[-1]["close"]), 4),
-            "candles": candles_data, "levels": levels, "technical": technical,
+            "candles": candles_data, "candle_time": candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time"), "levels": levels, "technical": technical,
             "setup": setup, "direction": setup.get("signal", "WAIT"),
             "headline": f"{setup.get('signal','WAIT')} · {setup.get('setup','WAIT')}",
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -2502,10 +2519,62 @@ async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = D
     item = {**build_advanced_signal(candles_data, interval, news_blocked=False), "mode":mode, "warning":warning}
     if not item or item.get("signal") not in ("BUY","SELL"):
         raise HTTPException(status_code=400, detail="Bu timeframe uchun tasdiqlangan BUY/SELL signal mavjud emas.")
-    row = SignalHistory(user_id=user.id, symbol=clean_symbol(symbol), interval=interval, direction=item["signal"], headline=f'{item["signal"]} • {item["setup"]}', price=float(item["entry"]), payload=json.dumps({"advanced":item,"setup":{"entry":item.get("entry"),"stop_loss":item.get("stop_loss"),"take_profit":item.get("take_profit",[])},"symbol":clean_symbol(symbol),"interval":interval}), outcome="OPEN", created_at=datetime.now(timezone.utc))
+    row = SignalHistory(user_id=user.id, symbol=clean_symbol(symbol), interval=interval, direction=item["signal"], headline=f'{item["signal"]} • {item["setup"]}', price=float(item["entry"]), payload=json.dumps({"advanced":item,"setup":{"entry":item.get("entry"),"stop_loss":item.get("stop_loss"),"take_profit":item.get("take_profit",[])},"symbol":clean_symbol(symbol),"interval":interval,"source":"Signal Lab","candle_time":candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")}), outcome="OPEN", created_at=datetime.now(timezone.utc), source="Signal Lab", candle_time=str(candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")))
     session.add(row); session.commit(); session.refresh(row)
     return {"saved":True,"id":row.id,"signal":item}
 
+
+class ModuleSignalBody(BaseModel):
+    symbol: str = DEFAULT_SYMBOL
+    interval: str = DEFAULT_INTERVAL
+    source: str = "Signals"
+    direction: str = "WAIT"
+    confidence: float | None = None
+    entry: float | None = None
+    stop_loss: float | None = None
+    take_profit: list[float] = Field(default_factory=list)
+    headline: str = ""
+    candle_time: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+@app.post("/api/v1/signals/record-module")
+async def record_module_signal(body: ModuleSignalBody, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    user = current_user(authorization, session)
+    direction = str(body.direction or "WAIT").upper()
+    source = str(body.source or "Signals")[:40]
+    interval = validate_interval(body.interval)
+    symbol = clean_symbol(body.symbol)
+    if direction not in {"BUY", "SELL"}:
+        return {"saved": False, "reason": "WAIT", "history_count": session.scalar(select(SignalHistory).where(SignalHistory.user_id == user.id).order_by(SignalHistory.id.desc()).limit(1).with_only_columns(SignalHistory.id)) or 0}
+    # One record per module/timeframe/candle/direction. Refreshing the dashboard must not spam history.
+    q = select(SignalHistory).where(
+        SignalHistory.user_id == user.id,
+        SignalHistory.source == source,
+        SignalHistory.symbol == symbol,
+        SignalHistory.interval == interval,
+        SignalHistory.direction == direction,
+        SignalHistory.candle_time == body.candle_time
+    ).order_by(SignalHistory.id.desc())
+    existing = session.scalar(q)
+    if existing:
+        return {"saved": False, "duplicate": True, "id": existing.id}
+    payload = dict(body.payload or {})
+    payload.update({
+        "source": source,
+        "confidence_at_entry": body.confidence,
+        "setup": {"entry": body.entry, "stop_loss": body.stop_loss, "take_profit": body.take_profit},
+        "signal": {"direction": direction, "confidence": body.confidence},
+        "candle_time": body.candle_time,
+    })
+    row = SignalHistory(
+        user_id=user.id, symbol=symbol, interval=interval, direction=direction,
+        headline=(body.headline or f"{source} · {direction}")[:255],
+        price=float(body.entry or 0), payload=json.dumps(payload, ensure_ascii=False),
+        outcome="OPEN", created_at=datetime.now(timezone.utc),
+        source=source, candle_time=body.candle_time
+    )
+    session.add(row); session.commit(); session.refresh(row)
+    return {"saved": True, "id": row.id, "source": source, "outcome": row.outcome}
 
 @app.get("/api/v1/signals/analytics")
 async def signal_analytics(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
@@ -2516,21 +2585,31 @@ async def signal_analytics(authorization: str | None = Header(default=None), ses
     completed = wins + losses
     winrate = round((wins / completed) * 100, 2) if completed else 0.0
     by_tf: dict[str, dict[str, Any]] = {}
+    by_source: dict[str, dict[str, Any]] = {}
     for r in rows:
         item = by_tf.setdefault(r.interval, {"total_signals":0,"completed_trades":0,"wins":0,"losses":0,"winrate":0.0})
+        src = getattr(r, "source", None) or "Signals"
+        src_item = by_source.setdefault(src, {"total_signals":0,"completed_trades":0,"wins":0,"losses":0,"winrate":0.0})
+        src_item["total_signals"] += 1
         item["total_signals"] += 1
-        if r.outcome == "TP HIT": item["wins"] += 1
-        elif r.outcome == "SL HIT": item["losses"] += 1
+        if r.outcome == "TP HIT":
+            item["wins"] += 1
+            src_item["wins"] += 1
+        elif r.outcome == "SL HIT":
+            item["losses"] += 1
+            src_item["losses"] += 1
         item["completed_trades"] = item["wins"] + item["losses"]
+        src_item["completed_trades"] = src_item["wins"] + src_item["losses"]
         item["winrate"] = round(item["wins"] / item["completed_trades"] * 100, 2) if item["completed_trades"] else 0.0
-    return {"total_signals": len(rows), "completed_trades": completed, "wins": wins, "losses": losses, "winrate": winrate, "open": sum(1 for r in rows if r.outcome == "OPEN"), "ambiguous": sum(1 for r in rows if r.outcome == "AMBIGUOUS"), "by_timeframe": by_tf}
+        src_item["winrate"] = round(src_item["wins"] / src_item["completed_trades"] * 100, 2) if src_item["completed_trades"] else 0.0
+    return {"total_signals": len(rows), "completed_trades": completed, "wins": wins, "losses": losses, "winrate": winrate, "open": sum(1 for r in rows if r.outcome == "OPEN"), "ambiguous": sum(1 for r in rows if r.outcome == "AMBIGUOUS"), "by_timeframe": by_tf, "by_source": by_source}
 
 
 @app.post("/api/v1/signals/save")
 async def save_signal(symbol: str, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
     analysis = await build_full_analysis(symbol, interval)
-    item = SignalHistory(user_id=user.id, symbol=analysis["symbol"], interval=analysis["interval"], direction=analysis["direction"], headline=analysis["headline"], price=analysis["current_price"], payload=json.dumps(analysis), outcome="OPEN", created_at=datetime.now(timezone.utc))
+    item = SignalHistory(user_id=user.id, symbol=analysis["symbol"], interval=analysis["interval"], direction=analysis["direction"], headline=analysis["headline"], price=analysis["current_price"], payload=json.dumps({**analysis,"source":"Signals","candle_time":analysis.get("candle_time")}), outcome="OPEN", created_at=datetime.now(timezone.utc), source="Signals", candle_time=str(analysis.get("candle_time") or ""))
     session.add(item); session.commit(); session.refresh(item)
     return {"id": item.id, "status": "saved", "outcome": item.outcome}
 
@@ -2552,9 +2631,13 @@ async def signal_history(limit: int = Query(50, ge=1, le=100), authorization: st
         duration_seconds = result.get("duration_seconds")
         if duration_seconds is None and closed_at:
             duration_seconds = max(0, int((closed_at - created_at).total_seconds()))
-        items.append({"id": r.id, "symbol": r.symbol, "interval": r.interval, "direction": r.direction, "entry": setup.get("entry", r.price), "tp": setup.get("take_profit", []), "sl": setup.get("stop_loss"), "headline": r.headline, "price": r.price, "outcome": r.outcome, "result_price": result.get("price"), "duration_seconds": duration_seconds, "duration_minutes": round(duration_seconds/60,2) if duration_seconds is not None else None, "auto_entry": bool(payload.get("auto_entry")), "confidence": payload.get("confidence_at_entry", payload.get("signal",{}).get("confidence")), "created_at": created_at.isoformat(), "closed_at": closed_at.isoformat() if closed_at else None})
+        items.append({"id": r.id, "symbol": r.symbol, "interval": r.interval, "source": getattr(r, "source", None) or "Signals", "candle_time": getattr(r, "candle_time", None), "direction": r.direction, "entry": setup.get("entry", r.price), "tp": setup.get("take_profit", []), "sl": setup.get("stop_loss"), "headline": r.headline, "price": r.price, "outcome": r.outcome, "result_price": result.get("price"), "duration_seconds": duration_seconds, "duration_minutes": round(duration_seconds/60,2) if duration_seconds is not None else None, "auto_entry": bool(payload.get("auto_entry")), "confidence": payload.get("confidence_at_entry", payload.get("signal",{}).get("confidence")), "created_at": created_at.isoformat(), "closed_at": closed_at.isoformat() if closed_at else None})
     return {"items": items}
 
+
+@app.get("/api/health")
+async def api_health() -> dict[str, Any]:
+    return {"ok": True, "service": "xauusd-trading", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 @app.get("/")
 async def read_root() -> FileResponse:
