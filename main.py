@@ -1388,6 +1388,66 @@ def technical_analysis(candles_data: list[dict[str, Any]], levels: dict[str, Any
 
 
 
+
+def _ema(values: list[float], period: int) -> float:
+    if not values:
+        return 0.0
+    k = 2.0 / (period + 1)
+    e = values[0]
+    for v in values[1:]:
+        e = v * k + e * (1 - k)
+    return e
+
+def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dict[str, Any]:
+    closes = [float(c["close"]) for c in candles]
+    cur = candles[-1]; prev = candles[-2]
+    price = closes[-1]
+    r = rsi(candles); a = atr(candles)
+    ema20 = _ema(closes[-80:], 20); ema50 = _ema(closes[-120:], 50)
+    macd_line = _ema(closes[-120:], 12) - _ema(closes[-120:], 26)
+    macd_prev = _ema(closes[-121:-1], 12) - _ema(closes[-121:-1], 26) if len(closes) > 121 else macd_line
+    macd_state = "BULLISH" if macd_line > macd_prev else "BEARISH"
+    body = abs(float(cur["close"])-float(cur["open"]))
+    rng = max(float(cur["high"])-float(cur["low"]), 1e-9)
+    bullish_candle = float(cur["close"]) > float(cur["open"]) and body/rng >= 0.45
+    bearish_candle = float(cur["close"]) < float(cur["open"]) and body/rng >= 0.45
+    prev_body = abs(float(prev["close"])-float(prev["open"]))
+    bullish_engulf = bullish_candle and float(prev["close"]) < float(prev["open"]) and float(cur["open"]) <= float(prev["close"]) and float(cur["close"]) >= float(prev["open"])
+    bearish_engulf = bearish_candle and float(prev["close"]) > float(prev["open"]) and float(cur["open"]) >= float(prev["close"]) and float(cur["close"]) <= float(prev["open"])
+    pattern = "BULLISH ENGULFING" if bullish_engulf else "BEARISH ENGULFING" if bearish_engulf else "BULLISH CANDLE" if bullish_candle else "BEARISH CANDLE" if bearish_candle else "NEUTRAL CANDLE"
+    score = 0; reasons=[]
+    trend = "BULLISH" if ema20 > ema50 and price > ema20 else "BEARISH" if ema20 < ema50 and price < ema20 else "MIXED"
+    if trend == "BULLISH": score += 2; reasons.append("EMA20 > EMA50 / price above EMA20")
+    elif trend == "BEARISH": score -= 2; reasons.append("EMA20 < EMA50 / price below EMA20")
+    if price >= levels["pivot"]: score += 1; reasons.append("price above Pivot")
+    else: score -= 1; reasons.append("price below Pivot")
+    if r >= 55 and r < 70: score += 1; reasons.append("RSI bullish zone")
+    elif r <= 45 and r > 30: score -= 1; reasons.append("RSI bearish zone")
+    if macd_state == "BULLISH": score += 1; reasons.append("MACD bullish")
+    else: score -= 1; reasons.append("MACD bearish")
+    if bullish_engulf: score += 2; reasons.append("bullish engulfing")
+    elif bearish_engulf: score -= 2; reasons.append("bearish engulfing")
+    # Classic S/R context: reward rejection near a level, but avoid chasing extended moves.
+    near_r1 = abs(price-levels["r1"]) <= max(a*0.35, 0.5)
+    near_s1 = abs(price-levels["s1"]) <= max(a*0.35, 0.5)
+    if near_s1 and bullish_candle: score += 2; reasons.append("support rejection")
+    if near_r1 and bearish_candle: score -= 2; reasons.append("resistance rejection")
+    direction = "BUY" if score >= 4 else "SELL" if score <= -4 else "WAIT"
+    confidence = min(95, 50 + abs(score)*7)
+    entry = round(price, 2)
+    if direction == "BUY":
+        sl = round(min(float(cur["low"]), levels["s1"]) - max(a*0.15, 0.1), 2)
+        tp = [round(levels["r1"],2), round(levels["r2"],2)]
+    elif direction == "SELL":
+        sl = round(max(float(cur["high"]), levels["r1"]) + max(a*0.15, 0.1), 2)
+        tp = [round(levels["s1"],2), round(levels["s2"],2)]
+    else: sl=None; tp=[]
+    return {"signal":direction,"confidence":confidence,"score":score,"entry":entry,"stop_loss":sl,"take_profit":tp,
+            "trend":trend,"rsi":round(r,2),"rsi_state":"OVERBOUGHT" if r>=70 else "OVERSOLD" if r<=30 else "NEUTRAL",
+            "ema20":round(ema20,2),"ema50":round(ema50,2),"macd":round(macd_line,5),"macd_state":macd_state,
+            "pattern":pattern,"pivot":levels["pivot"],"support":[levels["s1"],levels["s2"],levels["s3"]],"resistance":[levels["r1"],levels["r2"],levels["r3"]],
+            "reason":"; ".join(reasons),"method":"Classic · Trend + Pivot + SNR + RSI + MACD + EMA + Candlestick"}
+
 async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict[str, Any], str | None]:
     """Classic Pivot levels based on the previous completed candle of the selected timeframe.
     This intentionally does NOT force D1 for every timeframe.
@@ -1595,6 +1655,29 @@ def _snr_malaysia(candles: list[dict[str, Any]]) -> dict[str, Any]:
     if not highs:
         return {"support":None,"resistance":None,"session":"Malaysia 08:00–17:00"}
     return {"support":round(min(lows),4),"resistance":round(max(highs),4),"session":"Malaysia 08:00–17:00"}
+
+
+def _snr_zone_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
+    current=float(candles[-1]["close"]); highs,lows=_swing_points(candles,2,2); avtr=max(atr(candles), current*0.0004)
+    high_vals=[float(v) for _,v in highs[-20:]] or [float(candles[-1]["high"])]
+    low_vals=[float(v) for _,v in lows[-20:]] or [float(candles[-1]["low"])]
+    resistance=max(high_vals); support=min(low_vals); width=max(avtr*0.22, current*0.00035)
+    def zone(level,side,vals):
+        lo,hi=level-width,level+width; retests=sum(1 for v in vals if lo<=v<=hi)
+        recency=sum(1 for c in candles[-40:] if lo<=float(c["low" if side=="support" else "high"])<=hi)
+        strength=min(99,round(48+retests*7+min(recency,8)*3+(10 if lo<=current<=hi else 0))); dist=abs(current-level)/current*100
+        if side=="support": status="IN ZONE" if lo<=current<=hi else "BROKEN" if current<lo else "ACTIVE"
+        else: status="IN ZONE" if lo<=current<=hi else "BROKEN" if current>hi else "ACTIVE"
+        return {"mid":round(level,4),"low":round(lo,4),"high":round(hi,4),"retests":retests,"strength":strength,"distance_pct":round(dist,3),"status":status}
+    sup,res=zone(support,"support",low_vals),zone(resistance,"resistance",high_vals)
+    if sup["status"]=="IN ZONE" and sup["strength"]>=70: signal="BUY"
+    elif res["status"]=="IN ZONE" and res["strength"]>=70: signal="SELL"
+    elif current>res["high"]: signal="BUY"
+    elif current<sup["low"]: signal="SELL"
+    else: signal="WAIT"
+    confidence=max(sup["strength"],res["strength"]) if signal!="WAIT" else round((sup["strength"]+res["strength"])/2)
+    pos="ABOVE RESISTANCE" if current>res["high"] else "BELOW SUPPORT" if current<sup["low"] else "NEAR SUPPORT" if current<=sup["mid"] else "NEAR RESISTANCE" if current>=res["mid"] else "BETWEEN ZONES"
+    return {"support":sup,"resistance":res,"signal":signal,"confidence":confidence,"position":pos,"reason":f"Price {pos.lower()}; Support {sup['strength']}% · Resistance {res['strength']}%.","method":"Swing SNR · zones + retests + volatility"}
 
 
 def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blocked: bool=False) -> dict[str, Any]:
@@ -1929,6 +2012,28 @@ async def get_pivots(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> di
                 "timeframes": {}, "errors": {selected: str(exc)},
                 "generated_at": datetime.now(timezone.utc).isoformat()}
 
+@app.get("/api/v1/snr/{symbol:path}")
+async def get_snr(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
+    symbol=clean_symbol(symbol); interval=validate_interval(interval)
+    try:
+        candles,mode,warning=await get_candles(symbol,interval,220)
+        if len(candles)<35: raise MarketDataError("SNR uchun candle yetarli emas")
+        return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(float(candles[-1]["close"]),4),"snr":_snr_zone_analysis(candles),"generated_at":datetime.now(timezone.utc).isoformat()}
+    except Exception as exc: raise HTTPException(status_code=503,detail="SNR unavailable: "+str(exc))
+
+@app.get("/api/v1/classic-trade/{symbol:path}")
+async def get_classic_trade(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
+    symbol = clean_symbol(symbol); interval = validate_interval(interval)
+    try:
+        candles, mode, warning = await get_candles(symbol, interval, 220)
+        if len(candles) < 60: raise MarketDataError("Classic Trade uchun candle yetarli emas")
+        ref = candles[-2]; price = float(candles[-1]["close"])
+        levels = calculate_pivot_levels(float(ref["high"]), float(ref["low"]), float(ref["close"]), price)
+        classic = _classic_trade(candles, levels)
+        return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(price,4),"classic":classic,"generated_at":datetime.now(timezone.utc).isoformat()}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Classic Trade unavailable: "+str(exc))
+
 @app.get("/api/v1/ai-smart-analysis/{symbol:path}")
 async def get_ai_smart_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
     try:
@@ -2116,6 +2221,182 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 1
         select(SignalHistory).where(SignalHistory.user_id == user_id)
         .order_by(SignalHistory.created_at.asc()).limit(limit)
     ))
+
+
+
+# ---------------- ICT Signals: M30 -> M5 ----------------
+def _ict_swings(candles: list[dict[str, Any]], window: int = 2):
+    highs, lows = [], []
+    for i in range(window, len(candles)-window):
+        h=float(candles[i]["high"]); l=float(candles[i]["low"])
+        if h >= max(float(candles[j]["high"]) for j in range(i-window,i+window+1)):
+            highs.append((i,h))
+        if l <= min(float(candles[j]["low"]) for j in range(i-window,i+window+1)):
+            lows.append((i,l))
+    return highs,lows
+
+def _ict_fvg(candles: list[dict[str, Any]], lookback: int = 30):
+    start=max(2,len(candles)-lookback)
+    found=[]
+    for i in range(start,len(candles)):
+        a,b,c=candles[i-2],candles[i-1],candles[i]
+        ah,al=float(a["high"]),float(a["low"])
+        ch,cl=float(c["high"]),float(c["low"])
+        if cl > ah:
+            found.append({"type":"BULLISH","low":ah,"high":cl,"index":i})
+        elif ch < al:
+            found.append({"type":"BEARISH","low":ch,"high":al,"index":i})
+    return found[-1] if found else {"type":"NONE","low":None,"high":None,"index":None}
+
+def _ict_displacement(candles: list[dict[str, Any]], direction: str, period: int=14):
+    if len(candles)<period+2: return False, 0.0
+    a=max(atr(candles,period),float(candles[-1]["close"])*0.0002)
+    c=candles[-1]
+    body=abs(float(c["close"])-float(c["open"]))
+    rng=max(float(c["high"])-float(c["low"]),1e-9)
+    directional=(float(c["close"])>float(c["open"])) if direction=="BUY" else (float(c["close"])<float(c["open"]))
+    return directional and body >= a*1.05 and body/rng >= 0.55, body/a
+
+def _ict_mss(candles: list[dict[str, Any]], direction: str):
+    highs,lows=_ict_swings(candles[:-1],2)
+    if direction=="BUY" and highs:
+        level=highs[-1][1]
+        return float(candles[-1]["close"]) > level, level
+    if direction=="SELL" and lows:
+        level=lows[-1][1]
+        return float(candles[-1]["close"]) < level, level
+    return False,None
+
+def _ict_liquidity_sweep(candles: list[dict[str, Any]], lookback:int=12):
+    highs,lows=_ict_swings(candles[:-2],2)
+    cur=candles[-1]
+    hi=float(cur["high"]); lo=float(cur["low"]); close=float(cur["close"])
+    recent_h=[x for x in highs if x[0] >= max(0,len(candles)-lookback-8)]
+    recent_l=[x for x in lows if x[0] >= max(0,len(candles)-lookback-8)]
+    if recent_h:
+        level=recent_h[-1][1]
+        if hi > level and close < level:
+            return {"type":"BSL_SWEEP","level":level,"extreme":hi}
+    if recent_l:
+        level=recent_l[-1][1]
+        if lo < level and close > level:
+            return {"type":"SSL_SWEEP","level":level,"extreme":lo}
+    return {"type":"NONE","level":None,"extreme":None}
+
+def _ict_premium_discount(candles:list[dict[str,Any]], lookback:int=80):
+    data=candles[-lookback:]
+    hi=max(float(c["high"]) for c in data); lo=min(float(c["low"]) for c in data)
+    mid=(hi+lo)/2
+    price=float(candles[-1]["close"])
+    return {"high":hi,"low":lo,"equilibrium":mid,
+            "zone":"PREMIUM" if price>mid else "DISCOUNT",
+            "position_pct":round((price-lo)/max(hi-lo,1e-9)*100,2)}
+
+def _ict_order_block(candles:list[dict[str,Any]], direction:str, atr_value:float):
+    # Last opposite candle before a strong directional candle.
+    for i in range(len(candles)-2,max(-1,len(candles)-25),-1):
+        c,n=candles[i],candles[i+1]
+        co,cc=float(c["open"]),float(c["close"])
+        no,nc=float(n["open"]),float(n["close"])
+        body=abs(nc-no)
+        if direction=="BUY" and cc<co and nc>no and body>=atr_value*0.8:
+            return {"type":"BULLISH","low":float(c["low"]),"high":float(c["high"]),"index":i}
+        if direction=="SELL" and cc>co and nc<no and body>=atr_value*0.8:
+            return {"type":"BEARISH","low":float(c["low"]),"high":float(c["high"]),"index":i}
+    return {"type":"NONE","low":None,"high":None,"index":None}
+
+def _ict_target_liquidity(candles:list[dict[str,Any]], direction:str, entry:float):
+    highs,lows=_ict_swings(candles,2)
+    if direction=="BUY":
+        vals=[v for _,v in highs if v>entry]
+        return min(vals) if vals else None
+    vals=[v for _,v in lows if v<entry]
+    return max(vals) if vals else None
+
+def build_ict_m30_m5(candles30:list[dict[str,Any]], candles5:list[dict[str,Any]]) -> dict[str,Any]:
+    if len(candles30)<60 or len(candles5)<80:
+        raise MarketDataError("ICT M30→M5 uchun kamida M30=60 va M5=80 candle kerak")
+    p30=float(candles30[-1]["close"]); p5=float(candles5[-1]["close"])
+    a30=max(atr(candles30),p30*0.0003); a5=max(atr(candles5),p5*0.0002)
+    pd=_ict_premium_discount(candles30)
+    h30,l30=_ict_swings(candles30[:-1],2)
+    # HTF bias: structure plus EMA relationship, without forcing a trade.
+    ema20=_ema([float(c["close"]) for c in candles30[-80:]],20)
+    ema50=_ema([float(c["close"]) for c in candles30[-120:]],50)
+    hvals=[v for _,v in h30[-3:]]; lvals=[v for _,v in l30[-3:]]
+    bull_structure=len(hvals)>=2 and hvals[-1]>hvals[-2] and len(lvals)>=2 and lvals[-1]>lvals[-2]
+    bear_structure=len(hvals)>=2 and hvals[-1]<hvals[-2] and len(lvals)>=2 and lvals[-1]<lvals[-2]
+    bias="BULLISH" if bull_structure or (ema20>ema50 and p30>ema20) else "BEARISH" if bear_structure or (ema20<ema50 and p30<ema20) else "NEUTRAL"
+    sweep=_ict_liquidity_sweep(candles30)
+    fvg30=_ict_fvg(candles30)
+    direction="BUY" if sweep["type"]=="SSL_SWEEP" else "SELL" if sweep["type"]=="BSL_SWEEP" else bias
+    if direction not in ("BUY","SELL"): direction="WAIT"
+    # Require HTF alignment where possible; a sweep can override a neutral bias but not a strong opposite structure.
+    if direction=="BUY" and bias=="BEARISH" and bear_structure: direction="WAIT"
+    if direction=="SELL" and bias=="BULLISH" and bull_structure: direction="WAIT"
+    score=0; checks=[]; reasons=[]
+    def add(name,pts,ok,reason):
+        nonlocal score
+        if ok: score+=pts; checks.append({"name":name,"points":pts,"status":"PASS"}); reasons.append(reason)
+        else: checks.append({"name":name,"points":0,"status":"MISS"})
+    add("M30 Bias",15,(direction=="BUY" and bias=="BULLISH") or (direction=="SELL" and bias=="BEARISH"),f"M30 bias {bias}")
+    add("Liquidity Sweep",20,(direction=="BUY" and sweep["type"]=="SSL_SWEEP") or (direction=="SELL" and sweep["type"]=="BSL_SWEEP"),f"{sweep['type']} detected")
+    add("Premium/Discount",10,(direction=="BUY" and pd["zone"]=="DISCOUNT") or (direction=="SELL" and pd["zone"]=="PREMIUM"),f"Price is in {pd['zone'].lower()} zone")
+    add("M30 FVG",10,(fvg30["type"]==("BULLISH" if direction=="BUY" else "BEARISH")),f"M30 {fvg30['type']} FVG")
+    ob30=_ict_order_block(candles30,"BUY" if direction=="BUY" else "SELL",a30) if direction!="WAIT" else {"type":"NONE"}
+    add("M30 Order Block",10,ob30.get("type")==("BULLISH" if direction=="BUY" else "BEARISH"),f"M30 {ob30.get('type')} order block")
+    disp5,disp_ratio=_ict_displacement(candles5,"BUY" if direction=="BUY" else "SELL") if direction!="WAIT" else (False,0)
+    mss5,mss_level=_ict_mss(candles5,"BUY" if direction=="BUY" else "SELL") if direction!="WAIT" else (False,None)
+    fvg5=_ict_fvg(candles5)
+    add("M5 MSS",15,mss5,f"M5 {'bullish' if direction=='BUY' else 'bearish'} structure shift")
+    add("M5 Displacement",10,disp5,f"M5 displacement ratio {disp_ratio:.2f} ATR")
+    add("M5 FVG",10,fvg5["type"]==("BULLISH" if direction=="BUY" else "BEARISH"),f"M5 {fvg5['type']} FVG")
+    target=_ict_target_liquidity(candles30 if direction!="WAIT" else candles5,direction,p5) if direction!="WAIT" else None
+    # Entry uses the active M5 FVG midpoint when present; otherwise current price.
+    entry=p5
+    if direction!="WAIT" and fvg5["type"]==("BULLISH" if direction=="BUY" else "BEARISH"):
+        entry=(fvg5["low"]+fvg5["high"])/2
+    extreme=sweep["extreme"] if sweep["type"]!="NONE" else (min(float(c["low"]) for c in candles5[-8:]) if direction=="BUY" else max(float(c["high"]) for c in candles5[-8:]))
+    if direction=="BUY":
+        sl=min(extreme,entry-a5*1.1); risk=max(entry-sl,a5*0.7)
+        tp1=target if target and target>entry+risk else entry+risk*1.5
+        tp2=max(entry+risk*2.5,tp1+risk*0.5)
+    elif direction=="SELL":
+        sl=max(extreme,entry+a5*1.1); risk=max(sl-entry,a5*0.7)
+        tp1=target if target and target<entry-risk else entry-risk*1.5
+        tp2=min(entry-risk*2.5,tp1-risk*0.5)
+    else:
+        sl=None;tp1=tp2=None;risk=None
+    confidence=min(99,score)
+    signal=direction if score>=85 and direction!="WAIT" else "WAIT"
+    rr=round(abs((tp1-entry)/(entry-sl)),2) if signal=="BUY" else round(abs((entry-tp1)/(sl-entry)),2) if signal=="SELL" else 0
+    return {
+        "signal":signal,"confidence":confidence,"score":score,"current_price":round(p5,4),
+        "entry":round(entry,4) if direction!="WAIT" else None,
+        "stop_loss":round(sl,4) if sl is not None else None,
+        "take_profit":[round(tp1,4),round(tp2,4)] if tp1 is not None else [],
+        "risk_reward":rr,"bias":bias,"draw_on_liquidity":sweep["type"],
+        "premium_discount":pd,"m30":{"fvg":fvg30,"order_block":ob30,"atr":round(a30,4),"ema20":round(ema20,4),"ema50":round(ema50,4)},
+        "m5":{"mss":mss5,"mss_level":mss_level,"displacement":disp5,"displacement_atr":round(disp_ratio,2),"fvg":fvg5,"atr":round(a5,4)},
+        "liquidity":{"type":sweep["type"],"level":round(sweep["level"],4) if sweep["level"] else None,"extreme":round(sweep["extreme"],4) if sweep["extreme"] else None},
+        "checks":checks,"reason":"; ".join(dict.fromkeys(reasons)) if reasons else "No ICT confluence",
+        "model":"ICT M30 → M5","note":"85% is a confluence score, not a guaranteed win probability.",
+        "evaluated_at":datetime.now(timezone.utc).isoformat()
+    }
+
+@app.get("/api/v1/ict-signals/{symbol:path}")
+async def get_ict_signals(symbol: str) -> dict[str, Any]:
+    symbol=clean_symbol(symbol)
+    try:
+        c30,mode30,w30=await get_candles(symbol,"30min",260)
+        c5,mode5,w5=await get_candles(symbol,"5min",260)
+        result=build_ict_m30_m5(c30,c5)
+        return {"ok":True,"symbol":symbol,"mode":"live","source":"TradingView/OANDA canonical candle series",
+                "m30_candles":len(c30),"m5_candles":len(c5),"warnings":[x for x in (w30,w5) if x],
+                "ict":result,"generated_at":datetime.now(timezone.utc).isoformat()}
+    except Exception as exc:
+        return {"ok":False,"symbol":symbol,"mode":"error","error":str(exc),
+                "ict":{"signal":"WAIT","confidence":0,"score":0,"reason":str(exc)}}
 
 
 @app.get("/api/v1/signals/advanced/{symbol:path}")
