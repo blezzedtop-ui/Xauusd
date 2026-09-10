@@ -60,7 +60,8 @@ APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8000").strip().rstrip
 REQUIRE_EMAIL_DELIVERY = os.getenv("REQUIRE_EMAIL_DELIVERY", "false").lower() == "true"
 SMTP_USE_STARTTLS = os.getenv("SMTP_USE_STARTTLS", "true").lower() == "true"
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
-AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", "10"))
+AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", "300"))
+AI_RATE_LIMIT_RETRY_NEXT_CANDLE = True
 # Book/OpenAI second-opinion cache: one OpenAI call per newly closed/current candle.
 BOOK_OPENAI_CACHE_TTL = int(os.getenv("BOOK_OPENAI_CACHE_TTL", "300"))
 BOOK_OPENAI_COOLDOWN = int(os.getenv("BOOK_OPENAI_COOLDOWN", "45"))
@@ -230,7 +231,9 @@ TIMEFRAME_SECONDS = {
     "1day": 86400,
 }
 VALID_INTERVALS = tuple(TIMEFRAME_SECONDS.keys())
-AI_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+AI_CACHE: dict[str, tuple[float, str | None, dict[str, Any]]] = {}
+AI_LOCKS: dict[str, asyncio.Lock] = {}
+AI_LOCKS_GUARD = asyncio.Lock()
 MARKET_HISTORY_CACHE: dict[tuple[str, str], tuple[float, list[dict[str, Any]]]] = {}
 MARKET_HISTORY_CACHE_TTL = int(os.getenv("MARKET_HISTORY_CACHE_TTL", "5"))
 LIVE_PRICE_CACHE: dict[str, tuple[float, float, str]] = {}
@@ -1374,56 +1377,89 @@ async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict
     return levels, warning
 
 async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
-    cache_key = json.dumps(analysis_context, sort_keys=True, default=str)
-    now = datetime.now(timezone.utc).timestamp()
-    cached = AI_CACHE.get(cache_key)
-    if cached and now - cached[0] < AI_CACHE_TTL:
-        return cached[1]
-    prompt = (
-        "You are a disciplined market-analysis assistant. Based ONLY on the supplied XAU/USD technical context, "
-        "give a concise non-guaranteed trading analysis. Return JSON with keys: summary, bias, confidence, advice. "
-        "Confidence must be an integer 0-100. Do not claim certainty or guaranteed profits.\n\n" + json.dumps(analysis_context, ensure_ascii=False)
-    )
-    if OPENAI_API_KEY:
-        try:
-            from openai import AsyncOpenAI
-            client = AsyncOpenAI(api_key=OPENAI_API_KEY)
-            response = await client.responses.create(model=OPENAI_MODEL, input=prompt)
-            text = getattr(response, "output_text", "").strip()
-            if text:
-                try:
-                    parsed = json.loads(text)
-                    result = {"mode": "openai", **parsed}
-                    AI_CACHE[cache_key] = (now, result)
-                    return result
-                except json.JSONDecodeError:
-                    result = {"mode": "openai", "summary": text, "bias": analysis_context.get("bias", "NEUTRAL"), "confidence": int(analysis_context.get("confidence", 50)), "advice": "Use the key levels and wait for candle confirmation."}
-                    AI_CACHE[cache_key] = (now, result)
-                    return result
-        except Exception as exc:
-            return {"mode": "fallback", "warning": f"AI provider unavailable: {exc}"}
+    """OpenAI analysis with candle-level cache and request coalescing.
 
-    bias = analysis_context.get("bias", "NEUTRAL")
-    mtf = analysis_context.get("mtf_overall", "MIXED")
-    r = float(analysis_context.get("rsi", 50))
-    direction = analysis_context.get("signal", "WAIT")
-    confidence = 50
-    if direction in ("BUY", "SELL"):
-        confidence += 15
-    if (bias == "BULLISH" and mtf == "BULLISH") or (bias == "BEARISH" and mtf == "BEARISH"):
-        confidence += 20
-    if r > 70 or r < 30:
-        confidence -= 5
-    confidence = max(35, min(confidence, 92))
-    result = {
-        "mode": "rule_based",
-        "summary": f"{bias} Pivot bias with {mtf} multi-timeframe context. Current setup: {direction}.",
-        "bias": bias,
-        "confidence": confidence,
-        "advice": "Follow Pivot direction, wait for confirmed retest/breakout, and avoid entries around HIGH IMPACT news.",
-    }
-    AI_CACHE[cache_key] = (now, result)
-    return result
+    The cache key is symbol/timeframe/candle_time, not the full mutable context.
+    Therefore price ticks inside one candle never trigger another OpenAI request.
+    A 429 is cached for that candle and the next request is allowed only after the
+    candle timestamp changes.
+    """
+    symbol = str(analysis_context.get("symbol", "XAU/USD"))
+    timeframe = str(analysis_context.get("timeframe", "5min"))
+    candle_time = analysis_context.get("candle_time") or analysis_context.get("last_candle_time")
+    cache_key = f"{symbol}|{timeframe}|{candle_time}"
+    now = datetime.now(timezone.utc).timestamp()
+
+    async with AI_LOCKS_GUARD:
+        lock = AI_LOCKS.setdefault(cache_key, asyncio.Lock())
+
+    async with lock:
+        cached = AI_CACHE.get(cache_key)
+        if cached:
+            cached_at, cached_candle, cached_result = cached
+            if cached_candle == str(candle_time) and now - cached_at < AI_CACHE_TTL:
+                return dict(cached_result)
+
+        prompt = (
+            "You are a disciplined market-analysis assistant. Based ONLY on the supplied XAU/USD technical context, "
+            "give a concise non-guaranteed trading analysis. Return JSON with keys: summary, bias, confidence, advice. "
+            "Confidence must be an integer 0-100. Do not claim certainty or guaranteed profits.\n\n"
+            + json.dumps(analysis_context, ensure_ascii=False, default=str)
+        )
+        if OPENAI_API_KEY:
+            try:
+                from openai import AsyncOpenAI
+                client = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=REQUEST_TIMEOUT, max_retries=0)
+                response = await client.responses.create(model=OPENAI_MODEL, input=prompt)
+                text = getattr(response, "output_text", "").strip()
+                if text:
+                    try:
+                        parsed = json.loads(text)
+                        result = {"mode": "openai", **parsed}
+                    except json.JSONDecodeError:
+                        result = {
+                            "mode": "openai", "summary": text,
+                            "bias": analysis_context.get("bias", "NEUTRAL"),
+                            "confidence": int(analysis_context.get("confidence", 50)),
+                            "advice": "Use the key levels and wait for candle confirmation."
+                        }
+                    AI_CACHE[cache_key] = (now, str(candle_time), result)
+                    return result
+            except Exception as exc:
+                msg = str(exc)
+                if "429" in msg or "rate limit" in msg.lower():
+                    result = {
+                        "mode": "rate_limited", "warning": "OpenAI rate limit (429).",
+                        "summary": "OpenAI 429: natija shu candle uchun cache qilindi; keyingi candle'da qayta tekshiriladi.",
+                        "bias": analysis_context.get("bias", "NEUTRAL"),
+                        "confidence": 0,
+                        "advice": "Keyingi candle ochilganda OpenAI avtomatik qayta tekshiriladi."
+                    }
+                else:
+                    result = {"mode": "fallback", "warning": f"AI provider unavailable: {msg}", "summary": "OpenAI vaqtincha mavjud emas.", "bias": analysis_context.get("bias", "NEUTRAL"), "confidence": 0, "advice": "Keyingi candle'da qayta tekshiriladi."}
+                AI_CACHE[cache_key] = (now, str(candle_time), result)
+                return result
+
+        bias = analysis_context.get("bias", "NEUTRAL")
+        mtf = analysis_context.get("mtf_overall", "MIXED")
+        r = float(analysis_context.get("rsi", 50))
+        direction = analysis_context.get("signal", "WAIT")
+        confidence = 50
+        if direction in ("BUY", "SELL"):
+            confidence += 15
+        if (bias == "BULLISH" and mtf == "BULLISH") or (bias == "BEARISH" and mtf == "BEARISH"):
+            confidence += 20
+        if r > 70 or r < 30:
+            confidence -= 5
+        confidence = max(35, min(confidence, 92))
+        result = {
+            "mode": "rule_based",
+            "summary": f"{bias} Pivot bias with {mtf} multi-timeframe context. Current setup: {direction}.",
+            "bias": bias, "confidence": confidence,
+            "advice": "Follow Pivot direction, wait for confirmed retest/breakout, and avoid entries around HIGH IMPACT news.",
+        }
+        AI_CACHE[cache_key] = (now, str(candle_time), result)
+        return result
 
 
 
@@ -1754,6 +1790,7 @@ async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
     ai_context = {
         "symbol": symbol,
         "timeframe": interval,
+        "candle_time": candles_data[-1].get("time"),
         "current_price": current_price,
         "bias": levels["bias"],
         "signal": setup["signal"],
