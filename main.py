@@ -249,6 +249,9 @@ MTF_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 ADVANCED_CACHE_TTL = float(os.getenv("ADVANCED_CACHE_TTL", "5"))
 MTF_CACHE_TTL = float(os.getenv("MTF_CACHE_TTL", "10"))
 LIVE_PRICE_CACHE_TTL = float(os.getenv("LIVE_PRICE_CACHE_TTL", "1.5"))
+AUTO_ENTRY_ENABLED = os.getenv("AUTO_ENTRY_ENABLED", "true").lower() == "true"
+AUTO_ENTRY_THRESHOLD = float(os.getenv("AUTO_ENTRY_THRESHOLD", "85"))
+AUTO_ENTRY_DUPLICATE_MINUTES = int(os.getenv("AUTO_ENTRY_DUPLICATE_MINUTES", "5"))
 
 
 def db() -> Session:
@@ -1323,11 +1326,10 @@ async def _calendar_finnhub(days: int) -> dict[str, Any]:
 
 
 async def economic_calendar(days: int = 7) -> dict[str, Any]:
-    """Public all-market economic calendar. No user API key is required."""
-    result = await _calendar_forexfactory(days)
-    if result.get("events") or result.get("mode") == "live":
-        return result
-    return {"mode":"unavailable","events":[],"warning":result.get("warning") or "Economic Calendar hozircha mavjud emas."}
+    """TradingView Economic Calendar is embedded client-side; no API key or scrape is used."""
+    return {"mode":"widget", "provider":"TradingView Economic Calendar", "events":[],
+            "warning":None, "days":days,
+            "message":"TradingView Economic Calendar widget provides the live global calendar."}
 
 
 def next_candle_close(timestamp: int, interval: str, now_ts: float | None = None) -> int:
@@ -1942,9 +1944,41 @@ async def get_ai_smart_analysis(symbol: str, interval: str = Query(DEFAULT_INTER
                 "ai": {"mode":"fallback","summary":"AI Smart Analysis uchun backend ma'lumoti yetarli emas.",
                        "bias":"NEUTRAL","confidence":0,"advice":"Market data/API sozlamalarini tekshiring."}}
 
+@app.get("/api/v1/analysis/{symbol:path}")
+async def get_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
+    """Technical analysis from the canonical TradingView/OANDA candle series only."""
+    symbol = clean_symbol(symbol)
+    interval = validate_interval(interval)
+    try:
+        candles_data = await fetch_tradingview_candles(symbol, interval, 220)
+        if len(candles_data) < 35:
+            raise MarketDataError("TradingView candles yetarli emas")
+        levels, _ = await calculate_pivot_for_interval(symbol, interval)
+        setup = build_key_level_signal(candles_data, levels, news_blocked=False)
+        technical = technical_analysis(candles_data, levels, setup)
+        return {
+            "ok": True, "symbol": symbol, "interval": interval, "mode": "tradingview",
+            "provider": "TradingView", "source": TRADINGVIEW_SYMBOL,
+            "current_price": round(float(candles_data[-1]["close"]), 4),
+            "candles": candles_data, "levels": levels, "technical": technical,
+            "setup": setup, "direction": setup.get("signal", "WAIT"),
+            "headline": f"{setup.get('signal','WAIT')} · {setup.get('setup','WAIT')}",
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:
+        return {"ok": False, "symbol": symbol, "interval": interval, "mode": "error",
+                "error": str(exc), "technical": {}, "levels": {}, "setup": {"signal":"WAIT"},
+                "direction": "WAIT", "generated_at": datetime.now(timezone.utc).isoformat()}
+
 @app.get("/api/v1/multi-timeframe/{symbol:path}")
 async def get_mtf(symbol: str) -> dict[str, Any]:
-    return await multi_timeframe(clean_symbol(symbol))
+    try:
+        return await multi_timeframe(clean_symbol(symbol))
+    except Exception as exc:
+        # Never turn an MTF panel failure into HTTP 500.
+        return {"timeframes": {}, "overall": "UNAVAILABLE", "bullish_count": 0, "bearish_count": 0,
+                "available_count": 0, "errors": {"global": f"{type(exc).__name__}: {exc}"}, "mode": "tradingview",
+                "generated_at": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/v1/sessions")
@@ -1960,6 +1994,128 @@ async def get_calendar(days: int = Query(7, ge=1, le=14)) -> dict[str, Any]:
 @app.get("/api/v1/candle-countdown")
 async def get_countdown(interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
     return candle_countdown(interval)
+
+
+
+async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 100) -> list[SignalHistory]:
+    """Refresh open paper trades using the same TradingView/OANDA:XAUUSD candles.
+
+    Every auto/manual signal remains in the database. When TP1 or SL is touched,
+    the row is closed and its payload receives result price/type and exact duration.
+    If both TP1 and SL are touched inside one candle, the result is marked AMBIGUOUS
+    rather than guessing which level was hit first.
+    """
+    rows = list(session.scalars(
+        select(SignalHistory).where(
+            SignalHistory.user_id == user_id,
+            SignalHistory.outcome == "OPEN"
+        ).order_by(SignalHistory.created_at.asc()).limit(limit)
+    ))
+    if not rows:
+        return list(session.scalars(
+            select(SignalHistory).where(SignalHistory.user_id == user_id)
+            .order_by(SignalHistory.created_at.asc()).limit(limit)
+        ))
+
+    cache: dict[str, list[dict[str, Any]]] = {}
+    changed = False
+    for row in rows:
+        try:
+            payload = json.loads(row.payload or "{}")
+        except Exception:
+            payload = {}
+        setup = payload.get("setup") or {}
+        # Backward compatibility with advanced payloads.
+        if not setup:
+            adv = payload.get("advanced") or payload.get("signal") or {}
+            setup = {
+                "entry": adv.get("entry", row.price),
+                "stop_loss": adv.get("stop_loss"),
+                "take_profit": adv.get("take_profit", []),
+            }
+        entry = setup.get("entry", row.price)
+        sl = setup.get("stop_loss")
+        tps = setup.get("take_profit") or []
+        try:
+            entry = float(entry)
+            sl = float(sl) if sl is not None else None
+            tp1 = float(tps[0]) if tps else None
+        except Exception:
+            continue
+        if sl is None or tp1 is None or row.direction not in ("BUY", "SELL"):
+            continue
+
+        tf = validate_interval(row.interval)
+        if tf not in cache:
+            try:
+                candles, _, _ = await get_candles(row.symbol, tf, 260)
+                cache[tf] = candles
+            except Exception:
+                cache[tf] = []
+        candles = cache[tf]
+        if not candles:
+            continue
+
+        created = row.created_at
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=timezone.utc)
+        result = None
+        result_price = None
+        result_candle_time = None
+        for c in candles:
+            ct = c.get("time")
+            try:
+                cdt = datetime.fromtimestamp(float(ct), tz=timezone.utc) if isinstance(ct, (int, float)) else datetime.fromisoformat(str(ct).replace("Z", "+00:00"))
+            except Exception:
+                continue
+            if cdt <= created:
+                continue
+            high = float(c.get("high"))
+            low = float(c.get("low"))
+            if row.direction == "BUY":
+                hit_tp = high >= tp1
+                hit_sl = low <= sl
+            else:
+                hit_tp = low <= tp1
+                hit_sl = high >= sl
+            if hit_tp and hit_sl:
+                result = "AMBIGUOUS"
+                # Keep the candle close as an auditable reference; do not invent order.
+                result_price = float(c.get("close"))
+                result_candle_time = cdt
+                break
+            if hit_tp:
+                result = "TP HIT"
+                result_price = tp1
+                result_candle_time = cdt
+                break
+            if hit_sl:
+                result = "SL HIT"
+                result_price = sl
+                result_candle_time = cdt
+                break
+
+        if result and result_candle_time:
+            duration = max(0, int((result_candle_time - created).total_seconds()))
+            payload["result"] = {
+                "type": result,
+                "price": round(result_price, 4) if result_price is not None else None,
+                "candle_time": result_candle_time.isoformat(),
+                "duration_seconds": duration,
+                "duration_minutes": round(duration / 60, 2),
+            }
+            payload["trade_status"] = "CLOSED"
+            row.payload = json.dumps(payload, ensure_ascii=False)
+            row.outcome = result
+            row.closed_at = result_candle_time
+            changed = True
+
+    if changed:
+        session.commit()
+    return list(session.scalars(
+        select(SignalHistory).where(SignalHistory.user_id == user_id)
+        .order_by(SignalHistory.created_at.asc()).limit(limit)
+    ))
 
 
 @app.get("/api/v1/signals/advanced/{symbol:path}")
@@ -1978,37 +2134,76 @@ async def advanced_signals(symbol: str, authorization: str | None = Header(defau
 
 @app.post("/api/v1/signals/auto-record")
 async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    """Automatically journal fresh BUY/SELL paper signals for the logged-in user.
-
-    This is paper/signal mode only. Real broker order execution requires a broker
-    trading API and is intentionally not performed by this endpoint.
-    """
+    """Auto-enter paper trades only when Signal Lab confidence is strictly > 85%."""
     user = current_user(authorization, session)
-    result = await build_advanced_signals(clean_symbol(symbol), news_blocked=False)
+    key = clean_symbol(symbol)
+    # First close any previously opened auto trades using fresh TradingView candles.
+    await refresh_signal_outcomes(session, user.id, limit=500)
+    if not AUTO_ENTRY_ENABLED:
+        return {"enabled": False, "threshold": AUTO_ENTRY_THRESHOLD, "count": 0, "saved_timeframes": [], "mode": "paper"}
+
+    result = await build_advanced_signals(key, news_blocked=False)
     now = datetime.now(timezone.utc)
     created = []
     for tf, item in result.get("timeframes", {}).items():
         direction = item.get("signal")
-        if direction not in ("BUY", "SELL") or item.get("entry") is None:
+        confidence = float(item.get("confidence") or 0)
+        entry = item.get("entry")
+        sl = item.get("stop_loss")
+        tp = item.get("take_profit") or []
+        if direction not in ("BUY", "SELL") or confidence <= AUTO_ENTRY_THRESHOLD or entry is None or sl is None or not tp:
             continue
-        recent = session.scalars(select(SignalHistory).where(
-            SignalHistory.user_id == user.id, SignalHistory.symbol == clean_symbol(symbol),
-            SignalHistory.interval == tf, SignalHistory.outcome == "OPEN"
+
+        # One open auto-trade per timeframe. A new trade is allowed after the previous
+        # one is closed, even if the direction is unchanged.
+        recent_open = session.scalars(select(SignalHistory).where(
+            SignalHistory.user_id == user.id,
+            SignalHistory.symbol == key,
+            SignalHistory.interval == tf,
+            SignalHistory.outcome == "OPEN",
         ).order_by(SignalHistory.created_at.desc())).first()
-        if recent and (now - recent.created_at.replace(tzinfo=timezone.utc) if recent.created_at.tzinfo is None else now - recent.created_at).total_seconds() < 900 and recent.direction == direction:
+        if recent_open:
             continue
+
+        # Avoid duplicate entries from repeated browser polling on the same candle.
+        recent = session.scalars(select(SignalHistory).where(
+            SignalHistory.user_id == user.id,
+            SignalHistory.symbol == key,
+            SignalHistory.interval == tf,
+        ).order_by(SignalHistory.created_at.desc())).first()
+        if recent:
+            rcreated = recent.created_at
+            if rcreated.tzinfo is None:
+                rcreated = rcreated.replace(tzinfo=timezone.utc)
+            if (now - rcreated).total_seconds() < AUTO_ENTRY_DUPLICATE_MINUTES * 60:
+                continue
+
+        trade_payload = {
+            "trade_status": "OPEN",
+            "entry": float(entry),
+            "stop_loss": float(sl),
+            "take_profit": [float(x) for x in tp],
+            "signal": item,
+            "mode": "paper_auto_entry",
+            "source": "TradingView OANDA:XAUUSD candle series",
+            "auto_entry": True,
+            "confidence_threshold": AUTO_ENTRY_THRESHOLD,
+            "confidence_at_entry": confidence,
+            "entry_time": now.isoformat(),
+        }
         row = SignalHistory(
-            user_id=user.id, symbol=clean_symbol(symbol), interval=tf, direction=direction,
-            headline=f"AUTO {direction} • {tf.upper()} • {item.get('confidence',0)}%",
-            price=float(item["entry"]),
-            payload=json.dumps({"signal":item,"mode":"paper","source":"fresh live candle feed"}),
+            user_id=user.id, symbol=key, interval=tf, direction=direction,
+            headline=f"AUTO ENTRY {direction} • {tf.upper()} • {confidence:.1f}%",
+            price=float(entry), payload=json.dumps({"setup": {"entry": float(entry), "stop_loss": float(sl), "take_profit": [float(x) for x in tp]}, **trade_payload}, ensure_ascii=False),
             outcome="OPEN", created_at=now
         )
-        session.add(row); created.append(tf)
+        session.add(row)
+        created.append({"interval": tf, "direction": direction, "confidence": confidence, "entry": float(entry), "sl": float(sl), "tp": [float(x) for x in tp]})
+
     if created:
         session.commit()
-    rows = await refresh_signal_outcomes(session, user.id)
-    return {"saved_timeframes":created,"count":len(created),"history_count":len(rows),"mode":"paper"}
+    rows = await refresh_signal_outcomes(session, user.id, limit=500)
+    return {"enabled": True, "threshold": AUTO_ENTRY_THRESHOLD, "saved_timeframes": [x["interval"] for x in created], "trades": created, "count": len(created), "history_count": len(rows), "mode": "paper_auto_entry"}
 
 
 @app.get("/api/v1/signals/live/{symbol:path}")
@@ -2070,7 +2265,13 @@ async def signal_history(limit: int = Query(50, ge=1, le=100), authorization: st
         try: payload = json.loads(r.payload)
         except Exception: pass
         setup = payload.get("setup", {})
-        items.append({"id": r.id, "symbol": r.symbol, "interval": r.interval, "direction": r.direction, "entry": setup.get("entry"), "tp": setup.get("take_profit", []), "sl": setup.get("stop_loss"), "headline": r.headline, "price": r.price, "outcome": r.outcome, "created_at": r.created_at.isoformat(), "closed_at": r.closed_at.isoformat() if r.closed_at else None})
+        result = payload.get("result", {}) or {}
+        created_at = r.created_at if r.created_at.tzinfo else r.created_at.replace(tzinfo=timezone.utc)
+        closed_at = r.closed_at if r.closed_at and r.closed_at.tzinfo else (r.closed_at.replace(tzinfo=timezone.utc) if r.closed_at else None)
+        duration_seconds = result.get("duration_seconds")
+        if duration_seconds is None and closed_at:
+            duration_seconds = max(0, int((closed_at - created_at).total_seconds()))
+        items.append({"id": r.id, "symbol": r.symbol, "interval": r.interval, "direction": r.direction, "entry": setup.get("entry", r.price), "tp": setup.get("take_profit", []), "sl": setup.get("stop_loss"), "headline": r.headline, "price": r.price, "outcome": r.outcome, "result_price": result.get("price"), "duration_seconds": duration_seconds, "duration_minutes": round(duration_seconds/60,2) if duration_seconds is not None else None, "auto_entry": bool(payload.get("auto_entry")), "confidence": payload.get("confidence_at_entry", payload.get("signal",{}).get("confidence")), "created_at": created_at.isoformat(), "closed_at": closed_at.isoformat() if closed_at else None})
     return {"items": items}
 
 
