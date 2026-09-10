@@ -25,7 +25,7 @@ Agar RealMarketAPI kaliti bo'lsa:
 
 Agar OpenAI ishlatilsa:
 - `OPENAI_API_KEY=...`
-- `OPENAI_MODEL=gpt-5`
+- `OPENAI_MODEL=gpt-5.6-sol`
 
 Calendar kerak bo'lsa:
 - `FINNHUB_API_KEY=...`

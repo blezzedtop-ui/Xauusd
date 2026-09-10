@@ -43,7 +43,25 @@ TRADING_ECONOMICS_API_KEY = os.getenv("TRADING_ECONOMICS_API_KEY", "").strip()
 CALENDAR_PROVIDER = os.getenv("CALENDAR_PROVIDER", "auto").strip().lower()
 FOREX_FACTORY_CALENDAR_URL = os.getenv("FOREX_FACTORY_CALENDAR_URL", "https://www.forexfactory.com/calendar?export=csv&week=this").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5").strip() or "gpt-5"
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip() or "openai/gpt-oss-120b"
+GROQ_QWEN_MODEL = os.getenv("GROQ_QWEN_MODEL", "qwen/qwen3.6-27b").strip() or "qwen/qwen3.6-27b"
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free").strip() or "openrouter/free"
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "").strip()
+MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest").strip() or "mistral-small-latest"
+CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "").strip()
+CEREBRAS_MODEL = os.getenv("CEREBRAS_MODEL", "gpt-oss-120b").strip() or "gpt-oss-120b"
+CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
+CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+CLOUDFLARE_MODEL = os.getenv("CLOUDFLARE_MODEL", "@cf/meta/llama-3.1-8b-instruct").strip() or "@cf/meta/llama-3.1-8b-instruct"
+HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
+HF_MODEL = os.getenv("HF_MODEL", "openai/gpt-oss-120b:fastest").strip() or "openai/gpt-oss-120b:fastest"
+AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto"
+AI_FALLBACK_ORDER = [x.strip().lower() for x in os.getenv("AI_FALLBACK_ORDER", "groq,gemini,openrouter,groq_qwen,mistral,cerebras,cloudflare,huggingface,openai").split(",") if x.strip()]
 ALLOW_DEMO = os.getenv("ALLOW_DEMO", "false").lower() == "true"
 DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "XAU/USD").strip() or "XAU/USD"
 DEFAULT_INTERVAL = os.getenv("DEFAULT_INTERVAL", "30min").strip() or "30min"
@@ -62,6 +80,82 @@ SMTP_USE_STARTTLS = os.getenv("SMTP_USE_STARTTLS", "true").lower() == "true"
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", "300"))
 AI_RATE_LIMIT_RETRY_NEXT_CANDLE = True
+
+AI_PROVIDER_STATUS: dict[str, dict[str, Any]] = {}
+
+async def _openai_compatible_completion(api_key: str, base_url: str, model: str, prompt: str, provider: str, extra_headers: dict[str, str] | None = None) -> tuple[str, str]:
+    from openai import AsyncOpenAI
+    client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=REQUEST_TIMEOUT, max_retries=0, default_headers=extra_headers or None)
+    response = await client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1,
+        response_format={"type": "json_object"},
+    )
+    text = (response.choices[0].message.content or "").strip()
+    if not text:
+        raise RuntimeError(f"{provider}: empty response")
+    return text, provider
+
+async def _cloudflare_completion(prompt: str) -> tuple[str, str]:
+    url=f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/run/{CLOUDFLARE_MODEL}"
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        r=await client.post(url, headers={"Authorization":f"Bearer {CLOUDFLARE_API_TOKEN}","Content-Type":"application/json"}, json={"prompt":prompt})
+        r.raise_for_status()
+        data=r.json()
+    text=((data.get("result") or {}).get("response") or "").strip()
+    if not text:
+        raise RuntimeError("cloudflare: empty response")
+    return text, "cloudflare"
+
+async def _provider_call(provider: str, prompt: str) -> tuple[str, str]:
+    if provider == "groq" and GROQ_API_KEY:
+        return await _openai_compatible_completion(GROQ_API_KEY, "https://api.groq.com/openai/v1", GROQ_MODEL, prompt, "groq")
+    if provider == "groq_qwen" and GROQ_API_KEY:
+        return await _openai_compatible_completion(GROQ_API_KEY, "https://api.groq.com/openai/v1", GROQ_QWEN_MODEL, prompt, "groq_qwen")
+    if provider == "gemini" and GEMINI_API_KEY:
+        return await _openai_compatible_completion(GEMINI_API_KEY, "https://generativelanguage.googleapis.com/v1beta/openai/", GEMINI_MODEL, prompt, "gemini")
+    if provider == "openrouter" and OPENROUTER_API_KEY:
+        return await _openai_compatible_completion(OPENROUTER_API_KEY, "https://openrouter.ai/api/v1", OPENROUTER_MODEL, prompt, "openrouter", {"HTTP-Referer": APP_BASE_URL, "X-OpenRouter-Title": APP_TITLE})
+    if provider == "mistral" and MISTRAL_API_KEY:
+        return await _openai_compatible_completion(MISTRAL_API_KEY, "https://api.mistral.ai/v1", MISTRAL_MODEL, prompt, "mistral")
+    if provider == "cerebras" and CEREBRAS_API_KEY:
+        return await _openai_compatible_completion(CEREBRAS_API_KEY, "https://api.cerebras.ai/v1", CEREBRAS_MODEL, prompt, "cerebras", {"X-Cerebras-Version-Patch":"2"})
+    if provider == "cloudflare" and CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN:
+        return await _cloudflare_completion(prompt)
+    if provider == "huggingface" and HF_TOKEN:
+        return await _openai_compatible_completion(HF_TOKEN, "https://router.huggingface.co/v1", HF_MODEL, prompt, "huggingface")
+    if provider == "openai" and OPENAI_API_KEY:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=REQUEST_TIMEOUT, max_retries=0)
+        response = await client.responses.create(model=OPENAI_MODEL, input=prompt)
+        text = getattr(response, "output_text", "").strip()
+        if text:
+            return text, "openai"
+    raise RuntimeError(f"{provider}: not configured")
+
+async def ai_json_completion(prompt: str) -> tuple[str, str]:
+    """Free-first AI router with automatic provider failover.
+
+    TradingView/quant data is supplied by the caller; this router never fetches
+    market data. A provider error, timeout or rate limit immediately advances
+    to the next configured provider. The deterministic engine remains the final fallback.
+    """
+    order = [AI_PROVIDER] if AI_PROVIDER not in {"auto", ""} else AI_FALLBACK_ORDER
+    # If explicitly selecting a provider, still permit only that provider.
+    errors=[]
+    for provider in order:
+        try:
+            text, used = await _provider_call(provider, prompt)
+            AI_PROVIDER_STATUS[used] = {"status":"ONLINE", "checked_at":datetime.now(timezone.utc).isoformat(), "error":""}
+            return text, used
+        except Exception as exc:
+            msg=str(exc)
+            AI_PROVIDER_STATUS[provider] = {"status":"LIMITED" if "429" in msg or "rate" in msg.lower() else "OFFLINE", "checked_at":datetime.now(timezone.utc).isoformat(), "error":msg[:220]}
+            errors.append(f"{provider}: {msg[:120]}")
+            continue
+    raise RuntimeError("All configured AI providers failed: " + " | ".join(errors))
+
 # Book/OpenAI second-opinion cache: one OpenAI call per newly closed/current candle.
 BOOK_OPENAI_CACHE_TTL = int(os.getenv("BOOK_OPENAI_CACHE_TTL", "300"))
 BOOK_OPENAI_COOLDOWN = int(os.getenv("BOOK_OPENAI_COOLDOWN", "45"))
@@ -1514,19 +1608,16 @@ async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
             "Confidence must be an integer 0-100. Do not claim certainty or guaranteed profits.\n\n"
             + json.dumps(analysis_context, ensure_ascii=False, default=str)
         )
-        if OPENAI_API_KEY:
+        if GROQ_API_KEY or OPENAI_API_KEY:
             try:
-                from openai import AsyncOpenAI
-                client = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=REQUEST_TIMEOUT, max_retries=0)
-                response = await client.responses.create(model=OPENAI_MODEL, input=prompt)
-                text = getattr(response, "output_text", "").strip()
+                text, ai_provider = await ai_json_completion(prompt)
                 if text:
                     try:
                         parsed = json.loads(text)
-                        result = {"mode": "openai", **parsed}
+                        result = {"mode": ai_provider, **parsed}
                     except json.JSONDecodeError:
                         result = {
-                            "mode": "openai", "summary": text,
+                            "mode": ai_provider, "summary": text,
                             "bias": analysis_context.get("bias", "NEUTRAL"),
                             "confidence": int(analysis_context.get("confidence", 50)),
                             "advice": "Use the key levels and wait for candle confirmation."
@@ -1569,6 +1660,79 @@ async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
         AI_CACHE[cache_key] = (now, str(candle_time), result)
         return result
 
+
+
+AI_SIGNAL_CACHE: dict[str, tuple[float, str | None, dict[str, Any]]] = {}
+AI_SIGNAL_LOCKS: dict[str, asyncio.Lock] = {}
+AI_SIGNAL_LOCKS_GUARD = asyncio.Lock()
+
+async def ai_validate_module_signal(source: str, symbol: str, interval: str, candle_time: Any, deterministic: dict[str, Any]) -> dict[str, Any]:
+    """Independent AI validator shared by every signal module.
+    It never fetches market data itself: only the supplied TradingView-derived
+    OHLC/quantitative context is evaluated. One request is cached per closed candle.
+    """
+    key=f"module|{source}|{clean_symbol(symbol)}|{validate_interval(interval)}"
+    async with AI_SIGNAL_LOCKS_GUARD:
+        lock=AI_SIGNAL_LOCKS.setdefault(key, asyncio.Lock())
+    async with lock:
+        now=datetime.now(timezone.utc).timestamp()
+        cached=AI_SIGNAL_CACHE.get(key)
+        if cached and cached[1] == str(candle_time) and now-cached[0] < AI_CACHE_TTL:
+            return dict(cached[2])
+        base_signal=str(deterministic.get("signal", "WAIT")).upper()
+        context={
+            "source":source,"symbol":clean_symbol(symbol),"timeframe":validate_interval(interval),
+            "candle_time":candle_time,"deterministic_signal":base_signal,
+            "deterministic_confidence":deterministic.get("confidence",0),
+            "entry":deterministic.get("entry"),"stop_loss":deterministic.get("stop_loss"),
+            "take_profit":deterministic.get("take_profit",[]),
+            "reason":deterministic.get("reason",""),
+            "technical": {k:v for k,v in deterministic.items() if k not in {"recent_candles","candles"}},
+        }
+        result=None
+        if (GROQ_API_KEY or OPENAI_API_KEY) and now >= OPENAI_GLOBAL_RATE_LIMIT_UNTIL:
+            try:
+                prompt=("You are the validation layer of a quantitative XAU/USD trading system. "
+                    "Evaluate ONLY the supplied deterministic analysis. Do not invent prices or external news. "
+                    "Return JSON only: signal (BUY/SELL/WAIT), confidence (0-100 integer), agreement (0-100 integer), "
+                    "risk_flags (array of short strings), reasoning (short string). "
+                    "Be conservative: if evidence conflicts or the setup is weak, return WAIT. "
+                    "This is analysis, not a guarantee.\n\n"+json.dumps(context,ensure_ascii=False,default=str))
+                text, ai_provider = await ai_json_completion(prompt)
+                parsed=json.loads(text)
+                sig=str(parsed.get("signal","WAIT")).upper()
+                result={"mode":ai_provider,"signal":sig if sig in {"BUY","SELL","WAIT"} else "WAIT",
+                        "confidence":max(0,min(100,int(parsed.get("confidence",0)))),
+                        "agreement":max(0,min(100,int(parsed.get("agreement",0)))),
+                        "risk_flags":parsed.get("risk_flags",[]) if isinstance(parsed.get("risk_flags",[]),list) else [],
+                        "reasoning":str(parsed.get("reasoning","AI validation."))}
+            except Exception as exc:
+                msg=str(exc)
+                if "429" in msg or "rate limit" in msg.lower():
+                    globals()["OPENAI_GLOBAL_RATE_LIMIT_UNTIL"]=now+OPENAI_GLOBAL_RATE_LIMIT_SECONDS
+                result={"mode":"fallback","signal":base_signal if base_signal in {"BUY","SELL"} else "WAIT",
+                        "confidence":int(deterministic.get("confidence",0) or 0),"agreement":50,
+                        "risk_flags":["AI provider unavailable"],"reasoning":"Deterministic quantitative validation used."}
+        else:
+            result={"mode":"rule_based","signal":base_signal if base_signal in {"BUY","SELL"} else "WAIT",
+                    "confidence":int(deterministic.get("confidence",0) or 0),"agreement":50,
+                    "risk_flags":[],"reasoning":"AI API unavailable or cooldown active; quantitative engine retained."}
+        AI_SIGNAL_CACHE[key]=(now,str(candle_time),result)
+        return dict(result)
+
+
+def merge_ai_validation(deterministic: dict[str, Any], ai: dict[str, Any]) -> dict[str, Any]:
+    """Conservative ensemble: disagreement downgrades to WAIT; agreement can raise confidence modestly."""
+    out=dict(deterministic); base=str(out.get("signal","WAIT")).upper(); ais=str(ai.get("signal","WAIT")).upper()
+    out["ai_validation"]=ai
+    if base in {"BUY","SELL"} and ais in {"BUY","SELL"} and ais != base:
+        out["pre_ai_signal"]=base; out["signal"]="WAIT"; out["ai_consensus"]="CONFLICT"; out["confidence"]=min(int(out.get("confidence",0) or 0),79)
+    elif base in {"BUY","SELL"} and ais==base:
+        out["ai_consensus"]="CONFIRMED"; out["confidence"]=min(99,max(int(out.get("confidence",0) or 0), round((int(out.get("confidence",0) or 0)*0.7)+(int(ai.get("confidence",0) or 0)*0.3))))
+    else:
+        out["ai_consensus"]="WAIT"
+    out["reason"]=((out.get("reason") or "") + f" | AI validation: {out['ai_consensus']} ({ai.get('confidence',0)}%).").strip()
+    return out
 
 
 def _swing_points(candles: list[dict[str, Any]], left: int = 2, right: int = 2) -> tuple[list[tuple[int,float]], list[tuple[int,float]]]:
@@ -1776,6 +1940,10 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
         try:
             candles_data,mode,warning=await get_candles(symbol,tf,260)
             item=build_advanced_signal(candles_data,tf,news_blocked=news_blocked)
+            candle_time=candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")
+            ai=await ai_validate_module_signal("Signal Lab",symbol,tf,candle_time,item)
+            item=merge_ai_validation(item,ai)
+            item["candle_time"]=candle_time
             # Every timeframe and signal component is calculated from the same
             # TradingView OHLC series returned by get_candles(). No secondary
             # market-data or provider-intelligence result is merged into the signal.
@@ -1837,10 +2005,8 @@ async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, An
 
         if ai is None:
             ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI unavailable.", "mode": "fallback"}
-            if OPENAI_API_KEY:
+            if GROQ_API_KEY or OPENAI_API_KEY:
                 try:
-                    from openai import AsyncOpenAI
-                    client = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=REQUEST_TIMEOUT, max_retries=0)
                     prompt = (
                         "You are the second-opinion validator for XAU/USD. "
                         "Use ONLY the supplied SIMPLE TRADING Book pattern result and recent OHLC candles. "
@@ -1850,8 +2016,7 @@ async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, An
                         "Do not invent price data.\n\n" +
                         json.dumps(context, ensure_ascii=False, default=str)
                     )
-                    response = await client.responses.create(model=OPENAI_MODEL, input=prompt)
-                    text = getattr(response, "output_text", "").strip()
+                    text, ai_provider = await ai_json_completion(prompt)
                     if text:
                         try:
                             parsed = json.loads(text)
@@ -1860,10 +2025,10 @@ async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, An
                                 "signal": sig if sig in {"BUY", "SELL", "WAIT"} else "WAIT",
                                 "confidence": max(0, min(100, int(parsed.get("confidence", 0)))),
                                 "reason": str(parsed.get("reason", "OpenAI second opinion.")),
-                                "mode": "openai",
+                                "mode": ai_provider,
                             }
                         except Exception:
-                            ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI returned an invalid structured result.", "mode": "openai"}
+                            ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI returned an invalid structured result.", "mode": ai_provider}
                 except Exception as exc:
                     msg = str(exc)
                     if "429" in msg or "rate limit" in msg.lower():
@@ -2035,7 +2200,11 @@ async def get_snr(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[
     try:
         candles,mode,warning=await get_candles(symbol,interval,220)
         if len(candles)<35: raise MarketDataError("SNR uchun candle yetarli emas")
-        return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(float(candles[-1]["close"]),4),"candle_time":candles[-2].get("time") if len(candles)>1 else candles[-1].get("time"),"snr":_snr_zone_analysis(candles),"generated_at":datetime.now(timezone.utc).isoformat()}
+        candle_time=candles[-2].get("time") if len(candles)>1 else candles[-1].get("time")
+        snr=_snr_zone_analysis(candles)
+        ai=await ai_validate_module_signal("SNR",symbol,interval,candle_time,snr)
+        snr=merge_ai_validation(snr,ai)
+        return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(float(candles[-1]["close"]),4),"candle_time":candle_time,"snr":snr,"generated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as exc: raise HTTPException(status_code=503,detail="SNR unavailable: "+str(exc))
 
 @app.get("/api/v1/classic-trade/{symbol:path}")
@@ -2047,6 +2216,8 @@ async def get_classic_trade(symbol: str, interval: str = Query(DEFAULT_INTERVAL)
         ref = candles[-2]; price = float(candles[-1]["close"])
         levels = calculate_pivot_levels(float(ref["high"]), float(ref["low"]), float(ref["close"]), price)
         classic = _classic_trade(candles, levels)
+        ai = await ai_validate_module_signal("Classic Trade", symbol, interval, ref.get("time"), classic)
+        classic = merge_ai_validation(classic, ai)
         return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(price,4),"candle_time":ref.get("time"),"classic":classic,"generated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Classic Trade unavailable: "+str(exc))
@@ -2078,6 +2249,9 @@ async def get_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> 
         levels, _ = await calculate_pivot_for_interval(symbol, interval)
         setup = build_key_level_signal(candles_data, levels, news_blocked=False)
         technical = technical_analysis(candles_data, levels, setup)
+        candle_time=candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")
+        ai=await ai_validate_module_signal("Technical Analysis",symbol,interval,candle_time,{**technical, "reason": technical.get("summary"), "entry": float(candles_data[-1]["close"])})
+        technical=merge_ai_validation(technical,ai)
         return {
             "ok": True, "symbol": symbol, "interval": interval, "mode": "tradingview",
             "provider": "TradingView", "source": TRADINGVIEW_SYMBOL,
@@ -2408,6 +2582,10 @@ async def get_ict_signals(symbol: str) -> dict[str, Any]:
         c30,mode30,w30=await get_candles(symbol,"30min",260)
         c5,mode5,w5=await get_candles(symbol,"5min",260)
         result=build_ict_m30_m5(c30,c5)
+        candle_time=c5[-2].get("time") if len(c5)>1 else c5[-1].get("time")
+        ai=await ai_validate_module_signal("ICT Signals",symbol,"5min",candle_time,result)
+        result=merge_ai_validation(result,ai)
+        result["candle_time"]=candle_time
         return {"ok":True,"symbol":symbol,"mode":"live","source":"TradingView/OANDA canonical candle series",
                 "m30_candles":len(c30),"m5_candles":len(c5),"warnings":[x for x in (w30,w5) if x],
                 "ict":result,"generated_at":datetime.now(timezone.utc).isoformat()}
@@ -2634,6 +2812,22 @@ async def signal_history(limit: int = Query(50, ge=1, le=100), authorization: st
         items.append({"id": r.id, "symbol": r.symbol, "interval": r.interval, "source": getattr(r, "source", None) or "Signals", "candle_time": getattr(r, "candle_time", None), "direction": r.direction, "entry": setup.get("entry", r.price), "tp": setup.get("take_profit", []), "sl": setup.get("stop_loss"), "headline": r.headline, "price": r.price, "outcome": r.outcome, "result_price": result.get("price"), "duration_seconds": duration_seconds, "duration_minutes": round(duration_seconds/60,2) if duration_seconds is not None else None, "auto_entry": bool(payload.get("auto_entry")), "confidence": payload.get("confidence_at_entry", payload.get("signal",{}).get("confidence")), "created_at": created_at.isoformat(), "closed_at": closed_at.isoformat() if closed_at else None})
     return {"items": items}
 
+
+@app.get("/api/v1/ai/providers")
+async def ai_providers_status():
+    configured={
+        "groq": bool(GROQ_API_KEY),
+        "gemini": bool(GEMINI_API_KEY),
+        "openrouter": bool(OPENROUTER_API_KEY),
+        "groq_qwen": bool(GROQ_API_KEY),
+        "mistral": bool(MISTRAL_API_KEY),
+        "cerebras": bool(CEREBRAS_API_KEY),
+        "cloudflare": bool(CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN),
+        "huggingface": bool(HF_TOKEN),
+        "openai": bool(OPENAI_API_KEY),
+    }
+    models={"groq":GROQ_MODEL,"gemini":GEMINI_MODEL,"openrouter":OPENROUTER_MODEL,"groq_qwen":GROQ_QWEN_MODEL,"mistral":MISTRAL_MODEL,"cerebras":CEREBRAS_MODEL,"cloudflare":CLOUDFLARE_MODEL,"huggingface":HF_MODEL,"openai":OPENAI_MODEL}
+    return {"order":AI_FALLBACK_ORDER,"providers":[{"id":p,"configured":configured[p],"status":(AI_PROVIDER_STATUS.get(p) or {}).get("status", "READY" if configured[p] else "NOT_CONFIGURED"),"model":models[p]} for p in configured]}
 
 @app.get("/api/health")
 async def api_health() -> dict[str, Any]:
