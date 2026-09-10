@@ -67,6 +67,10 @@ BOOK_OPENAI_CACHE_TTL = int(os.getenv("BOOK_OPENAI_CACHE_TTL", "300"))
 BOOK_OPENAI_COOLDOWN = int(os.getenv("BOOK_OPENAI_COOLDOWN", "45"))
 BOOK_OPENAI_CACHE: dict[str, tuple[float, int | None, dict[str, Any]]] = {}
 BOOK_OPENAI_LOCKS: dict[str, asyncio.Lock] = {}
+# Global OpenAI circuit breaker: prevents every endpoint/worker call from immediately
+# retrying after a 429. It resets automatically after the cooldown.
+OPENAI_GLOBAL_RATE_LIMIT_UNTIL = 0.0
+OPENAI_GLOBAL_RATE_LIMIT_SECONDS = int(os.getenv("OPENAI_GLOBAL_RATE_LIMIT_SECONDS", "300"))
 BOOK_OPENAI_LOCKS_GUARD = asyncio.Lock()
 CANDLE_LIMIT = max(50, min(int(os.getenv("CANDLE_LIMIT", "220")), 500))
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "12"))
@@ -200,6 +204,9 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # Serve the complete frontend from the same FastAPI/Railway service.
@@ -318,6 +325,64 @@ def generate_credentials() -> tuple[str, str]:
     login = "gold-" + secrets.token_hex(4).upper()
     password = secrets.token_urlsafe(9)
     return login, password
+
+@app.post("/api/auth/login")
+async def auth_login(body: AuthBody, session: Session = Depends(db)) -> dict[str, Any]:
+    """Stable username/password login endpoint used by the dashboard."""
+    identity = body.username.strip()
+    user = session.scalar(select(User).where(User.username == identity))
+    if user is None and valid_email(identity):
+        user = session.scalar(select(User).where(User.email == identity.lower()))
+    if user is None or not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=401, detail="Login yoki parol noto‘g‘ri")
+    raw = create_session(user.id, session)
+    plan = user.subscription.plan if user.subscription else "free"
+    return {"token": raw, "user": {"id": user.id, "username": user.username, "email": user.email, "plan": plan}}
+
+
+@app.post("/api/auth/register")
+async def auth_register(body: RegisterBody, session: Session = Depends(db)) -> dict[str, Any]:
+    """Create a user without requiring SMTP; credentials are returned once so mobile users can enter them."""
+    email = body.email.strip().lower()
+    if not valid_email(email):
+        raise HTTPException(status_code=422, detail="To‘g‘ri email manzilini kiriting")
+    if session.scalar(select(User).where(User.email == email)):
+        raise HTTPException(status_code=409, detail="Bu email allaqachon ro‘yxatdan o‘tgan")
+    login, password = generate_credentials()
+    while session.scalar(select(User).where(User.username == login)):
+        login, password = generate_credentials()
+    user = User(email=email, username=login, password_hash=hash_password(password))
+    session.add(user)
+    session.flush()
+    user.subscription = Subscription(plan="free", status="active")
+    session.commit()
+    raw = create_session(user.id, session)
+    email_ok, email_message = send_credentials_email(email, login, password)
+    return {
+        "token": raw,
+        "user": {"id": user.id, "username": login, "email": email, "plan": "free"},
+        "credentials": {"login": login, "password": password},
+        "email_message": email_message if email_ok else "Email yuborilmadi, login/parol shu yerda ko‘rsatildi."
+    }
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    if authorization and authorization.lower().startswith("bearer "):
+        raw = authorization.split(" ", 1)[1].strip()
+        row = session.scalar(select(SessionToken).where(SessionToken.token_hash == token_hash(raw)))
+        if row:
+            session.delete(row)
+            session.commit()
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+async def auth_me(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    user = current_user(authorization, session)
+    plan = user.subscription.plan if user.subscription else "free"
+    return {"user": {"id": user.id, "username": user.username, "email": user.email, "plan": plan}}
+
 
 def smtp_configured() -> bool:
     return bool(SMTP_HOST and SMTP_PORT and SMTP_USER and SMTP_PASSWORD and (SMTP_FROM or SMTP_USER))
@@ -1091,38 +1156,25 @@ def timeframe_trend(candles: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 async def multi_timeframe(symbol: str) -> dict[str, Any]:
-    # Cache the expensive 7-timeframe calculation briefly so mobile clients do
-    # not trigger a burst of provider requests when switching menus.
-    key = clean_symbol(symbol)
-    now = asyncio.get_running_loop().time()
-    cached = MTF_CACHE.get(key)
-    if cached and now - cached[0] < MTF_CACHE_TTL:
+    key=clean_symbol(symbol)
+    now=asyncio.get_running_loop().time()
+    cached=MTF_CACHE.get(key)
+    if cached and now-cached[0] < MTF_CACHE_TTL:
         return cached[1]
-
-    intervals = ("1min", "5min", "15min", "30min", "1h", "4h", "1day")
-    async def one(tf: str):
+    intervals=("1min","5min","15min","30min","1h","4h","1day")
+    out={}; errors={}
+    # One shared TV cache per timeframe; process sequentially to avoid opening 7 TV sockets at once.
+    for tf in intervals:
         try:
-            candles_data, mode, warning = await get_candles(key, tf, 80)
-            if len(candles_data) < 2:
-                raise MarketDataError("Not enough candles")
-            return tf, {**timeframe_trend(candles_data), "mode": mode, "warning": warning}
+            candles_data,mode,warning=await get_candles(key,tf,80)
+            if len(candles_data)<2: raise MarketDataError("Not enough TradingView candles")
+            out[tf]={**timeframe_trend(candles_data),"mode":mode,"warning":warning}
         except Exception as exc:
-            return tf, None, str(exc)
-
-    results = await asyncio.gather(*(one(tf) for tf in intervals))
-    out = {tf: data for tf, data, _ in results if data is not None}
-    errors = {tf: err for tf, data, err in results if data is None and err}
-    dirs = [x["trend"] for x in out.values() if x.get("trend")]
-    score = dirs.count("BULLISH") - dirs.count("BEARISH")
-    result = {
-        "timeframes": out,
-        "overall": "BULLISH" if score >= 2 else "BEARISH" if score <= -2 else "MIXED",
-        "bullish_count": dirs.count("BULLISH"),
-        "bearish_count": dirs.count("BEARISH"),
-        "available_count": len(out),
-        "errors": errors,
-    }
-    MTF_CACHE[key] = (now, result)
+            errors[tf]=f"{type(exc).__name__}: {exc}"
+    dirs=[x["trend"] for x in out.values() if x.get("trend")]
+    score=dirs.count("BULLISH")-dirs.count("BEARISH")
+    result={"timeframes":out,"overall":"BULLISH" if score>=2 else "BEARISH" if score<=-2 else "MIXED","bullish_count":dirs.count("BULLISH"),"bearish_count":dirs.count("BEARISH"),"available_count":len(out),"errors":errors,"mode":"tradingview"}
+    MTF_CACHE[key]=(now,result)
     return result
 
 
@@ -1146,8 +1198,8 @@ async def market_sessions() -> dict[str, Any]:
     return {"now_utc": now.isoformat(), "sessions": [session_state("Sydney", "Australia/Sydney", now), session_state("Tokyo", "Asia/Tokyo", now), session_state("London", "Europe/London", now), session_state("New York", "America/New_York", now)]}
 
 
-async def _calendar_forexfactory(days: int = 2) -> dict[str, Any]:
-    """Public weekly Forex Factory CSV fallback. Filtered to USD/high-impact events for XAUUSD relevance."""
+async def _calendar_forexfactory(days: int = 7) -> dict[str, Any]:
+    """Public Forex Factory calendar with ALL currencies and ALL impact levels."""
     try:
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT, headers={"User-Agent": "Mozilla/5.0"}) as client:
             response = await client.get(FOREX_FACTORY_CALENDAR_URL)
@@ -1173,51 +1225,44 @@ async def _calendar_forexfactory(days: int = 2) -> dict[str, Any]:
                 return lowered[n.lower()]
         return None
 
-    events = []
-    now = datetime.now(timezone.utc)
-    max_dt = now + timedelta(days=days)
+    events=[]
+    now=datetime.now(timezone.utc)
+    max_dt=now+timedelta(days=days)
+    london=ZoneInfo("Europe/London")
     for row in rows:
-        currency = (get(row, "currency", "curr") or "").strip().upper()
-        impact = (get(row, "impact") or "").strip().upper()
-        if currency not in {"USD", "US"}:
+        currency=(get(row,"currency","curr") or "").strip().upper()
+        event_name=(get(row,"event","title") or "").strip()
+        if not currency or not event_name:
             continue
-        # Keep all USD impact levels so the calendar shows the full US schedule.
+        impact=(get(row,"impact") or "").strip().upper() or "LOW"
         if impact not in {"HIGH","MEDIUM","LOW"}:
-            impact = "LOW" if not impact else impact
-        date_value = (get(row, "date") or "").strip()
-        time_value = (get(row, "time") or "").strip()
-        event_name = (get(row, "event", "title") or "").strip()
-        actual = get(row, "actual")
-        forecast = get(row, "forecast")
-        previous = get(row, "previous", "prev")
-        # Keep date/time as text when the feed gives approximate time; calendar consumers can still display it.
-        dt_iso = None
+            impact="LOW"
+        date_value=(get(row,"date") or "").strip()
+        time_value=(get(row,"time") or "").strip()
+        dt_iso=None
         if date_value and time_value:
-            for fmt in ("%m-%d-%Y %I:%M%p", "%Y-%m-%d %I:%M%p", "%m/%d/%Y %I:%M%p"):
+            for fmt in ("%m-%d-%Y %I:%M%p","%Y-%m-%d %I:%M%p","%m/%d/%Y %I:%M%p"):
                 try:
-                    dt = datetime.strptime(f"{date_value} {time_value}", fmt).replace(tzinfo=timezone.utc)
-                    if dt < now - timedelta(days=1) or dt > max_dt:
+                    dt=datetime.strptime(f"{date_value} {time_value}",fmt).replace(tzinfo=london).astimezone(timezone.utc)
+                    if dt < now-timedelta(days=1) or dt > max_dt:
                         continue
-                    dt_iso = dt.isoformat()
-                    break
+                    dt_iso=dt.isoformat(); break
                 except ValueError:
                     pass
-        if dt_iso is None and not event_name:
-            continue
         events.append({
-            "time": dt_iso or f"{date_value} {time_value}".strip(),
-            "country": "United States",
-            "event": event_name,
-            "impact": impact,
-            "estimate": forecast,
-            "forecast": forecast,
-            "previous": previous,
-            "actual": actual,
-            "unit": get(row, "unit"),
-            "source": "Forex Factory",
+            "time":dt_iso or f"{date_value} {time_value}".strip(),
+            "country":currency,
+            "event":event_name,
+            "impact":impact,
+            "estimate":get(row,"forecast"),
+            "forecast":get(row,"forecast"),
+            "previous":get(row,"previous","prev"),
+            "actual":get(row,"actual"),
+            "unit":get(row,"unit"),
+            "source":"Forex Factory",
         })
-    events.sort(key=lambda x: str(x.get("time") or ""))
-    return {"mode": "live", "provider": "forexfactory", "events": events, "warning": None if events else "No USA/USD economic events found in the selected calendar window."}
+    events.sort(key=lambda x:str(x.get("time") or ""))
+    return {"mode":"live","provider":"forexfactory","events":events,"warning":None if events else "Economic calendar events topilmadi."}
 
 async def _calendar_tradingeconomics(days: int = 2) -> dict[str, Any]:
     if not TRADING_ECONOMICS_API_KEY:
@@ -1277,19 +1322,12 @@ async def _calendar_finnhub(days: int) -> dict[str, Any]:
     return {"mode": "live", "provider": "finnhub", "events": events, "warning": None if events else "No USA/USD economic events found."}
 
 
-async def economic_calendar(days: int = 2) -> dict[str, Any]:
-    """USA/USD economic calendar. Finnhub is preferred when configured; public Forex Factory is fallback."""
-    if FINNHUB_API_KEY and CALENDAR_PROVIDER in {"auto", "finnhub"}:
-        result = await _calendar_finnhub(days)
-        if result.get("mode") == "live":
-            return result
-        if CALENDAR_PROVIDER == "finnhub":
-            return result
-    if CALENDAR_PROVIDER in {"auto", "forexfactory"}:
-        result = await _calendar_forexfactory(days)
-        if result.get("events") or result.get("mode") == "live":
-            return result
-    return {"mode": "unavailable", "events": [], "warning": "Economic Calendar source is unavailable. Configure FINNHUB_API_KEY or check internet access."}
+async def economic_calendar(days: int = 7) -> dict[str, Any]:
+    """Public all-market economic calendar. No user API key is required."""
+    result = await _calendar_forexfactory(days)
+    if result.get("events") or result.get("mode") == "live":
+        return result
+    return {"mode":"unavailable","events":[],"warning":result.get("warning") or "Economic Calendar hozircha mavjud emas."}
 
 
 def next_candle_close(timestamp: int, interval: str, now_ts: float | None = None) -> int:
@@ -1727,7 +1765,7 @@ async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, An
                 except Exception as exc:
                     msg = str(exc)
                     if "429" in msg or "rate limit" in msg.lower():
-                        ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI rate limit (429). Natijani cache qilish va keyingi candle'da qayta tekshirish.", "mode": "rate_limited"}
+                        ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI rate limit (429). Natija shu candle uchun cache qilindi; shu candle davomida yangi so‘rov yuborilmaydi va keyingi candle'da qayta tekshiriladi.", "mode": "rate_limited"}
                     else:
                         ai = {"signal": "WAIT", "confidence": 0, "reason": f"OpenAI unavailable: {msg}", "mode": "fallback"}
             BOOK_OPENAI_CACHE[cache_key] = (now, last_candle_time, dict(ai))
@@ -1915,7 +1953,7 @@ async def get_sessions() -> dict[str, Any]:
 
 
 @app.get("/api/v1/calendar")
-async def get_calendar(days: int = Query(2, ge=1, le=7)) -> dict[str, Any]:
+async def get_calendar(days: int = Query(7, ge=1, le=14)) -> dict[str, Any]:
     return await economic_calendar(days)
 
 
