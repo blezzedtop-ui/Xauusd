@@ -1,5 +1,5 @@
 const symbol='XAU/USD';let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,lastRestQuoteAt=0,streamKey='';
-const $=id=>document.getElementById(id);const fmt=v=>v==null?'—':Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
+const $=id=>document.getElementById(id);const setText=(id,v)=>{const el=$(id);if(el)el.textContent=v??'—';};const fmt=v=>v==null?'—':Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
 function showToast(m){$('toast').textContent=m;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),2300)}
 
 // Cloud deployment: when the frontend and FastAPI are on the same Railway service, leave API_BASE_URL empty.
@@ -104,6 +104,10 @@ async function loadMain(force=false){
   try{
     const d=await api(`/api/v1/book-openai-analysis/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}${force?'&fresh=1':''}`);
     renderBookOpenAI(d);
+    if(token && d.signal && ['BUY','SELL'].includes(String(d.signal).toUpperCase())){
+      const ai=d.openai||{};
+      await recordModuleSignal('Book + OpenAI',d,{signal:d.signal,confidence:ai.confidence,entry:d.entry,stop_loss:d.stop_loss,take_profit:d.take_profit||[],candle_time:d.candle?.time||d.candle_time},interval,d.candle?.time||d.candle_time);
+    }
     // The price beside the chart is updated only by the canonical TradingView/OANDA quote heartbeat.
     // Do not paint the Book candle-feed price here: it can be a different provider/feed.
     countdownData=d.candle||countdownData; updateCountdown();
@@ -144,12 +148,21 @@ function mountTradingViewTechnical(containerId, tf){
   el.appendChild(script);
 }
 function mountTradingViewCalendar(){
-  const el=$('tvCalendarWidget'); if(!el || el.dataset.loaded==='1') return; el.dataset.loaded='1'; el.innerHTML='';
-  const script=document.createElement('script');
-  script.src='https://www.tradingview.com/static/bundles/embed-widget-events.js';
-  script.type='text/javascript'; script.async=true;
-  script.textContent=JSON.stringify({width:'100%',height:680,colorTheme:'dark',isTransparent:true,locale:'en',importanceFilter:'-1,0,1'});
-  el.appendChild(script);
+  const el=$('tvCalendarWidget'); if(!el) return;
+  // Use TradingView's official iframe widget. It carries its own market/event data,
+  // so the user's Railway project does not need an economic-calendar API key.
+  el.innerHTML='';
+  const cfg={width:'100%',height:680,importanceFilter:'-1,0,1',colorTheme:'dark',isTransparent:true,locale:'en',utm_source:location.hostname||'xauusd-trading',utm_medium:'widget',utm_campaign:'events'};
+  const iframe=document.createElement('iframe');
+  iframe.title='TradingView Economic Calendar';
+  iframe.loading='lazy';
+  iframe.referrerPolicy='origin';
+  iframe.frameBorder='0';
+  iframe.scrolling='no';
+  iframe.style.width='100%'; iframe.style.height='680px'; iframe.style.border='0'; iframe.style.display='block';
+  iframe.src='https://www.tradingview-widget.com/embed-widget/events/?locale=en#'+encodeURIComponent(JSON.stringify(cfg));
+  el.appendChild(iframe);
+  el.dataset.loaded='1';
 }
 async function loadPivots(tf=pivotInterval){
   pivotInterval=tf;
@@ -176,9 +189,9 @@ function renderBookOpenAI(d){
  $('signalReason').textContent=`Book: ${book.signal||'WAIT'}${confirmed?' · '+confirmed:''} | OpenAI: ${ai.signal||'WAIT'} · ${ai.reason||'—'}`;
  $('entry').textContent=fmt(d.entry);$('sl').textContent=fmt(d.stop_loss);$('tp1').textContent=fmt((d.take_profit||[])[0]);$('tp2').textContent=fmt((d.take_profit||[])[1]);
  $('bias').textContent=`Book ${book.signal||'WAIT'} · AI ${ai.signal||'WAIT'}`;
- $('aiMode').textContent=ai.mode||'—';$('aiSummary').textContent=ai.reason||'—';$('confidence').textContent=ai.confidence!=null?ai.confidence+'%':'—';$('aiBias').textContent=ai.signal||'WAIT';$('aiAdvice').textContent=sig==='WAIT'?'Book va OpenAI bir xil yo‘nalishda tasdiqlamadi.':'Book pattern + OpenAI second opinion bir xil yo‘nalishni tasdiqladi.';
+ setText('aiMode',ai.mode||'—');setText('aiSummary',ai.reason||'—');setText('confidence',ai.confidence!=null?ai.confidence+'%':'—');setText('aiBias',ai.signal||'WAIT');setText('aiAdvice',sig==='WAIT'?'Book va OpenAI bir xil yo‘nalishda tasdiqlamadi.':'Book pattern + OpenAI second opinion bir xil yo‘nalishni tasdiqladi.');
 }
-function renderAnalysis(d){const s=d.setup||{},ta=d.technical||{};$('signalMain').textContent=d.direction||'WAIT';$('signalMain').className='signal-main '+((d.direction||'WAIT').toLowerCase()==='buy'?'buy':(d.direction||'').toLowerCase()==='sell'?'sell':'wait');$('signalReason').textContent=d.headline||s.reason||'—';$('entry').textContent=fmt(s.entry);$('sl').textContent=fmt(s.stop_loss);$('tp1').textContent=fmt((s.take_profit||[])[0]);$('tp2').textContent=fmt((s.take_profit||[])[1]);$('bias').textContent=d.levels?.bias||s.pivot_filter||'—';$('pivotFilter').textContent=d.levels?.bias||'—';const p=d.levels||{};$('levels').innerHTML=[['R3',p.r3,'res'],['R2',p.r2,'res'],['R1',p.r1,'res'],['Pivot',p.pivot,'piv'],['S1',p.s1,'sup'],['S2',p.s2,'sup'],['S3',p.s3,'sup']].map(x=>`<div class="row"><span>${x[0]}</span><b class="${x[2]}">${fmt(x[1])}</b></div>`).join('');$('rsi').textContent=fmt(ta.rsi);$('atr').textContent=fmt(ta.atr);$('rsiState').textContent=ta.rsi_state||'—';$('taTrend').textContent=ta.trend||'—';$('taState').textContent=d.interval?.toUpperCase()||interval;$('taSummary').textContent=(ta.summary||'—') + (ta.ai_validation ? ` | AI: ${ta.ai_consensus||'—'} · ${ta.ai_validation.confidence??0}%` : '');const ai=d.ai||{};$('aiMode').textContent=ai.mode||'—';$('aiSummary').textContent=ai.summary||'—';$('confidence').textContent=ai.confidence!=null?ai.confidence+'%':'—';$('aiBias').textContent=ai.bias||'—';$('aiAdvice').textContent=ai.advice||'—';}
+function renderAnalysis(d){const s=d.setup||{},ta=d.technical||{};$('signalMain').textContent=d.direction||'WAIT';$('signalMain').className='signal-main '+((d.direction||'WAIT').toLowerCase()==='buy'?'buy':(d.direction||'').toLowerCase()==='sell'?'sell':'wait');$('signalReason').textContent=d.headline||s.reason||'—';$('entry').textContent=fmt(s.entry);$('sl').textContent=fmt(s.stop_loss);$('tp1').textContent=fmt((s.take_profit||[])[0]);$('tp2').textContent=fmt((s.take_profit||[])[1]);$('bias').textContent=d.levels?.bias||s.pivot_filter||'—';$('pivotFilter').textContent=d.levels?.bias||'—';const p=d.levels||{};$('levels').innerHTML=[['R3',p.r3,'res'],['R2',p.r2,'res'],['R1',p.r1,'res'],['Pivot',p.pivot,'piv'],['S1',p.s1,'sup'],['S2',p.s2,'sup'],['S3',p.s3,'sup']].map(x=>`<div class="row"><span>${x[0]}</span><b class="${x[2]}">${fmt(x[1])}</b></div>`).join('');$('rsi').textContent=fmt(ta.rsi);$('atr').textContent=fmt(ta.atr);$('rsiState').textContent=ta.rsi_state||'—';$('taTrend').textContent=ta.trend||'—';$('taState').textContent=d.interval?.toUpperCase()||interval;$('taSummary').textContent=(ta.summary||'—') + (ta.ai_validation ? ` | AI: ${ta.ai_consensus||'—'} · ${ta.ai_validation.confidence??0}%` : '');const ai=d.ai||{};setText('aiMode',ai.mode||'—');setText('aiSummary',ai.summary||'—');setText('confidence',ai.confidence!=null?ai.confidence+'%':'—');setText('aiBias',ai.bias||'—');setText('aiAdvice',ai.advice||'—');}
 function updateCountdown(){const ts=countdownData?.close_timestamp; if(!ts)return;$('countdown').textContent=fmtDuration(Math.max(0,ts*1000-Date.now())); const close=new Date(ts*1000); $('closeTime').textContent='Close time: '+close.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'});}function fmtDuration(ms){let s=Math.floor(ms/1000),h=Math.floor(s/3600);s%=3600;let m=Math.floor(s/60);s%=60;return h?`${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`:`${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`}
 async function loadSessions(){try{const d=await api('/api/v1/sessions');const html=d.sessions.map(x=>`<div class="session ${x.open?'open':''}"><b>${x.name}</b><div class="sub">${x.local_time||''}</div><div class="status ${x.open?'up':'muted'}">${x.open?'OPEN':'CLOSED'}</div></div>`).join('');$('sessions').innerHTML=html;$('sessions2').innerHTML=html;$('sessionClock').textContent=d.utc_time||'—';$('sessionClock2').textContent=d.utc_time||'—'}catch(e){}}
 async function loadCalendar(){ mountTradingViewCalendar(); }
@@ -207,8 +220,9 @@ async function loadStats(){
   try{
     const d=await api('/api/v1/signals/analytics');
     $('totalSignals').textContent=d.total_signals??0; $('completedSignals').textContent=d.completed_trades??0; $('wins').textContent=d.wins??0; $('losses').textContent=d.losses??0; $('winrate').textContent=(d.winrate??0)+'%';
-    if($('historySummary')) $('historySummary').innerHTML=`<div class="metric"><small>TP HIT</small><b class="buy">${d.wins??0}</b></div><div class="metric"><small>SL HIT</small><b class="sell">${d.losses??0}</b></div><div class="metric"><small>OPEN</small><b class="wait">${d.open??0}</b></div><div class="metric"><small>AMBIGUOUS</small><b>${d.ambiguous??0}</b></div>`;
-    if($('historySourceStats')) $('historySourceStats').innerHTML=Object.entries(d.by_source||{}).map(([src,x])=>`<div class="metric"><small>${src}</small><b>${x.winrate}% Win Rate</b><div class="mini">${x.total_signals} signals · ${x.wins} TP / ${x.losses} SL · ${x.completed_trades} completed</div></div>`).join('');
+    if($('historySummary')) $('historySummary').innerHTML=`<div class="metric"><small>TOTAL SIGNALS</small><b>${d.total_signals??0}</b></div><div class="metric"><small>COMPLETED</small><b>${d.completed_trades??0}</b></div><div class="metric"><small>TAKE PROFIT</small><b class="buy">${d.wins??0}</b></div><div class="metric"><small>STOP LOSS</small><b class="sell">${d.losses??0}</b></div><div class="metric"><small>OPEN</small><b class="wait">${d.open??0}</b></div><div class="metric"><small>AMBIGUOUS</small><b>${d.ambiguous??0}</b></div><div class="metric"><small>WIN RATE</small><b>${d.winrate??0}%</b><div class="mini">TP / (TP + SL)</div></div>`;
+    if($('historySourceStats')) $('historySourceStats').innerHTML=Object.entries(d.by_source||{}).map(([src,x])=>`<div class="metric"><small>${src}</small><b>${x.winrate}% Win Rate</b><div class="mini">${x.total_signals} signals · ${x.wins} TP / ${x.losses} SL · ${x.open??0} open · ${x.ambiguous??0} ambiguous</div></div>`).join('');
+    if($('historyTfStats')) $('historyTfStats').innerHTML=Object.entries(d.by_timeframe||{}).map(([tf,x])=>`<div class="metric"><small>${tfName(tf)}</small><b>${x.winrate}% Win Rate</b><div class="mini">${x.total_signals} signals · ${x.wins} TP / ${x.losses} SL · ${x.open??0} open</div></div>`).join('');
   }catch(e){ if($('historySummary'))$('historySummary').innerHTML=`<div class="card">Analytics error: ${e.message}</div>`; }
 }
 async function recordModuleSignal(source, response, item, intervalName, candleTime){
@@ -374,7 +388,7 @@ function connectMarketStream(){
  }catch(e){ marketWS=null; }
 }
 function setAuth(mode){authMode=mode;$('authTitle').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSubmit').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSwitch').textContent=mode==='login'?'Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish':'Hisobingiz bormi? Kirish';$('email').placeholder=mode==='login'?'Login yoki elektron pochta':'Elektron pochta';$('password').required=mode==='login';$('password').style.display=mode==='login'?'block':'none';$('password').value='';$('authMsg').textContent=mode==='register'?'Email kiriting — login va parol avtomatik yaratiladi.':''}
-document.querySelectorAll('.tfbar').forEach(bar=>bar.addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b && bar.contains(b))setTf(b.dataset.interval)}));document.querySelectorAll('.nav button').forEach(b=>b.addEventListener('click',()=>openSection(b.dataset.section)));$('saveSignal').onclick=saveSignal;$('refreshSignalEngine').onclick=()=>loadSignalEngine(); loadAIProviders();$('refreshICT').onclick=()=>loadICTSignals();$('refreshAdvanced').onclick=()=>loadAdvancedSignals();$('refreshClassic').onclick=()=>loadClassicTrade(classicInterval);$('refreshStats').onclick=()=>{loadStats();loadHistory()};$('refreshSmartAnalysis').onclick=()=>loadSmartAnalysis();$('refreshAISignals').onclick=()=>loadAISignals();$('refreshCalendar').onclick=()=>loadCalendar();$('refreshHistory').onclick=()=>{loadStats();loadHistory()};$('authBtn').onclick=()=>{ setAuth('login'); $('authMsg').textContent=''; $('authModal').classList.add('show'); setTimeout(()=>$('email').focus(),50); }; $('authSwitch').onclick=()=>setAuth(authMode==='login'?'register':'login');async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(()=>{});token='';localStorage.removeItem('trading_token');$('plan').textContent='Guest';$('authBtn').textContent='Kirish';loadStats();loadHistory();$('authModal').classList.remove('show');$('authMsg').textContent='';showToast('Tizimdan chiqildi')};$('authForm').onsubmit=async e=>{
+document.querySelectorAll('.tfbar').forEach(bar=>bar.addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b && bar.contains(b))setTf(b.dataset.interval)}));document.querySelectorAll('.nav button').forEach(b=>b.addEventListener('click',()=>openSection(b.dataset.section)));$('saveSignal').onclick=saveSignal;$('refreshSignalEngine').onclick=()=>loadSignalEngine();$('refreshAIProviders').onclick=()=>loadAIProviders();$('refreshICT').onclick=()=>loadICTSignals();$('refreshAdvanced').onclick=()=>loadAdvancedSignals();$('refreshClassic').onclick=()=>loadClassicTrade(classicInterval);$('refreshSNR').onclick=()=>loadSNR(snrInterval);$('refreshStats').onclick=()=>{loadStats();loadHistory()};$('refreshSmartAnalysis').onclick=()=>loadSmartAnalysis();$('refreshAISignals').onclick=()=>loadAISignals();$('refreshCalendar').onclick=()=>loadCalendar();$('refreshHistory').onclick=()=>{loadStats();loadHistory()};$('authBtn').onclick=()=>{ setAuth('login'); $('authMsg').textContent=''; $('authModal').classList.add('show'); setTimeout(()=>$('email').focus(),50); }; $('authSwitch').onclick=()=>setAuth(authMode==='login'?'register':'login');async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(()=>{});token='';localStorage.removeItem('trading_token');$('plan').textContent='Guest';$('authBtn').textContent='Kirish';loadStats();loadHistory();$('authModal').classList.remove('show');$('authMsg').textContent='';showToast('Tizimdan chiqildi')};$('authForm').onsubmit=async e=>{
  e.preventDefault();
  const identity=String($('email').value||'').trim();
  const password=String($('password').value||'');
@@ -403,6 +417,13 @@ document.querySelectorAll('.tfbar').forEach(bar=>bar.addEventListener('click',e=
    $('authMsg').textContent='Kirish xatosi: '+(err?.message||'Server xatosi');
  }
 };
+// Global UI safety: refresh buttons remain clickable even if an independent module throws.
+document.addEventListener('click',e=>{
+  const id=e.target.closest && e.target.closest('button')?.id;
+  if(!id)return;
+  const actions={refreshSignalEngine:()=>loadSignalEngine(),refreshAIProviders:()=>loadAIProviders(),refreshICT:()=>loadICTSignals(),refreshAdvanced:()=>loadAdvancedSignals(),refreshClassic:()=>loadClassicTrade(classicInterval),refreshSNR:()=>loadSNR(snrInterval),refreshStats:()=>{loadStats();loadHistory()},refreshSmartAnalysis:()=>loadSmartAnalysis(),refreshAISignals:()=>loadAISignals(),refreshCalendar:()=>loadCalendar(),refreshHistory:()=>{loadStats();loadHistory()}};
+  if(actions[id]){Promise.resolve().then(actions[id]).catch(err=>{console.error('REFRESH ERROR',id,err);showToast('Yangilash xatosi: '+(err?.message||'server xatosi'));});}
+});
 // Auth fallback: keep the login modal usable even if a non-auth dashboard module fails during startup.
 document.addEventListener('click',e=>{
   const btn=e.target.closest && e.target.closest('#authBtn');

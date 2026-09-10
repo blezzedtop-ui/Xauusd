@@ -2765,9 +2765,9 @@ async def signal_analytics(authorization: str | None = Header(default=None), ses
     by_tf: dict[str, dict[str, Any]] = {}
     by_source: dict[str, dict[str, Any]] = {}
     for r in rows:
-        item = by_tf.setdefault(r.interval, {"total_signals":0,"completed_trades":0,"wins":0,"losses":0,"winrate":0.0})
+        item = by_tf.setdefault(r.interval, {"total_signals":0,"completed_trades":0,"wins":0,"losses":0,"open":0,"ambiguous":0,"winrate":0.0})
         src = getattr(r, "source", None) or "Signals"
-        src_item = by_source.setdefault(src, {"total_signals":0,"completed_trades":0,"wins":0,"losses":0,"winrate":0.0})
+        src_item = by_source.setdefault(src, {"total_signals":0,"completed_trades":0,"wins":0,"losses":0,"open":0,"ambiguous":0,"winrate":0.0})
         src_item["total_signals"] += 1
         item["total_signals"] += 1
         if r.outcome == "TP HIT":
@@ -2776,6 +2776,12 @@ async def signal_analytics(authorization: str | None = Header(default=None), ses
         elif r.outcome == "SL HIT":
             item["losses"] += 1
             src_item["losses"] += 1
+        elif r.outcome == "AMBIGUOUS":
+            item["ambiguous"] += 1
+            src_item["ambiguous"] += 1
+        elif r.outcome == "OPEN":
+            item["open"] += 1
+            src_item["open"] += 1
         item["completed_trades"] = item["wins"] + item["losses"]
         src_item["completed_trades"] = src_item["wins"] + src_item["losses"]
         item["winrate"] = round(item["wins"] / item["completed_trades"] * 100, 2) if item["completed_trades"] else 0.0
