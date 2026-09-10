@@ -1534,8 +1534,16 @@ def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dic
     near_s1 = abs(price-levels["s1"]) <= max(a*0.35, 0.5)
     if near_s1 and bullish_candle: score += 2; reasons.append("support rejection")
     if near_r1 and bearish_candle: score -= 2; reasons.append("resistance rejection")
+    zone=_snr_zone_analysis(candles)
+    near_strong_support=zone["support"]["strength"]>=82 and zone["support"]["distance_pct"]<=0.75
+    near_strong_resistance=zone["resistance"]["strength"]>=82 and zone["resistance"]["distance_pct"]<=0.75
+    if near_strong_support and bullish_candle: score += 2; reasons.append("strong support zone")
+    if near_strong_resistance and bearish_candle: score -= 2; reasons.append("strong resistance zone")
     direction = "BUY" if score >= 4 else "SELL" if score <= -4 else "WAIT"
-    confidence = min(95, 50 + abs(score)*7)
+    # Classic entries are only permitted from a strong zone, never in the middle of a range.
+    if direction=="BUY" and not near_strong_support: direction="WAIT"; reasons.append("no strong entry zone")
+    if direction=="SELL" and not near_strong_resistance: direction="WAIT"; reasons.append("no strong entry zone")
+    confidence = min(97, 50 + abs(score)*7 + (5 if (near_strong_support or near_strong_resistance) else 0))
     entry = round(price, 2)
     if direction == "BUY":
         sl = round(min(float(cur["low"]), levels["s1"]) - max(a*0.15, 0.1), 2)
@@ -1811,10 +1819,17 @@ def _structure_state(candles: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _snr(candles: list[dict[str, Any]]) -> dict[str, Any]:
-    highs,lows=_swing_points(candles,2,2)
-    resistance=max((x[1] for x in highs[-12:]), default=float(candles[-1]["high"]))
-    support=min((x[1] for x in lows[-12:]), default=float(candles[-1]["low"]))
-    return {"support":round(support,4),"resistance":round(resistance,4)}
+    """Strong-zone SNR levels. Prefer repeatedly tested swing clusters over one-off extremes."""
+    z=_snr_zone_analysis(candles)
+    return {
+        "support": z["support"]["mid"],
+        "resistance": z["resistance"]["mid"],
+        "support_zone": z["support"],
+        "resistance_zone": z["resistance"],
+        "signal": z["signal"],
+        "confidence": z["confidence"],
+        "position": z["position"],
+    }
 
 
 def _snr_malaysia(candles: list[dict[str, Any]]) -> dict[str, Any]:
@@ -1831,34 +1846,50 @@ def _snr_malaysia(candles: list[dict[str, Any]]) -> dict[str, Any]:
 
 def _snr_zone_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
     current=float(candles[-1]["close"]); highs,lows=_swing_points(candles,2,2); avtr=max(atr(candles), current*0.0004)
-    high_vals=[float(v) for _,v in highs[-20:]] or [float(candles[-1]["high"])]
-    low_vals=[float(v) for _,v in lows[-20:]] or [float(candles[-1]["low"])]
-    resistance=max(high_vals); support=min(low_vals); width=max(avtr*0.22, current*0.00035)
-    def zone(level,side,vals):
-        lo,hi=level-width,level+width; retests=sum(1 for v in vals if lo<=v<=hi)
-        recency=sum(1 for c in candles[-40:] if lo<=float(c["low" if side=="support" else "high"])<=hi)
-        strength=min(99,round(48+retests*7+min(recency,8)*3+(10 if lo<=current<=hi else 0))); dist=abs(current-level)/current*100
-        if side=="support": status="IN ZONE" if lo<=current<=hi else "BROKEN" if current<lo else "ACTIVE"
-        else: status="IN ZONE" if lo<=current<=hi else "BROKEN" if current>hi else "ACTIVE"
-        return {"mid":round(level,4),"low":round(lo,4),"high":round(hi,4),"retests":retests,"strength":strength,"distance_pct":round(dist,3),"status":status}
-    sup,res=zone(support,"support",low_vals),zone(resistance,"resistance",high_vals)
-    if sup["status"]=="IN ZONE" and sup["strength"]>=70: signal="BUY"
-    elif res["status"]=="IN ZONE" and res["strength"]>=70: signal="SELL"
-    elif current>res["high"]: signal="BUY"
-    elif current<sup["low"]: signal="SELL"
+    high_vals=[float(v) for _,v in highs[-24:]] or [float(candles[-1]["high"])]
+    low_vals=[float(v) for _,v in lows[-24:]] or [float(candles[-1]["low"])]
+    width=max(avtr*0.28, current*0.00045)
+    def best_cluster(vals, side):
+        # Score each swing level by repeated touches, recency and separation from price.
+        candidates=[]
+        for level in vals:
+            lo,hi=level-width,level+width
+            touches=sum(1 for v in vals if lo<=v<=hi)
+            recency=sum(1 for c in candles[-60:] if lo<=float(c["low" if side=="support" else "high"])<=hi)
+            distance=abs(current-level)/max(current,1e-9)
+            candidates.append((touches*12+min(recency,10)*3-min(distance*1000,18),level,touches,recency))
+        return max(candidates,key=lambda x:x[0]) if candidates else (0,float(candles[-1]["close"]),0,0)
+    _,support,sret,srec=best_cluster(low_vals,"support")
+    _,resistance,rret,rrec=best_cluster(high_vals,"resistance")
+    def zone(level,side,retests,recency):
+        lo,hi=level-width,level+width
+        in_zone=lo<=current<=hi
+        dist=abs(current-level)/max(current,1e-9)*100
+        proximity=max(0,18-dist*160)
+        strength=min(99,round(48+retests*7+min(recency,10)*2.5+proximity+(10 if in_zone else 0)))
+        if side=="support": status="IN ZONE" if in_zone else "BROKEN" if current<lo else "ACTIVE"
+        else: status="IN ZONE" if in_zone else "BROKEN" if current>hi else "ACTIVE"
+        return {"mid":round(level,4),"low":round(lo,4),"high":round(hi,4),"retests":int(retests),"strength":int(strength),"distance_pct":round(dist,3),"status":status,"quality":"STRONG" if strength>=82 else "GOOD" if strength>=72 else "WEAK"}
+    sup,res=zone(support,"support",sret,srec),zone(resistance,"resistance",rret,rrec)
+    # A signal is allowed only at a strong zone or a clean breakout of a strong zone.
+    bullish_zone=sup["strength"]>=82 and (sup["status"]=="IN ZONE" or current>sup["high"])
+    bearish_zone=res["strength"]>=82 and (res["status"]=="IN ZONE" or current<res["low"])
+    if sup["status"]=="IN ZONE" and sup["strength"]>=82: signal="BUY"
+    elif res["status"]=="IN ZONE" and res["strength"]>=82: signal="SELL"
+    elif current>res["high"] and res["strength"]>=82: signal="BUY"
+    elif current<sup["low"] and sup["strength"]>=82: signal="SELL"
     else: signal="WAIT"
     confidence=max(sup["strength"],res["strength"]) if signal!="WAIT" else round((sup["strength"]+res["strength"])/2)
     pos="ABOVE RESISTANCE" if current>res["high"] else "BELOW SUPPORT" if current<sup["low"] else "NEAR SUPPORT" if current<=sup["mid"] else "NEAR RESISTANCE" if current>=res["mid"] else "BETWEEN ZONES"
-    if signal=="BUY":
-        entry=current; stop_loss=sup["low"]; take_profit=[res["mid"], res["high"]]
-    elif signal=="SELL":
-        entry=current; stop_loss=res["high"]; take_profit=[sup["mid"], sup["low"]]
-    else:
-        entry=current; stop_loss=None; take_profit=[]
+    if signal=="BUY": entry=current; stop_loss=sup["low"]; take_profit=[res["mid"],res["high"]]
+    elif signal=="SELL": entry=current; stop_loss=res["high"]; take_profit=[sup["mid"],sup["low"]]
+    else: entry=current; stop_loss=None; take_profit=[]
+    strongest=max(sup,res,key=lambda z:z["strength"])
+    reason=f"{pos.lower()}; strongest zone {strongest['strength']}% ({strongest['quality']}); Support {sup['strength']}% · Resistance {res['strength']}%."
     return {"support":sup,"resistance":res,"signal":signal,"confidence":confidence,"position":pos,
             "entry":round(entry,4),"stop_loss":round(stop_loss,4) if stop_loss is not None else None,
             "take_profit":[round(v,4) for v in take_profit],
-            "reason":f"Price {pos.lower()}; Support {sup['strength']}% · Resistance {res['strength']}%.","method":"Swing SNR · zones + retests + volatility"}
+            "strongest_zone":strongest,"reason":reason,"method":"Strong-zone SNR · clustered swings + retests + proximity + volatility"}
 
 
 def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blocked: bool=False) -> dict[str, Any]:
@@ -1910,8 +1941,13 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
     if msnr["resistance"] and current>msnr["resistance"]: score+=1; reasons.append("Malaysia SNR resistance break")
     elif msnr["support"] and current<msnr["support"]: score-=1; reasons.append("Malaysia SNR support break")
 
-    confidence=min(99,max(35,50+abs(score)*5))
+    zone_gate=_snr_zone_analysis(candles)
+    strong_buy_zone=zone_gate["support"]["strength"]>=82 and (zone_gate["support"]["status"]=="IN ZONE" or zone_gate["support"]["distance_pct"]<=0.9)
+    strong_sell_zone=zone_gate["resistance"]["strength"]>=82 and (zone_gate["resistance"]["status"]=="IN ZONE" or zone_gate["resistance"]["distance_pct"]<=0.9)
+    confidence=min(99,max(35,50+abs(score)*5 + (6 if (strong_buy_zone or strong_sell_zone) else 0)))
     direction="BUY" if score>=6 else "SELL" if score<=-6 else "WAIT"
+    if direction=="BUY" and not strong_buy_zone: direction="WAIT"; reasons.append("WAIT: no strong support entry zone")
+    if direction=="SELL" and not strong_sell_zone: direction="WAIT"; reasons.append("WAIT: no strong resistance entry zone")
     if news_blocked: direction="WAIT"
     entry=current
     swing_low=structure["swing_low"]; swing_high=structure["swing_high"]
@@ -1925,8 +1961,10 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
     return {
         "interval":interval,"signal":direction,"entry":round(entry,4),"stop_loss":round(sl,4) if sl is not None else None,
         "take_profit":[round(x,4) for x in tp],"confidence":confidence,"score":score,"setup":setup,
-        "components":{"ICT":ict_bias,"SNR":snr,"SNR Malaysia":msnr,"Order Block":ob,"FVG":fvg,"Liquidity":liq,
+        "components":{"ICT":ict_bias,"SNR":snr,"Strong SNR Zone":zone_gate,"SNR Malaysia":msnr,"Order Block":ob,"FVG":fvg,"Liquidity":liq,
                        "Trend Line":trend,"Global Trend Line":global_trend,"BOS":structure["bos"],"CHOCH":structure["choch"],"Internal Structure":structure["internal_structure"]},
+        "zone_quality":max(zone_gate["support"]["strength"],zone_gate["resistance"]["strength"]),
+        "entry_zone":zone_gate["strongest_zone"],
         "reason":("; ".join(dict.fromkeys(reasons)) or "No strong confluence") + ("; news blackout active" if news_blocked else ""),
         "rsi":round(r,2),"atr":round(avtr,4),"current_price":round(current,4),
         "evaluated_at":datetime.now(timezone.utc).isoformat()
