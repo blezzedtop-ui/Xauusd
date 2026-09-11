@@ -336,11 +336,24 @@ function renderTrendChart(d){
   fibLineSeries=[];
   if(fib.available && fib.levels && candles.length){
     const fibLevels=['0','0.236','0.382','0.5','0.618','0.786','1','1.272','1.618'];
-    const firstTime=candles[0].time, lastTime=candles[candles.length-1].time;
+    // Draw Fibonacci ONLY over this timeframe's current structural impulse,
+    // from its anchor to the latest closed candle. Never stretch levels across
+    // the entire 220-candle viewport.
+    const fibStart=Number(fib.draw_start_time)||Number(candles[0].time);
+    const fibEnd=Number(fib.draw_end_time)||Number(candles[candles.length-1].time);
+    const fibEndTime=Math.max(fibStart,fibEnd);
     fibLevels.forEach(level=>{
       const val=Number(fib.levels[level]); if(!Number.isFinite(val)) return;
-      const ls=trendChartInstance.addLineSeries({lineWidth:(level==='0.5'||level==='0.618')?2:1,priceLineVisible:false,lastValueVisible:true,crosshairMarkerVisible:false,lineStyle:(level==='0.5'||level==='0.618')?0:2});
-      ls.setData([{time:firstTime,value:val},{time:lastTime,value:val}]); fibLineSeries.push(ls);
+      const keyZone=(level==='0.5'||level==='0.618');
+      const ls=trendChartInstance.addLineSeries({
+        lineWidth:keyZone?3:1,
+        priceLineVisible:false,
+        lastValueVisible:keyZone,
+        crosshairMarkerVisible:false,
+        lineStyle:keyZone?0:2
+      });
+      ls.setData([{time:fibStart,value:val},{time:fibEndTime,value:val}]);
+      fibLineSeries.push(ls);
     });
   }
   // Mark every detected swing and the breakout/retest directly on the live candles.
@@ -373,7 +386,7 @@ async function loadTrendLines(tf=trendLineInterval){
   try{
     if($('trendChartTf')) $('trendChartTf').textContent=tfName(tf);
     setTimeout(()=>{ try{ mountTradingView('tvTrendChart',tf); }catch(_){} },30);
-    $('trendLineStatus').textContent=`${tfName(tf)} trend line va combined signal hisoblanmoqda…`;
+    $('trendLineStatus').textContent=`${tfName(tf)} · faqat ${tfName(tf)} candlelari asosida Trend Line + Fibonacci hisoblanmoqda…`;
     const results=await Promise.allSettled([api(`/api/v1/trend-lines/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`),api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`)]); const tl=results[0].status==='fulfilled'?results[0].value:null; const adv=results[1].status==='fulfilled'?results[1].value:null; if(!tl && !adv) throw new Error('Trend Line data unavailable');
     const x=adv?.timeframes?.[tf]||{}, t=(tl?.trendline)||x.trendline||{}, fib=(tl?.fibonacci)||x.fibonacci||{};
     $('tlTrend').textContent=t.trend||'NEUTRAL'; $('tlTrend').className=t.trend==='BULLISH'?'buy':t.trend==='BEARISH'?'sell':'wait';
@@ -395,7 +408,8 @@ async function loadTrendLines(tf=trendLineInterval){
         await recordModuleSignal('Auto Trend Line', {interval:k,candle_time:ax.candle_time||at?.p2?.time,signal:ax.signal||at.signal||'WAIT',confidence:ax.confidence??0,entry:ax.entry,stop_loss:ax.stop_loss,take_profit:ax.take_profit,trendline:at,fibonacci:ax.fibonacci,advanced:ax}, ax, k, ax.candle_time||at?.p2?.time);
       }
     }
-    $('trendLineStatus').textContent=adv?`${symbol} · ${tfName(tf)} · real TradingView candle data · ${new Date(adv.generated_at).toLocaleString()}`:`${symbol} · ${tfName(tf)} · Trend Line degraded mode`;
+    $('trendLineStatus').textContent=adv?`${symbol} · ${tfName(tf)} · Trend Line + Fibonacci = FAQAT ${tfName(tf)} candlelari · alohida swing/structure · real TradingView data · ${new Date(adv.generated_at).toLocaleString()}`:`${symbol} · ${tfName(tf)} · Trend Line degraded mode`;
+    if($('trendChartTf')) $('trendChartTf').textContent=tfName(tf);
   }catch(e){$('trendLineStatus').textContent='Trend Line error: '+e.message;}
 }
 function openSection(id){const target=$(id);if(!target)return;document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',aiSignalsSection:'AI Signals',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',historySection:'Signal History',trendLineSection:'Auto Trend Line'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{})},50);}if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='aiSignalsSection')loadAISignals().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section')loadMT5Status().catch(()=>{});if(id==='trendLineSection')loadTrendLines(trendLineInterval).catch(()=>{})}

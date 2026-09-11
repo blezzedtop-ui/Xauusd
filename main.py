@@ -78,20 +78,33 @@ APP_BASE_URL = os.getenv("APP_BASE_URL", "http://localhost:8000").strip().rstrip
 REQUIRE_EMAIL_DELIVERY = os.getenv("REQUIRE_EMAIL_DELIVERY", "false").lower() == "true"
 SMTP_USE_STARTTLS = os.getenv("SMTP_USE_STARTTLS", "true").lower() == "true"
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
-AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", "300"))
+AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", "86400"))
+# Cache AI results for the entire candle lifetime; candle_time is part of every key.
+# This prevents repeated requests on the same candle and greatly reduces quota use.
 AI_RATE_LIMIT_RETRY_NEXT_CANDLE = True
+AI_PROVIDER_COOLDOWN_SECONDS = int(os.getenv("AI_PROVIDER_COOLDOWN_SECONDS", "120"))
+AI_PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
 
 AI_PROVIDER_STATUS: dict[str, dict[str, Any]] = {}
 
 async def _openai_compatible_completion(api_key: str, base_url: str, model: str, prompt: str, provider: str, extra_headers: dict[str, str] | None = None) -> tuple[str, str]:
     from openai import AsyncOpenAI
     client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=REQUEST_TIMEOUT, max_retries=0, default_headers=extra_headers or None)
-    response = await client.chat.completions.create(
+    kwargs = dict(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=0.1,
-        response_format={"type": "json_object"},
     )
+    # Some compatible providers/models reject response_format=json_object.
+    # Try structured output first, then transparently retry once without it.
+    try:
+        response = await client.chat.completions.create(**kwargs, response_format={"type": "json_object"})
+    except Exception as first_exc:
+        msg = str(first_exc).lower()
+        if any(x in msg for x in ("response_format", "json_object", "unsupported", "not support")):
+            response = await client.chat.completions.create(**kwargs)
+        else:
+            raise
     text = (response.choices[0].message.content or "").strip()
     if not text:
         raise RuntimeError(f"{provider}: empty response")
@@ -144,20 +157,33 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
     order = [AI_PROVIDER] if AI_PROVIDER not in {"auto", ""} else AI_FALLBACK_ORDER
     # If explicitly selecting a provider, still permit only that provider.
     errors=[]
+    now_mono = asyncio.get_running_loop().time()
     for provider in order:
+        # Skip a provider briefly after a rate-limit response instead of hammering it.
+        cooldown_until = AI_PROVIDER_COOLDOWN_UNTIL.get(provider, 0.0)
+        if cooldown_until > now_mono:
+            AI_PROVIDER_STATUS[provider] = {"status":"LIMITED", "checked_at":datetime.now(timezone.utc).isoformat(),
+                                            "error":f"rate-limit cooldown ({int(cooldown_until-now_mono)}s remaining)"}
+            errors.append(f"{provider}: cooldown")
+            continue
         try:
             text, used = await _provider_call(provider, prompt)
             AI_PROVIDER_STATUS[used] = {"status":"ONLINE", "checked_at":datetime.now(timezone.utc).isoformat(), "error":""}
+            AI_PROVIDER_COOLDOWN_UNTIL.pop(used, None)
             return text, used
         except Exception as exc:
             msg=str(exc)
-            AI_PROVIDER_STATUS[provider] = {"status":"LIMITED" if "429" in msg or "rate" in msg.lower() else "OFFLINE", "checked_at":datetime.now(timezone.utc).isoformat(), "error":msg[:220]}
+            low=msg.lower()
+            limited = "429" in msg or "rate limit" in low or "rate_limit" in low or "quota" in low or "too many requests" in low
+            if limited:
+                AI_PROVIDER_COOLDOWN_UNTIL[provider] = now_mono + AI_PROVIDER_COOLDOWN_SECONDS
+            AI_PROVIDER_STATUS[provider] = {"status":"LIMITED" if limited else "OFFLINE", "checked_at":datetime.now(timezone.utc).isoformat(), "error":msg[:220]}
             errors.append(f"{provider}: {msg[:120]}")
             continue
     raise RuntimeError("All configured AI providers failed: " + " | ".join(errors))
 
 # Book/OpenAI second-opinion cache: one OpenAI call per newly closed/current candle.
-BOOK_OPENAI_CACHE_TTL = int(os.getenv("BOOK_OPENAI_CACHE_TTL", "300"))
+BOOK_OPENAI_CACHE_TTL = int(os.getenv("BOOK_OPENAI_CACHE_TTL", "86400"))
 BOOK_OPENAI_COOLDOWN = int(os.getenv("BOOK_OPENAI_COOLDOWN", "45"))
 BOOK_OPENAI_CACHE: dict[str, tuple[float, int | None, dict[str, Any]]] = {}
 BOOK_OPENAI_LOCKS: dict[str, asyncio.Lock] = {}
@@ -1675,7 +1701,7 @@ async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
             "Confidence must be an integer 0-100. Do not claim certainty or guaranteed profits.\n\n"
             + json.dumps(analysis_context, ensure_ascii=False, default=str)
         )
-        if GROQ_API_KEY or OPENAI_API_KEY:
+        if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY, CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, HF_TOKEN, OPENAI_API_KEY)):
             try:
                 text, ai_provider = await ai_json_completion(prompt)
                 if text:
@@ -1903,107 +1929,161 @@ def _structure_state(candles: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _fibonacci_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
-    """Per-timeframe Fibonacci retracement/extension based on confirmed market structure.
+    """Strict per-timeframe Fibonacci engine.
 
-    Anchors are recalculated only from confirmed swing structure: bullish uses the
-    latest valid swing low before the latest swing high; bearish uses the latest
-    valid swing high before the latest swing low. A new BOS/CHOCH/new structural
-    impulse therefore creates a new Fibonacci anchor instead of moving it on every
-    candle.
+    The Fibonacci is calculated ONLY from the candles supplied for this
+    timeframe.  It is anchored to the latest confirmed dominant impulse:
+    bullish = swing low -> later swing high, bearish = swing high -> later
+    swing low.  The anchor is changed only when a newer valid structural
+    impulse appears; ordinary candles do not drag the anchors around.
     """
-    n=len(candles)
+    n = len(candles)
     if n < 40:
-        return {"available":False,"direction":"NEUTRAL","reason":"Yetarli candle yo'q"}
-    raw_highs,raw_lows=_swing_points(candles)
-    highs=[]; lows=[]
+        return {"available": False, "direction": "NEUTRAL", "reason": "Yetarli candle yo'q"}
+
+    raw_highs, raw_lows = _swing_points(candles)
+    highs = []
+    lows = []
     for pt in raw_highs:
-        norm=_normalize_swing_point(pt)
-        if norm and 2 <= norm[0] < n-2: highs.append(norm)
+        norm = _normalize_swing_point(pt)
+        if norm and 2 <= norm[0] < n - 2:
+            highs.append(norm)
     for pt in raw_lows:
-        norm=_normalize_swing_point(pt)
-        if norm and 2 <= norm[0] < n-2: lows.append(norm)
+        norm = _normalize_swing_point(pt)
+        if norm and 2 <= norm[0] < n - 2:
+            lows.append(norm)
     if not highs or not lows:
-        return {"available":False,"direction":"NEUTRAL","reason":"Valid swing topilmadi"}
+        return {"available": False, "direction": "NEUTRAL", "reason": "Valid swing topilmadi"}
 
-    h2=highs[-2:]; l2=lows[-2:]
-    bull=len(h2)==2 and len(l2)==2 and h2[-1][1] > h2[-2][1] and l2[-1][1] > l2[-2][1]
-    bear=len(h2)==2 and len(l2)==2 and h2[-1][1] < h2[-2][1] and l2[-1][1] < l2[-2][1]
-    structure=_structure_state(candles)
-    direction="BULLISH" if bull else "BEARISH" if bear else ("BULLISH" if structure.get("choch")=="BULLISH" else "BEARISH" if structure.get("choch")=="BEARISH" else "NEUTRAL")
+    structure = _structure_state(candles)
+    # Determine direction from confirmed swing sequence first, then BOS/CHOCH.
+    direction = "NEUTRAL"
+    if len(highs) >= 2 and len(lows) >= 2:
+        hh = highs[-1][1] > highs[-2][1]
+        hl = lows[-1][1] > lows[-2][1]
+        lh = highs[-1][1] < highs[-2][1]
+        ll = lows[-1][1] < lows[-2][1]
+        if hh and hl:
+            direction = "BULLISH"
+        elif lh and ll:
+            direction = "BEARISH"
+    if direction == "NEUTRAL":
+        if structure.get("choch") == "BULLISH" or structure.get("bos") == "BULLISH":
+            direction = "BULLISH"
+        elif structure.get("choch") == "BEARISH" or structure.get("bos") == "BEARISH":
+            direction = "BEARISH"
 
-    anchor_low=None; anchor_high=None
-    if direction=="BULLISH":
-        latest_high=highs[-1]
-        before=[x for x in lows if x[0] < latest_high[0]]
-        if before:
-            anchor_low=before[-1]; anchor_high=latest_high
-    elif direction=="BEARISH":
-        latest_low=lows[-1]
-        before=[x for x in highs if x[0] < latest_low[0]]
-        if before:
-            anchor_high=before[-1]; anchor_low=latest_low
+    anchor_low = None
+    anchor_high = None
 
-    # Fallback to the latest opposite swings when structure is transitional.
-    if anchor_low is None or anchor_high is None or anchor_high[0] <= anchor_low[0]:
-        pairs=[]
-        for lo in lows[-12:]:
-            after=[h for h in highs[-12:] if h[0] > lo[0]]
-            if after: pairs.append((after[-1][0]-lo[0],lo,after[-1]))
-        if pairs:
-            _,anchor_low,anchor_high=min(pairs,key=lambda x:x[0])
-        else:
-            pairs=[]
-            for hi in highs[-12:]:
-                after=[lo for lo in lows[-12:] if lo[0] > hi[0]]
-                if after: pairs.append((after[-1][0]-hi[0],hi,after[-1]))
-            if pairs:
-                _,anchor_high,anchor_low=min(pairs,key=lambda x:x[0])
+    if direction == "BULLISH":
+        # Latest confirmed swing high and the latest confirmed swing low BEFORE it.
+        for high in reversed(highs):
+            before = [low for low in lows if low[0] < high[0]]
+            if before:
+                candidate_low = before[-1]
+                # Ignore tiny/noisy impulses; prefer the latest meaningful leg.
+                if high[1] > candidate_low[1]:
+                    anchor_low, anchor_high = candidate_low, high
+                    break
+    elif direction == "BEARISH":
+        # Latest confirmed swing low and the latest confirmed swing high BEFORE it.
+        for low in reversed(lows):
+            before = [high for high in highs if high[0] < low[0]]
+            if before:
+                candidate_high = before[-1]
+                if candidate_high[1] > low[1]:
+                    anchor_high, anchor_low = candidate_high, low
+                    break
 
     if anchor_low is None or anchor_high is None:
-        return {"available":False,"direction":direction,"reason":"Fibonacci anchor topilmadi"}
-    low=float(anchor_low[1]); high=float(anchor_high[1]); rng=abs(high-low)
-    if rng <= 0:
-        return {"available":False,"direction":direction,"reason":"Fibonacci range nol"}
+        return {"available": False, "direction": direction, "reason": "Yangi valid dominant impulse topilmadi"}
 
-    levels=[0.0,0.236,0.382,0.5,0.618,0.786,1.0,1.272,1.618]
-    if direction=="BULLISH":
-        prices={str(x):high-rng*x for x in levels}
+    low = float(anchor_low[1])
+    high = float(anchor_high[1])
+    rng = abs(high - low)
+    if rng <= 0:
+        return {"available": False, "direction": direction, "reason": "Fibonacci range nol"}
+
+    # Standard retracement + extension levels from the supplied strategy.
+    levels = [0.0, 0.236, 0.382, 0.5, 0.618, 0.786, 1.0, 1.272, 1.618]
+    if direction == "BULLISH":
+        prices = {str(x): high - rng * x for x in levels}
     else:
-        prices={str(x):low+rng*x for x in levels}
-    current=float(candles[-1]["close"])
-    # Nearest key retracement and a confluence zone around 0.50-0.618.
-    key=[0.382,0.5,0.618,0.786]
-    nearest=min(key,key=lambda x:abs(current-prices[str(x)]))
-    zone_width=max(rng*0.035, current*0.0006)
-    zone_lo=min(prices["0.5"],prices["0.618"])-zone_width
-    zone_hi=max(prices["0.5"],prices["0.618"])+zone_width
-    in_zone=zone_lo <= current <= zone_hi
-    # Fibonacci confirmation is directional only when price is in/near a valid
-    # retracement area; it never overrides market structure on its own.
-    # Conservative price-action confirmation from the supplied Fibonacci rules:
-    # after price reaches the 50-61.8% zone, require a closed candle to resume
-    # the dominant direction (close beyond the previous candle close).
-    prev_close=float(candles[-2]["close"]) if len(candles)>1 else current
-    last_open=float(candles[-1]["open"])
-    bullish_candle=current > last_open and current > prev_close
-    bearish_candle=current < last_open and current < prev_close
-    confirmation = "BUY" if direction=="BULLISH" and in_zone and bullish_candle else "SELL" if direction=="BEARISH" and in_zone and bearish_candle else "WAIT"
-    fib_signal=confirmation
-    # Optional RSI confirmation, used as a score/filter rather than a standalone trigger.
-    closes=[float(c["close"]) for c in candles[-15:]]
-    gains=[]; losses=[]
-    for a,b in zip(closes[:-1],closes[1:]):
-        d=b-a; gains.append(max(d,0.0)); losses.append(max(-d,0.0))
-    avg_gain=sum(gains)/max(len(gains),1); avg_loss=sum(losses)/max(len(losses),1)
-    rsi=100.0 if avg_loss==0 else 100.0-(100.0/(1.0+(avg_gain/avg_loss)))
-    rsi_ok=(direction=="BULLISH" and rsi>=50) or (direction=="BEARISH" and rsi<=50)
+        prices = {str(x): low + rng * x for x in levels}
+
+    current = float(candles[-1]["close"])
+    key = [0.382, 0.5, 0.618, 0.786]
+    nearest = min(key, key=lambda x: abs(current - prices[str(x)]))
+
+    # The key entry zone is strictly 50%-61.8%. Keep the zone narrow and
+    # proportional to this timeframe's own impulse, rather than extending it
+    # across the entire chart with a large volatility padding.
+    zone_base_low = min(prices["0.5"], prices["0.618"])
+    zone_base_high = max(prices["0.5"], prices["0.618"])
+    zone_pad = min(rng * 0.012, max(rng * 0.004, current * 0.00012))
+    zone_lo = zone_base_low - zone_pad
+    zone_hi = zone_base_high + zone_pad
+    in_zone = zone_lo <= current <= zone_hi
+
+    prev_close = float(candles[-2]["close"]) if n > 1 else current
+    last_open = float(candles[-1]["open"])
+    bullish_candle = current > last_open and current > prev_close
+    bearish_candle = current < last_open and current < prev_close
+    confirmation = (
+        "BUY" if direction == "BULLISH" and in_zone and bullish_candle
+        else "SELL" if direction == "BEARISH" and in_zone and bearish_candle
+        else "WAIT"
+    )
+
+    closes = [float(c["close"]) for c in candles[-15:]]
+    gains, losses = [], []
+    for a, b in zip(closes[:-1], closes[1:]):
+        d = b - a
+        gains.append(max(d, 0.0)); losses.append(max(-d, 0.0))
+    avg_gain = sum(gains) / max(len(gains), 1)
+    avg_loss = sum(losses) / max(len(losses), 1)
+    rsi = 100.0 if avg_loss == 0 else 100.0 - (100.0 / (1.0 + avg_gain / avg_loss))
+    rsi_ok = (direction == "BULLISH" and rsi >= 50) or (direction == "BEARISH" and rsi <= 50)
+
+    # Only draw the Fibonacci over the current structural impulse window, not
+    # from the first candle in the chart. This keeps the visual zones short.
+    draw_start_index = min(anchor_low[0], anchor_high[0])
+    draw_end_index = n - 1
+    retracement_zone = {
+        "low": round(zone_lo, 4),
+        "high": round(zone_hi, 4),
+        "base_low": round(zone_base_low, 4),
+        "base_high": round(zone_base_high, 4),
+        "padding": round(zone_pad, 4),
+    }
+
     return {
-        "available":True,"direction":direction,"anchor_low":{"index":anchor_low[0],"time":candles[anchor_low[0]].get("time"),"price":round(low,4)},
-        "anchor_high":{"index":anchor_high[0],"time":candles[anchor_high[0]].get("time"),"price":round(high,4)},
-        "range":round(rng,4),"levels":{k:round(v,4) for k,v in prices.items()},
-        "retracement_zone":{"low":round(min(prices["0.5"],prices["0.618"]),4),"high":round(max(prices["0.5"],prices["0.618"]),4)},
-        "nearest_level":nearest,"price_at_level":round(prices[str(nearest)],4),"current_price":round(current,4),
-        "in_zone":in_zone,"signal":fib_signal,"confirmation":confirmation,"price_action_confirmation":(bullish_candle if direction=="BULLISH" else bearish_candle),"rsi":round(rsi,2),"rsi_ok":rsi_ok,"extension_targets":{"1.272":round(prices["1.272"],4),"1.618":round(prices["1.618"],4)},"structure":structure,"reason":f"{direction} structure · Fibonacci {nearest:.3f} · {'50-61.8% ZONE' if in_zone else 'WAIT'} · {'CANDLE CONFIRMED' if confirmation!='WAIT' else 'WAIT CONFIRMATION'}"
+        "available": True,
+        "direction": direction,
+        "anchor_low": {"index": anchor_low[0], "time": candles[anchor_low[0]].get("time"), "price": round(low, 4)},
+        "anchor_high": {"index": anchor_high[0], "time": candles[anchor_high[0]].get("time"), "price": round(high, 4)},
+        "range": round(rng, 4),
+        "levels": {k: round(v, 4) for k, v in prices.items()},
+        "retracement_zone": retracement_zone,
+        "nearest_level": nearest,
+        "price_at_level": round(prices[str(nearest)], 4),
+        "current_price": round(current, 4),
+        "in_zone": in_zone,
+        "signal": confirmation,
+        "confirmation": confirmation,
+        "price_action_confirmation": bullish_candle if direction == "BULLISH" else bearish_candle,
+        "rsi": round(rsi, 2),
+        "rsi_ok": rsi_ok,
+        "extension_targets": {"1.272": round(prices["1.272"], 4), "1.618": round(prices["1.618"], 4)},
+        "structure": structure,
+        "draw_start_index": draw_start_index,
+        "draw_end_index": draw_end_index,
+        "draw_start_time": candles[draw_start_index].get("time"),
+        "draw_end_time": candles[draw_end_index].get("time"),
+        "reason": f"{direction} structure · dominant impulse · Fibonacci {nearest:.3f} · "
+                  f"{'50-61.8% ZONE' if in_zone else 'WAIT'} · "
+                  f"{'CANDLE CONFIRMED' if confirmation != 'WAIT' else 'WAIT CONFIRMATION'}"
     }
 
 def _snr(candles: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2040,124 +2120,188 @@ def _trendline_point_value(p1: tuple[int,float], p2: tuple[int,float], idx: int)
 
 
 def _trendline_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
-    """Per-timeframe trend-line engine using only confirmed/closed candles.
+    """Strict per-timeframe trend-line engine.
 
-    Finds swing lows/highs, constructs the most recent valid support/resistance line,
-    counts price touches around the line, and detects close-based breakout + retest.
-    It is a filter/confirmation for the main signal engine rather than a standalone
-    trade trigger.
+    IMPORTANT: this function receives candles from ONE validated timeframe only.
+    It never mixes M5/M15/H1/H4/D1 candles.  The line is anchored to confirmed
+    swing points of that same series and is selected from the current structural
+    direction, not from an arbitrary recent line with the most touches.
+
+    Rules:
+      * bullish structure -> support through higher swing lows
+      * bearish structure -> resistance through lower swing highs
+      * minimum 2 anchor touches; extra touches increase quality
+      * breakout is close-based (wick alone is not a breakout)
+      * retest must occur after the breakout
     """
     n=len(candles)
+    base={"available":False,"trend":"NEUTRAL","type":"NONE","touches":0,"trend_power":0,
+          "breakout":"NO","retest":"NO","confirmation":"WAIT","signal":"WAIT"}
     if n < 40:
-        return {"available":False,"trend":"NEUTRAL","type":"NONE","touches":0,"trend_power":0,
-                "breakout":"NO","retest":"NO","confirmation":"WAIT","signal":"WAIT",
-                "reason":"Yetarli candle yo'q"}
+        return {**base,"reason":"Yetarli candle yo'q"}
+
     raw_highs,raw_lows=_swing_points(candles)
     highs=[]; lows=[]
     for pt in raw_highs:
         norm=_normalize_swing_point(pt)
-        if norm and 2 <= norm[0] < n-2:
-            highs.append(norm)
+        if norm and 2 <= norm[0] < n-2: highs.append(norm)
     for pt in raw_lows:
         norm=_normalize_swing_point(pt)
-        if norm and 2 <= norm[0] < n-2:
-            lows.append(norm)
-    atrv=max(atr(candles), float(candles[-1]["close"])*0.0003)
-    tol=max(atrv*0.18, float(candles[-1]["close"])*0.00035)
+        if norm and 2 <= norm[0] < n-2: lows.append(norm)
+    if len(highs)<2 and len(lows)<2:
+        return {**base,"reason":"Valid swing topilmadi"}
 
-    def build(points, mode):
+    atrv=max(atr(candles), float(candles[-1]["close"])*0.0003)
+    tol=max(atrv*0.16, float(candles[-1]["close"])*0.00030)
+
+    def structure_direction():
+        # Use the latest two confirmed highs/lows. This prevents an old line from
+        # being selected just because it happens to have many historical touches.
+        hh = len(highs)>=2 and highs[-1][1] > highs[-2][1]
+        hl = len(lows)>=2 and lows[-1][1] > lows[-2][1]
+        lh = len(highs)>=2 and highs[-1][1] < highs[-2][1]
+        ll = len(lows)>=2 and lows[-1][1] < lows[-2][1]
+        if hh and hl: return "BULLISH"
+        if lh and ll: return "BEARISH"
+        # If one side is ambiguous, use the latest confirmed sequence as a
+        # secondary tie-breaker, while still requiring two pivots.
+        if hl and not lh: return "BULLISH"
+        if lh and not hl: return "BEARISH"
+        return "NEUTRAL"
+
+    direction=structure_direction()
+
+    def line_candidate(points, mode):
         if len(points)<2: return None
-        # Search recent pairs, preferring structurally ascending lows for support or
-        # descending highs for resistance.
-        best=None
-        recent=points[-10:]
-        for a in range(len(recent)-2,-1,-1):
+        # Prefer the latest two structurally valid pivots. If those fail the
+        # touch test, search a small recent window, but never older than 12 pivots.
+        candidates=[]
+        recent=points[-12:]
+        for a in range(max(0,len(recent)-8),len(recent)-1):
             for b in range(a+1,len(recent)):
                 p1,p2=recent[a],recent[b]
                 if p2[0]-p1[0] < 4: continue
                 if mode=="UP" and p2[1] <= p1[1]: continue
                 if mode=="DOWN" and p2[1] >= p1[1]: continue
                 slope=(p2[1]-p1[1])/(p2[0]-p1[0])
-                touches=0
-                touch_idxs=[]
-                for i in range(p2[0],n):
+                # Count touches on the actual swing points plus intervening
+                # candles. Anchors are always counted as touches.
+                touch_idxs=[p1[0],p2[0]]
+                for i in range(p1[0]+1,n):
+                    if i in (p2[0],): continue
                     lv=_trendline_point_value(p1,p2,i)
-                    price=candles[i]["low"] if mode=="UP" else candles[i]["high"]
-                    if abs(float(price)-lv)<=tol:
-                        touches += 1; touch_idxs.append(i)
-                if touches < 2: continue
+                    price=float(candles[i]["low"] if mode=="UP" else candles[i]["high"])
+                    if abs(price-lv)<=tol: touch_idxs.append(i)
+                touch_idxs=sorted(set(touch_idxs))
+                # A candidate must not be badly crossed by price after p2.
+                violations=0
+                for i in range(p2[0]+1,n):
+                    lv=_trendline_point_value(p1,p2,i)
+                    if mode=="UP" and float(candles[i]["close"]) < lv-tol*0.9: violations+=1
+                    if mode=="DOWN" and float(candles[i]["close"]) > lv+tol*0.9: violations+=1
+                # At least the two anchors. Prefer recent anchors, more touches,
+                # longer clean support/resistance, and fewer structural violations.
                 span=n-p2[0]
-                quality=touches*12 + min(20, span/4) + min(15, abs(slope)*1000)
-                candidate=(quality,p1,p2,slope,touches,touch_idxs)
-                if best is None or candidate[0]>best[0]: best=candidate
-        return best
+                recency=max(0,20-(n-p2[0]))
+                quality=(touch_idxs.__len__()*28 + min(20,span/5) + recency
+                         - min(35,violations*4) + min(10,abs(slope)*700))
+                candidates.append((quality,p1,p2,slope,touch_idxs,violations))
+        if not candidates: return None
+        # Primary priority: most recent p2, then touches, then quality.
+        candidates.sort(key=lambda x:(x[2][0],len(x[4]),x[0]),reverse=True)
+        return candidates[0]
 
-    up=build(lows,"UP")
-    down=build(highs,"DOWN")
-    # Prefer the most recent line with more touches; otherwise use whichever is valid.
-    chosen=None; mode="NONE"
-    for cand,md in ((up,"UP"),(down,"DOWN")):
-        if cand and (chosen is None or cand[1][0] > chosen[1][0] or (cand[4] > chosen[4] and cand[1][0] >= chosen[1][0]-20)):
-            chosen=cand; mode=md
+    # Directional line first. In a neutral structure we may show the strongest
+    # valid line, but it cannot produce a directional signal by itself.
+    if direction=="BULLISH":
+        chosen=line_candidate(lows,"UP"); mode="UP"
+    elif direction=="BEARISH":
+        chosen=line_candidate(highs,"DOWN"); mode="DOWN"
+    else:
+        up=line_candidate(lows,"UP"); down=line_candidate(highs,"DOWN")
+        if up and down:
+            chosen=up if up[2][0]>=down[2][0] else down
+            mode="UP" if chosen is up else "DOWN"
+        elif up:
+            chosen=up; mode="UP"
+        elif down:
+            chosen=down; mode="DOWN"
+        else:
+            chosen=None; mode="NONE"
+
     if chosen is None:
-        return {"available":False,"trend":"NEUTRAL","type":"NONE","touches":0,"trend_power":0,
-                "breakout":"NO","retest":"NO","confirmation":"WAIT","signal":"WAIT",
-                "reason":"Valid 2-touch trend line topilmadi"}
+        return {**base,"reason":"Valid 2-touch trend line topilmadi"}
 
-    quality,p1,p2,slope,touches,touch_idxs=chosen
+    quality,p1,p2,slope,touch_idxs,violations=chosen
+    touches=len(touch_idxs)
     current_i=n-1; prev_i=n-2
     line_prev=_trendline_point_value(p1,p2,prev_i); line_cur=_trendline_point_value(p1,p2,current_i)
     prev_close=float(candles[prev_i]["close"]); cur_close=float(candles[current_i]["close"])
-    breakout="NO"; retest="NO"; confirmation="WAIT"
-    breakout_idx=None
-    if mode=="UP" and prev_close <= line_prev + tol and cur_close < line_cur - tol*0.35:
+    breakout="NO"; retest="NO"; confirmation="WAIT"; breakout_idx=None; retest_idx=None
+
+    # Confirmed close breakout only. The current candle is already closed by the
+    # caller, so it is safe to use its close here.
+    if mode=="UP" and prev_close >= line_prev-tol and cur_close < line_cur-tol*0.35:
         breakout="BEARISH_BREAK"; breakout_idx=current_i
-    elif mode=="DOWN" and prev_close >= line_prev - tol and cur_close > line_cur + tol*0.35:
+    elif mode=="DOWN" and prev_close <= line_prev+tol and cur_close > line_cur+tol*0.35:
         breakout="BULLISH_BREAK"; breakout_idx=current_i
 
+    # Look for the most recent close-based breakout in the last 12 candles if the
+    # current candle itself did not break. This keeps the retest sequence causal.
     if breakout_idx is None:
-        look_start=max(p2[0]+1,n-8)
+        look_start=max(p2[0]+1,n-12)
         for i in range(look_start,n-1):
-            lp=_trendline_point_value(p1,p2,i); c=float(candles[i]["close"]); nxt=float(candles[i+1]["close"])
-            if mode=="UP" and c < lp-tol*0.4:
-                breakout_idx=i; breakout="BEARISH_BREAK"; break
-            if mode=="DOWN" and c > lp+tol*0.4:
-                breakout_idx=i; breakout="BULLISH_BREAK"; break
+            lp=_trendline_point_value(p1,p2,i)
+            prev_c=float(candles[i-1]["close"]) if i>0 else float(candles[i]["close"])
+            c=float(candles[i]["close"])
+            if mode=="UP" and prev_c>=lp-tol and c<lp-tol*0.35:
+                breakout_idx=i; breakout="BEARISH_BREAK"
+            elif mode=="DOWN" and prev_c<=lp+tol and c>lp+tol*0.35:
+                breakout_idx=i; breakout="BULLISH_BREAK"
+            if breakout_idx is not None: break
+
     if breakout_idx is not None and breakout_idx < n-1:
         for i in range(breakout_idx+1,n):
             lv=_trendline_point_value(p1,p2,i)
-            if abs(float(candles[i]["close"])-lv)<=tol and abs(float(candles[i]["high"])-float(candles[i]["low"]))>tol*0.7:
-                retest="YES"
-                break
-        if retest=="YES":
-            if mode=="UP" and cur_close < line_cur-tol*0.25: confirmation="CONFIRMED_SELL"
-            elif mode=="DOWN" and cur_close > line_cur+tol*0.25: confirmation="CONFIRMED_BUY"
-    if breakout=="NO":
-        if mode=="UP" and cur_close > line_cur: confirmation="BULLISH_HOLD"
-        elif mode=="DOWN" and cur_close < line_cur: confirmation="BEARISH_HOLD"
+            c=float(candles[i]["close"]); hi=float(candles[i]["high"]); lo=float(candles[i]["low"])
+            # Retest can touch the line with wick, but the close must remain on
+            # the broken side for confirmation.
+            touched=lo<=lv+tol and hi>=lv-tol
+            if not touched: continue
+            if mode=="UP" and c < lv-tol*0.15:
+                retest="YES"; retest_idx=i; confirmation="CONFIRMED_SELL"
+            elif mode=="DOWN" and c > lv+tol*0.15:
+                retest="YES"; retest_idx=i; confirmation="CONFIRMED_BUY"
+            if retest_idx is not None: break
 
-    power=int(max(0,min(99,round(42 + touches*8 + min(18, max(0,(n-p2[0]))/6) + (12 if retest=="YES" else 0) + (8 if breakout!="NO" else 0)))))
-    trend="BULLISH" if mode=="UP" else "BEARISH"
-    sig="BUY" if confirmation in {"CONFIRMED_BUY","BULLISH_HOLD"} else "SELL" if confirmation in {"CONFIRMED_SELL","BEARISH_HOLD"} else "WAIT"
-    # Visual overlay data: normalized swing points and exact breakout/retest candles.
+    if breakout=="NO":
+        if mode=="UP" and cur_close > line_cur-tol*0.15: confirmation="BULLISH_HOLD"
+        elif mode=="DOWN" and cur_close < line_cur+tol*0.15: confirmation="BEARISH_HOLD"
+
+    # In neutral structure, the line is informational only.
+    if direction=="NEUTRAL" and confirmation in {"BULLISH_HOLD","BEARISH_HOLD"}:
+        confirmation="WAIT"
+
+    power=int(max(0,min(99,round(
+        45 + min(30,touches*9) + min(12,max(0,(n-p2[0]))/5)
+        + (10 if breakout!="NO" else 0) + (8 if retest=="YES" else 0)
+        - min(20,violations*2)
+    ))))
+    trend="BULLISH" if mode=="UP" else "BEARISH" if mode=="DOWN" else "NEUTRAL"
+    sig="BUY" if confirmation in {"CONFIRMED_BUY","BULLISH_HOLD"} and direction=="BULLISH" else "SELL" if confirmation in {"CONFIRMED_SELL","BEARISH_HOLD"} and direction=="BEARISH" else "WAIT"
+
     swing_highs=[{"index":pt[0],"time":candles[pt[0]].get("time"),"price":round(pt[1],4)} for pt in highs[-20:]]
     swing_lows=[{"index":pt[0],"time":candles[pt[0]].get("time"),"price":round(pt[1],4)} for pt in lows[-20:]]
-    retest_idx=None
-    if breakout_idx is not None and retest=="YES":
-        look_start=breakout_idx+1
-        for i in range(look_start,n):
-            lv=_trendline_point_value(p1,p2,i)
-            if abs(float(candles[i]["close"])-lv)<=tol and abs(float(candles[i]["high"])-float(candles[i]["low"]))>tol*0.7:
-                retest_idx=i; break
-    return {"available":True,"trend":trend,"type":"SUPPORT" if mode=="UP" else "RESISTANCE",
+    return {"available":True,"trend":trend,"type":"SUPPORT" if mode=="UP" else "RESISTANCE" if mode=="DOWN" else "NONE",
             "p1":{"index":p1[0],"time":candles[p1[0]].get("time"),"price":round(p1[1],4)},
             "p2":{"index":p2[0],"time":candles[p2[0]].get("time"),"price":round(p2[1],4)},
-            "slope":round(slope,8),"touches":touches,"touch_indices":touch_idxs[-10:],
+            "slope":round(slope,8),"touches":touches,"touch_indices":touch_idxs[-12:],
             "swing_highs":swing_highs,"swing_lows":swing_lows,
             "breakout_index":breakout_idx,"retest_index":retest_idx,
             "trend_power":power,"breakout":breakout,"retest":retest,"confirmation":confirmation,
             "current_line":round(line_cur,4),"signal":sig,
-            "reason":f"{('Support' if mode=='UP' else 'Resistance')} trend line · {touches} touch · power {power}% · {breakout} · retest {retest}."}
+            "timeframe_candles":n,
+            "reason":f"{('Support' if mode=='UP' else 'Resistance' if mode=='DOWN' else 'Neutral')} trend line · {touches} touch · power {power}% · structure {direction} · {breakout} · retest {retest}."}
 
 
 def _snr_zone_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
@@ -2396,7 +2540,7 @@ async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, An
 
         if ai is None:
             ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI unavailable.", "mode": "fallback"}
-            if GROQ_API_KEY or OPENAI_API_KEY:
+            if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY, CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, HF_TOKEN, OPENAI_API_KEY)):
                 try:
                     prompt = (
                         "You are the second-opinion validator for XAU/USD. "
