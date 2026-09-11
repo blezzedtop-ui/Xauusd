@@ -660,6 +660,8 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
     setInterval(()=>{syncRefreshCycle().catch(()=>{})},15000);
     // Run one synchronized cycle shortly after startup.
     setTimeout(()=>syncRefreshCycle().catch(()=>{}),1200);
+    setTimeout(()=>loadMarketNews().catch(()=>{}),1500);
+    setInterval(()=>loadMarketNews().catch(()=>{}),30000);
     setInterval(updateCountdown,250);
   }catch(e){
     console.error('Dashboard init error',e);
@@ -668,3 +670,24 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
     try{mountTradingView('chart', interval)}catch(_){}
   }
 })();;
+
+// Live Uzbek market-news banner.
+let marketNewsItems = [], marketNewsIndex = 0, marketNewsTimer = null;
+function renderMarketNewsItem(){
+  const item=marketNewsItems[marketNewsIndex];
+  const text=$('newsText'); if(!item||!text) return;
+  $('newsCategory').textContent=item.category||'MARKET';
+  text.classList.remove('enter'); void text.offsetWidth; text.classList.add('enter');
+  text.textContent=item.title_uz||item.title||'Yangilik mavjud emas';
+  $('newsMeta').textContent=item.source||'';
+  const btn=$('newsOpen'); if(btn){btn.disabled=!item.link; btn.onclick=()=>item.link&&window.open(item.link,'_blank','noopener,noreferrer');}
+}
+async function loadMarketNews(){
+  try{
+    const d=await api('/api/v1/market-news');
+    if(Array.isArray(d?.items)&&d.items.length){
+      marketNewsItems=d.items; marketNewsIndex=Math.min(marketNewsIndex,marketNewsItems.length-1); renderMarketNewsItem();
+      if(!marketNewsTimer){ marketNewsTimer=setInterval(()=>{ if(!marketNewsItems.length)return; marketNewsIndex=(marketNewsIndex+1)%marketNewsItems.length; renderMarketNewsItem(); },7000); }
+    }
+  }catch(e){console.warn('MARKET NEWS',e)}
+}

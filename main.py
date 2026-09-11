@@ -10,6 +10,7 @@ import asyncio
 import smtplib
 import random
 import string
+import xml.etree.ElementTree as ET
 from email.message import EmailMessage
 import csv
 import io
@@ -34,6 +35,11 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, rela
 load_dotenv()
 
 APP_TITLE = os.getenv("APP_TITLE", "Trading SaaS Analytics Platform")
+
+# Lightweight live market-news ticker (public Google News RSS + Uzbek translation fallback).
+NEWS_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
+NEWS_CACHE_TTL = int(os.getenv("NEWS_CACHE_TTL", "45"))
+NEWS_MAX_ITEMS = int(os.getenv("NEWS_MAX_ITEMS", "12"))
 MARKET_PROVIDER = os.getenv("MARKET_PROVIDER", "auto").lower()
 REALMARKET_API_KEY = os.getenv("REALMARKET_API_KEY", "").strip()
 REALMARKET_API_BASE = os.getenv("REALMARKET_API_BASE", "https://api.realmarketapi.com").strip().rstrip("/")
@@ -376,7 +382,111 @@ def initialize_database() -> None:
     ensure_admin_user()
 
 
+
+
 app = FastAPI(title=APP_TITLE, version="19.0.0")
+
+MARKET_NEWS_QUERIES = [
+    ("GOLD", "gold OR XAUUSD price OR bullion market"),
+    ("NEFT", "oil OR crude OR Brent OR WTI price"),
+    ("USD", "US dollar OR USD index OR DXY"),
+    ("FED", "Federal Reserve OR Fed rates OR inflation CPI PPI NFP"),
+]
+
+UZ_FALLBACK = {
+    "gold": "oltin", "bullion": "oltin", "oil": "neft", "crude": "xom neft", "price": "narxi",
+    "prices": "narxlari", "dollar": "dollar", "fed": "Fed", "rates": "stavkalar",
+    "rate": "stavka", "inflation": "inflyatsiya", "rises": "oshdi", "rise": "o‘sdi",
+    "falls": "pasaydi", "fall": "pasayish", "higher": "yuqori", "lower": "pastroq",
+    "market": "bozor", "markets": "bozorlar", "investors": "investorlar", "investor": "investor",
+    "stocks": "aksiyalar", "economy": "iqtisodiyot", "economic": "iqtisodiy", "demand": "talab",
+    "supply": "taklif", "demand": "talab", "forecast": "prognoz", "data": "ma’lumotlar",
+    "report": "hisobot", "reports": "hisobotlar", "rate cut": "stavka pasayishi",
+    "rate hike": "stavka oshishi", "central bank": "markaziy bank", "treasury": "g‘aznachilik",
+    "yield": "daromadlilik", "yields": "daromadlilik", "war": "urush", "sanctions": "sanksiyalar",
+}
+
+def _news_category_score(title: str, preferred: str) -> str:
+    t = title.lower()
+    if preferred == "GOLD" or any(k in t for k in ["gold", "xau", "bullion"]): return "GOLD"
+    if preferred == "NEFT" or any(k in t for k in ["oil", "brent", "wti", "crude"]): return "NEFT"
+    if preferred == "USD" or any(k in t for k in ["dollar", "dxy", "usd"]): return "USD"
+    return "FED"
+
+async def _translate_uz(text: str) -> str:
+    """Translate short news headlines to Uzbek. Falls back to a conservative lexical translation."""
+    text = (text or "").strip()
+    if not text:
+        return ""
+    try:
+        url = "https://translate.googleapis.com/translate_a/single"
+        params = {"client":"gtx", "sl":"auto", "tl":"uz", "dt":"t", "q":text}
+        async with httpx.AsyncClient(timeout=5.0, headers={"User-Agent":"Mozilla/5.0"}) as client:
+            r = await client.get(url, params=params)
+            r.raise_for_status()
+            data = r.json()
+            parts = data[0] if isinstance(data, list) else []
+            out = "".join(str(x[0]) for x in parts if isinstance(x, list) and x and x[0])
+            if out.strip():
+                return out.strip()
+    except Exception:
+        pass
+    out = text
+    for src, dst in sorted(UZ_FALLBACK.items(), key=lambda kv: len(kv[0]), reverse=True):
+        out = re.sub(rf"\b{re.escape(src)}\b", dst, out, flags=re.I)
+    return out
+
+async def _fetch_google_news_rss(query: str) -> list[dict[str, Any]]:
+    url = "https://news.google.com/rss/search"
+    params = {"q": query, "hl":"en-US", "gl":"US", "ceid":"US:en"}
+    try:
+        async with httpx.AsyncClient(timeout=8.0, headers={"User-Agent":"Mozilla/5.0"}) as client:
+            r = await client.get(url, params=params)
+            r.raise_for_status()
+        root = ET.fromstring(r.text)
+        out=[]
+        for item in root.findall("./channel/item")[:8]:
+            title=(item.findtext("title") or "").strip()
+            link=(item.findtext("link") or "").strip()
+            pub=(item.findtext("pubDate") or "").strip()
+            source_el=item.find("source")
+            source=(source_el.text or "").strip() if source_el is not None else "Google News"
+            if title:
+                out.append({"title":title,"link":link,"published":pub,"source":source})
+        return out
+    except Exception:
+        return []
+
+@app.get("/api/v1/market-news")
+async def get_market_news() -> dict[str, Any]:
+    now = asyncio.get_running_loop().time()
+    if NEWS_CACHE["items"] and now - float(NEWS_CACHE["ts"] or 0) < NEWS_CACHE_TTL:
+        return {"mode":"live-cache", "items":NEWS_CACHE["items"], "updated_at":datetime.now(timezone.utc).isoformat()}
+    buckets = await asyncio.gather(*[_fetch_google_news_rss(q) for _, q in MARKET_NEWS_QUERIES], return_exceptions=True)
+    candidates=[]
+    seen=set()
+    for (preferred,_), rows in zip(MARKET_NEWS_QUERIES,buckets):
+        if isinstance(rows, Exception):
+            continue
+        for row in rows:
+            title=row.get("title","").strip()
+            key=re.sub(r"\W+"," ",title.lower()).strip()
+            if not title or key in seen:
+                continue
+            seen.add(key)
+            row["category"]=_news_category_score(title, preferred)
+            candidates.append(row)
+    # Prefer a balanced rotation across GOLD/NEFT/USD/FED.
+    ordered=[]
+    for cat in ["GOLD","NEFT","USD","FED"]:
+        ordered.extend([x for x in candidates if x["category"]==cat][:3])
+    items=[]
+    for row in ordered[:NEWS_MAX_ITEMS]:
+        uz=await _translate_uz(row["title"])
+        items.append({**row, "title_uz":uz or row["title"]})
+    NEWS_CACHE.update({"ts":now,"items":items})
+    return {"mode":"live" if items else "empty", "items":items, "updated_at":datetime.now(timezone.utc).isoformat()}
+
 origins_raw = os.getenv("FRONTEND_ORIGINS", "*")
 origins = [x.strip() for x in origins_raw.split(",") if x.strip()] or ["*"]
 app.add_middleware(
