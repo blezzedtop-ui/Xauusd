@@ -210,11 +210,16 @@ async function loadMtf(){
     }).join('');
   }catch(e){$('mtfGrid').innerHTML=`<div class="card">MTF LIVE error: ${e.message}</div>`}
 }
+let historyPeriod = localStorage.getItem('history_period') || 'all';
+function historyPeriodLabel(p){ return p==='day'?'Bugun':p==='month'?'Shu oy':'Barchasi'; }
+function syncHistoryPeriodButtons(){ document.querySelectorAll('.history-period').forEach(b=>{ b.classList.toggle('active', b.dataset.historyPeriod===historyPeriod); }); }
+function historyQuery(){ return historyPeriod && historyPeriod!=='all' ? `?period=${encodeURIComponent(historyPeriod)}` : ''; }
+
 async function loadStats(){
   const zero=()=>{['totalSignals','completedSignals','wins','losses','winrate'].forEach(id=>setText(id,id==='winrate'?'0%':'0'));if($('historySourceStats'))$('historySourceStats').innerHTML='<div class="metric">Kirish kerak.</div>';if($('historyTfStats'))$('historyTfStats').innerHTML='';if($('historySummary'))$('historySummary').innerHTML='';};
   if(!token){zero();return;}
   try{
-    const d=await api('/api/v1/signals/analytics');
+    const d=await api(`/api/v1/signals/analytics${historyQuery()}`);
     setText('totalSignals',d.total_signals??0);setText('completedSignals',d.completed_trades??0);setText('wins',d.wins??0);setText('losses',d.losses??0);setText('winrate',(d.winrate??0)+'%');
     if($('historySummary')) $('historySummary').innerHTML=`<div class="metric"><small>TOTAL SIGNALS</small><b>${d.total_signals??0}</b></div><div class="metric"><small>COMPLETED</small><b>${d.completed_trades??0}</b></div><div class="metric"><small>TAKE PROFIT</small><b class="buy">${d.wins??0}</b></div><div class="metric"><small>STOP LOSS</small><b class="sell">${d.losses??0}</b></div><div class="metric"><small>OPEN</small><b class="wait">${d.open??0}</b></div><div class="metric"><small>AMBIGUOUS</small><b>${d.ambiguous??0}</b></div><div class="metric"><small>WIN RATE</small><b>${d.winrate??0}%</b><div class="mini">TP / (TP + SL)</div></div>`;
     const sources=Object.entries(d.by_source||{});
@@ -229,11 +234,12 @@ async function recordModuleSignal(source, response, item, intervalName, candleTi
   try{ await api('/api/v1/signals/record-module',{method:'POST',body:JSON.stringify({symbol,interval:intervalName||response?.interval||interval,source,direction,confidence:x.confidence??response?.ai?.confidence??null,entry:x.entry??response?.setup?.entry??null,stop_loss:x.stop_loss??response?.setup?.stop_loss??null,take_profit:x.take_profit??response?.setup?.take_profit??[],headline:`${source} · ${direction}`,candle_time:String(candleTime??x.candle_time??response?.candle_time??''),payload:{response:item||response}})}); }catch(e){ console.warn('Signal history record',source,e); }
 }
 async function loadHistory(){
+  syncHistoryPeriodButtons();
   const body=$('history');
   if(!body)return;
   if(!token){body.innerHTML='<tr><td colspan="10">Kirish kerak.</td></tr>';return;}
   try{
-    const d=await api('/api/v1/signals/history?limit=200');
+    const d=await api(`/api/v1/signals/history?limit=200${historyPeriod!=='all'?'&period='+encodeURIComponent(historyPeriod):''}`);
     const items=[...(d.items||[])].sort((a,b)=>{const sa=a.source||'Signals',sb=b.source||'Signals';return sa.localeCompare(sb)||String(b.created_at||'').localeCompare(String(a.created_at||''));});
     let lastSource='';
     body.innerHTML=items.map(x=>{
@@ -285,6 +291,8 @@ async function loadICTSignals(){
 }
 
 async function loadAdvancedSignals(){$('advancedStatus').textContent='7 timeframe hisoblanmoqda…';$('advancedGrid').innerHTML='<div class="card">Signal hisoblanmoqda...</div>';try{const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);const order=['1min','5min','15min','30min','1h','4h','1day'];$('advancedGrid').innerHTML=order.map(tf=>advCard(tf,d.timeframes?.[tf]||{})).join('');if(token) order.forEach(tf=>recordModuleSignal('Signal Lab',d,d.timeframes?.[tf]||{},tf,d.timeframes?.[tf]?.candle_time||liveCandle?.time));$('advancedStatus').textContent=`${symbol} · ${new Date(d.generated_at).toLocaleString()} · har bir timeframe alohida`; }catch(e){$('advancedStatus').textContent=e.message;$('advancedGrid').innerHTML='<div class="card">Signal yuklanmadi.</div>'}}
+document.addEventListener('click',e=>{ const b=e.target.closest('.history-period'); if(!b)return; historyPeriod=b.dataset.historyPeriod||'all'; localStorage.setItem('history_period',historyPeriod); syncHistoryPeriodButtons(); loadStats().catch(()=>{}); loadHistory().catch(()=>{}); loadMT5History().catch(()=>{}); });
+
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-save-advanced]');if(!b)return;const tf=b.dataset.saveAdvanced;b.disabled=true;try{await api(`/api/v1/signals/save-advanced?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}`,{method:'POST'});showToast(tfName(tf)+' signal saqlandi');loadStats();if($('historySection').classList.contains('active'))loadHistory()}catch(err){showToast(err.message)}finally{b.disabled=false}});
 async function loadAutoSignals(){
   try{
@@ -335,25 +343,25 @@ async function loadTrendLines(tf=trendLineInterval){
   trendLineInterval=tf;
   try{
     $('trendLineStatus').textContent=`${tfName(tf)} trend line va combined signal hisoblanmoqda…`;
-    const [tl,adv]=await Promise.all([api(`/api/v1/trend-lines/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`),api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`)]);
-    const x=adv.timeframes?.[tf]||{}, t=tl.trendline||{};
+    const results=await Promise.allSettled([api(`/api/v1/trend-lines/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`),api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`)]); const tl=results[0].status==='fulfilled'?results[0].value:null; const adv=results[1].status==='fulfilled'?results[1].value:null; if(!tl && !adv) throw new Error('Trend Line data unavailable');
+    const x=adv?.timeframes?.[tf]||{}, t=(tl?.trendline)||x.trendline||{};
     $('tlTrend').textContent=t.trend||'NEUTRAL'; $('tlTrend').className=t.trend==='BULLISH'?'buy':t.trend==='BEARISH'?'sell':'wait';
     $('tlTouches').textContent=t.touches??0; $('tlPower').textContent=(t.trend_power??0)+'%'; $('tlBreakRetest').textContent=`${t.breakout||'NO'} / ${t.retest||'NO'}`;
     const sig=x.signal||t.signal||'WAIT'; $('tlSignal').textContent=sig; $('tlSignal').className='signal-main '+tlClass(sig); $('tlFinalConfidence').textContent=(x.confidence??0)+'%';
     $('tlReason').textContent=(x.reason||t.reason||'—')+` | Trend Line: ${t.confirmation||'WAIT'}`;
-    renderTrendChart(tl);
+    if(tl?.candles?.length) renderTrendChart(tl);
     const order=['5min','15min','30min','1h','4h','1day'];
-    $('trendLineMatrix').innerHTML=order.map(k=>trendCard(k,{trendline:adv.timeframes?.[k]?.trendline,advanced:adv.timeframes?.[k]})).join('');
-    const dirs=order.map(k=>adv.timeframes?.[k]?.signal||'WAIT');
+    if(adv) $('trendLineMatrix').innerHTML=order.map(k=>trendCard(k,{trendline:adv.timeframes?.[k]?.trendline,advanced:adv.timeframes?.[k]})).join('');
+    const dirs=order.map(k=>adv?.timeframes?.[k]?.signal||'WAIT');
     const buys=dirs.filter(v=>v==='BUY').length,sells=dirs.filter(v=>v==='SELL').length;
     $('trendMatrixFinal').textContent=buys>=4?'🟢 STRONG BUY':sells>=4?'🔴 STRONG SELL':buys>=3?'🟢 BUY':sells>=3?'🔴 SELL':'🟡 WAIT';
     if(token){
       for(const k of order){
-        const ax=adv.timeframes?.[k]||{}, at=ax.trendline||{};
+        const ax=adv?.timeframes?.[k]||{}, at=ax.trendline||{};
         await recordModuleSignal('Auto Trend Line', {interval:k,candle_time:ax.candle_time||at?.p2?.time,signal:ax.signal||at.signal||'WAIT',confidence:ax.confidence??0,entry:ax.entry,stop_loss:ax.stop_loss,take_profit:ax.take_profit,trendline:at,advanced:ax}, ax, k, ax.candle_time||at?.p2?.time);
       }
     }
-    $('trendLineStatus').textContent=`${symbol} · ${tfName(tf)} · real TradingView candle data · ${new Date(adv.generated_at).toLocaleString()}`;
+    $('trendLineStatus').textContent=adv?`${symbol} · ${tfName(tf)} · real TradingView candle data · ${new Date(adv.generated_at).toLocaleString()}`:`${symbol} · ${tfName(tf)} · Trend Line degraded mode`;
   }catch(e){$('trendLineStatus').textContent='Trend Line error: '+e.message;}
 }
 function openSection(id){const target=$(id);if(!target)return;document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',aiSignalsSection:'AI Signals',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',historySection:'Signal History',trendLineSection:'Auto Trend Line'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{})},50);}if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='aiSignalsSection')loadAISignals().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section')loadMT5Status().catch(()=>{});if(id==='trendLineSection')loadTrendLines(trendLineInterval).catch(()=>{})}
@@ -459,10 +467,11 @@ async function loadMT5Status(){
   loadMT5History().catch(()=>{});
 }
 async function loadMT5History(){
+  syncHistoryPeriodButtons();
   const body=$('mt5History'); if(!body)return;
   if(!token){body.innerHTML='<tr><td colspan="8">Kirish kerak.</td></tr>';return;}
   try{
-    const d=await api('/api/v1/signals/history?limit=200');
+    const d=await api(`/api/v1/signals/history?limit=200${historyPeriod!=='all'?'&period='+encodeURIComponent(historyPeriod):''}`);
     const items=[...(d.items||[])].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||''))).slice(0,8);
     const all=d.items||[];
     const wins=all.filter(x=>x.outcome==='TP HIT').length, losses=all.filter(x=>x.outcome==='SL HIT').length;

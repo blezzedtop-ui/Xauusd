@@ -251,6 +251,46 @@ class SignalHistory(Base):
 
 Base.metadata.create_all(engine)
 
+HISTORY_LOCAL_TZ = ZoneInfo("Asia/Tashkent")
+
+def history_period_bounds(period: str | None) -> tuple[datetime | None, datetime | None]:
+    """Return UTC-aware [start, end) bounds for user-facing history filters.
+    period: all | day | month. Boundaries are based on Asia/Tashkent local time.
+    """
+    p = (period or "all").strip().lower()
+    if p in {"", "all", "none"}:
+        return None, None
+    now_local = datetime.now(HISTORY_LOCAL_TZ)
+    if p in {"day", "daily", "today"}:
+        start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_local = start_local + timedelta(days=1)
+    elif p in {"month", "monthly", "this_month"}:
+        start_local = now_local.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        if start_local.month == 12:
+            end_local = start_local.replace(year=start_local.year + 1, month=1)
+        else:
+            end_local = start_local.replace(month=start_local.month + 1)
+    else:
+        raise HTTPException(status_code=400, detail="period faqat all, day yoki month bo‘lishi mumkin")
+    return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
+
+def filter_history_rows(rows: list[SignalHistory], period: str | None) -> list[SignalHistory]:
+    start, end = history_period_bounds(period)
+    if start is None:
+        return rows
+    out=[]
+    for r in rows:
+        dt = r.created_at
+        if dt is None:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        if start <= dt < end:
+            out.append(r)
+    return out
+
 def ensure_schema() -> None:
     """Add the username column/index to databases created by previous versions."""
     try:
@@ -1093,30 +1133,39 @@ async def _fetch_tradingview_candles_once(symbol: str, interval: str, limit: int
     except Exception as exc: raise MarketDataError(f"TradingView WebSocket unavailable: {type(exc).__name__}: {exc}")
 
 
-async def fetch_tradingview_candles(symbol: str, interval: str, limit: int = TRADINGVIEW_BARS) -> list[dict[str,Any]]:
-    """Shared TradingView/OANDA cache. One request/connection per symbol+TF at a time.
-
-    The dashboard has several panels that ask for the same candles simultaneously.
-    Opening a fresh TradingView websocket for every panel/quote caused intermittent
-    reconnects and empty data. This single-flight cache makes every module consume
-    the exact same TradingView series. No market-data provider fallback is used.
-    """
+async def fetch_tradingview_candles(symbol: str, interval: str, limit: int = TRADINGVIEW_BARS) -> list[dict[str, Any]]:
+    """Shared TradingView/OANDA cache with single-flight locking and one retry."""
     symbol = clean_symbol(symbol)
     interval = validate_interval(interval)
     key = (symbol, interval)
     now = asyncio.get_running_loop().time()
     cached = TV_CANDLE_CACHE.get(key)
-    if cached and now - cached[0] < TRADINGVIEW_CACHE_TTL and cached[1]:
+    if cached and cached[1] and now - cached[0] < TRADINGVIEW_CACHE_TTL:
         return cached[1][-limit:]
     async with TV_CANDLE_LOCKS_GUARD:
         lock = TV_CANDLE_LOCKS.setdefault(key, asyncio.Lock())
     async with lock:
         now = asyncio.get_running_loop().time()
         cached = TV_CANDLE_CACHE.get(key)
-        if cached and now - cached[0] < TRADINGVIEW_CACHE_TTL and cached[1]:
+        if cached and cached[1] and now - cached[0] < TRADINGVIEW_CACHE_TTL:
             return cached[1][-limit:]
-        bars = await _fetch_tradingview_candles_once(symbol, interval, max(limit, 80))
+        last_exc = None
+        bars = []
+        for attempt in range(2):
+            try:
+                bars = await _fetch_tradingview_candles_once(symbol, interval, max(limit, 80))
+                if bars:
+                    break
+            except Exception as exc:
+                last_exc = exc
+                if attempt == 0:
+                    await asyncio.sleep(0.25)
         if not bars:
+            stale = TV_CANDLE_CACHE.get(key)
+            if stale and stale[1]:
+                return stale[1][-limit:]
+            if last_exc:
+                raise last_exc
             raise MarketDataError("TradingView returned no OHLC bars")
         bars = sorted({int(b["time"]): b for b in bars}.values(), key=lambda x: x["time"])
         TV_CANDLE_CACHE[key] = (asyncio.get_running_loop().time(), bars[-TRADINGVIEW_BARS:])
@@ -2903,12 +2952,28 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
 
 @app.get("/api/v1/trend-lines/{symbol:path}")
 async def trend_lines(symbol: str, interval: str = DEFAULT_INTERVAL) -> dict[str, Any]:
-    interval=validate_interval(interval)
-    candles_data,mode,warning=await get_candles(clean_symbol(symbol),interval,320)
-    closed=candles_data[:-1] if len(candles_data)>1 else candles_data
-    tl=_trendline_analysis(closed)
-    return {"symbol":clean_symbol(symbol),"interval":interval,"candles":closed[-220:],"trendline":tl,
-            "mode":mode,"warning":warning,"generated_at":datetime.now(timezone.utc).isoformat()}
+    interval = validate_interval(interval)
+    key = clean_symbol(symbol)
+    try:
+        candles_data, mode, warning = await get_candles(key, interval, 320)
+        closed = candles_data[:-1] if len(candles_data) > 1 else candles_data
+        tl = _trendline_analysis(closed)
+        return {"symbol": key, "interval": interval, "candles": closed[-220:], "trendline": tl,
+                "mode": mode, "warning": warning, "generated_at": datetime.now(timezone.utc).isoformat()}
+    except Exception as exc:
+        cached = ADVANCED_SIGNAL_CACHE.get(key)
+        tl = {}
+        if cached:
+            try:
+                tl = ((cached[1].get("timeframes") or {}).get(interval) or {}).get("trendline") or {}
+            except Exception:
+                tl = {}
+        fallback = tl or {"available": False, "trend": "NEUTRAL", "type": "NONE", "touches": 0,
+                          "trend_power": 0, "breakout": "NO", "retest": "NO", "confirmation": "WAIT",
+                          "signal": "WAIT", "reason": f"TradingView data vaqtincha mavjud emas: {exc}"}
+        return {"symbol": key, "interval": interval, "candles": [], "trendline": fallback,
+                "mode": "unavailable", "warning": str(exc), "degraded": True,
+                "generated_at": datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/v1/signals/live/{symbol:path}")
@@ -3041,9 +3106,10 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     return {"saved": True, "id": row.id, "source": source, "outcome": row.outcome}
 
 @app.get("/api/v1/signals/analytics")
-async def signal_analytics(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def signal_analytics(period: str = Query("all"), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
     rows = await refresh_signal_outcomes(session, user.id)
+    rows = filter_history_rows(rows, period)
     wins = sum(1 for r in rows if r.outcome == "TP HIT")
     losses = sum(1 for r in rows if r.outcome == "SL HIT")
     completed = wins + losses
@@ -3085,9 +3151,10 @@ async def save_signal(symbol: str, interval: str = DEFAULT_INTERVAL, authorizati
 
 
 @app.get("/api/v1/signals/history")
-async def signal_history(limit: int = Query(50, ge=1, le=200), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Query("all"), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
-    rows = await refresh_signal_outcomes(session, user.id, limit=100)
+    rows = await refresh_signal_outcomes(session, user.id, limit=200)
+    rows = filter_history_rows(rows, period)
     rows = rows[-limit:][::-1]
     items = []
     for r in rows:
