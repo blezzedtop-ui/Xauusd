@@ -173,6 +173,12 @@ TRADINGVIEW_SYMBOL = os.getenv("TRADINGVIEW_SYMBOL", "OANDA:XAUUSD").strip() or 
 TRADINGVIEW_WS_URL = os.getenv("TRADINGVIEW_WS_URL", "wss://data.tradingview.com/socket.io/websocket").strip()
 TRADINGVIEW_BARS = max(80, min(int(os.getenv("TRADINGVIEW_BARS", "260")), 500))
 TRADINGVIEW_TIMEOUT = float(os.getenv("TRADINGVIEW_TIMEOUT", "10"))
+MT5_BRIDGE_TOKEN = os.getenv("MT5_BRIDGE_TOKEN", "change-this-mt5-bridge-token").strip()
+MT5_AUTO_TRADING = os.getenv("MT5_AUTO_TRADING", "false").lower() == "true"
+MT5_LOT_SIZE = float(os.getenv("MT5_DEFAULT_LOT", "0.01"))
+MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": ""}
+MT5_ORDER_QUEUE: list[dict[str, Any]] = []
+MT5_ORDER_ATTEMPTS: dict[str, int] = {}
 TRADINGVIEW_CACHE_TTL = float(os.getenv("TRADINGVIEW_CACHE_TTL", "2.0"))
 TV_CANDLE_CACHE: dict[tuple[str,str], tuple[float, list[dict[str,Any]]]] = {}
 TV_CANDLE_LOCKS: dict[tuple[str,str], asyncio.Lock] = {}
@@ -2708,6 +2714,10 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
             "strong_setup": float(item.get("zone_quality") or confidence) >= 82,
             "entry_time": now.isoformat(),
         }
+        if MT5_AUTO_TRADING:
+            order_id = secrets.token_hex(8)
+            MT5_ORDER_ATTEMPTS[order_id] = 0
+            MT5_ORDER_QUEUE.append({"id": order_id, "symbol": key, "interval": tf, "direction": direction, "entry": float(entry), "sl": float(sl), "tp": [float(x) for x in tp], "volume": MT5_LOT_SIZE, "created_at": now.isoformat()})
         row = SignalHistory(
             user_id=user.id, symbol=key, interval=tf, direction=direction,
             headline=f"AUTO ENTRY {direction} • {tf.upper()} • {confidence:.1f}%",
@@ -2720,7 +2730,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
     if created:
         session.commit()
     rows = await refresh_signal_outcomes(session, user.id, limit=500)
-    return {"enabled": True, "threshold": AUTO_ENTRY_THRESHOLD, "saved_timeframes": [x["interval"] for x in created], "trades": created, "count": len(created), "history_count": len(rows), "mode": "paper_auto_entry"}
+    return {"enabled": True, "threshold": AUTO_ENTRY_THRESHOLD, "saved_timeframes": [x["interval"] for x in created], "trades": created, "count": len(created), "history_count": len(rows), "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "paper_auto_entry"}
 
 
 @app.get("/api/v1/signals/live/{symbol:path}")
@@ -2766,6 +2776,35 @@ def _setup_strength_from_payload(payload: dict[str, Any], confidence: float | No
     label = "STRONG" if strength >= 82 else "GOOD" if strength >= 72 else "STANDARD"
     return round(strength, 2), label, strength >= 82
 
+
+class MT5ConnectBody(BaseModel):
+    login: str = ""
+    server: str = ""
+    password: str = ""
+    demo: bool = True
+
+class MT5LotBody(BaseModel):
+    lot: float = 0.01
+
+class MT5StateBody(BaseModel):
+    connected: bool = False
+    login: str = ""
+    server: str = ""
+    balance: float | None = None
+    equity: float | None = None
+    free_margin: float | None = None
+    margin: float | None = None
+    positions: int = 0
+    error: str = ""
+
+class MT5ReportBody(BaseModel):
+    action: str = ""
+    ticket: str = ""
+    symbol: str = ""
+    status: str = ""
+    price: float | None = None
+    profit: float | None = None
+    message: str = ""
 
 class ModuleSignalBody(BaseModel):
     symbol: str = DEFAULT_SYMBOL
@@ -2904,6 +2943,91 @@ async def ai_providers_status():
     }
     models={"groq":GROQ_MODEL,"gemini":GEMINI_MODEL,"openrouter":OPENROUTER_MODEL,"groq_qwen":GROQ_QWEN_MODEL,"mistral":MISTRAL_MODEL,"cerebras":CEREBRAS_MODEL,"cloudflare":CLOUDFLARE_MODEL,"huggingface":HF_MODEL,"openai":OPENAI_MODEL}
     return {"order":AI_FALLBACK_ORDER,"providers":[{"id":p,"configured":configured[p],"status":(AI_PROVIDER_STATUS.get(p) or {}).get("status", "READY" if configured[p] else "NOT_CONFIGURED"),"model":models[p]} for p in configured]}
+
+@app.get("/api/v1/mt5/status")
+async def mt5_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    return {"ok": True, "auto_trading": MT5_AUTO_TRADING, "lot": MT5_LOT_SIZE, "state": MT5_BRIDGE_STATE, "queue": len(MT5_ORDER_QUEUE), "demo_only": True}
+
+@app.post("/api/v1/mt5/connect")
+async def mt5_connect(body: MT5ConnectBody, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    if not body.demo:
+        raise HTTPException(status_code=400, detail="Faqat DEMO hisob ulanishi mumkin.")
+    if not body.login or not body.server or not body.password:
+        raise HTTPException(status_code=400, detail="MT5 Login, Server va Trading Password kiriting.")
+    # Credentials are intentionally NOT persisted. The actual broker login is performed by MT5 terminal/EA.
+    MT5_BRIDGE_STATE.update({"login": body.login, "server": body.server, "connected": False, "last_error": "MT5 terminal/EA bridge hali ulanmagan."})
+    return {"ok": True, "demo_only": True, "connected": False, "message": "Ma'lumotlar qabul qilindi. Exness DEMO MT5 terminalida EA/bridge ishga tushirilgach ulanish tasdiqlanadi."}
+
+@app.post("/api/v1/mt5/lot")
+async def mt5_lot(body: MT5LotBody, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    global MT5_LOT_SIZE
+    lot = float(body.lot)
+    if not (0.01 <= lot <= 100.0):
+        raise HTTPException(status_code=400, detail="Lot 0.01 dan 100 gacha bo‘lishi kerak.")
+    # Normalize to two decimals for common MT5 lot steps.
+    MT5_LOT_SIZE = round(lot, 2)
+    return {"ok": True, "lot": MT5_LOT_SIZE, "demo_only": True}
+
+@app.post("/api/v1/mt5/auto-trading")
+async def mt5_auto_trading(enabled: bool = Query(...), authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    global MT5_AUTO_TRADING
+    MT5_AUTO_TRADING = bool(enabled)
+    return {"ok": True, "auto_trading": MT5_AUTO_TRADING, "demo_only": True}
+
+@app.get("/api/v1/mt5/poll")
+async def mt5_poll(token: str = Query(...)) -> dict[str, Any]:
+    if not secrets.compare_digest(token, MT5_BRIDGE_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid MT5 bridge token")
+    MT5_BRIDGE_STATE["last_seen"] = datetime.now(timezone.utc).isoformat()
+    if not MT5_AUTO_TRADING or not MT5_ORDER_QUEUE:
+        return {"ok": True, "orders": []}
+    # Claim a small batch without deleting it. The EA reports success/failure; failed
+    # orders are re-queued up to three times so a transient MT5/WebRequest error does
+    # not silently lose a signal.
+    orders = []
+    for item in MT5_ORDER_QUEUE:
+        if item.get("claimed"):
+            continue
+        item["claimed"] = True
+        MT5_ORDER_ATTEMPTS[item["id"]] = MT5_ORDER_ATTEMPTS.get(item["id"], 0) + 1
+        orders.append(item)
+        if len(orders) >= 10:
+            break
+    return {"ok": True, "orders": orders}
+
+@app.post("/api/v1/mt5/state")
+async def mt5_state(body: MT5StateBody, token: str = Query(...)) -> dict[str, Any]:
+    if not secrets.compare_digest(token, MT5_BRIDGE_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid MT5 bridge token")
+    MT5_BRIDGE_STATE.update({"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": datetime.now(timezone.utc).isoformat(), "last_error": body.error or ""})
+    return {"ok": True}
+
+@app.post("/api/v1/mt5/report")
+async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, Any]:
+    if not secrets.compare_digest(token, MT5_BRIDGE_TOKEN):
+        raise HTTPException(status_code=401, detail="Invalid MT5 bridge token")
+    MT5_BRIDGE_STATE["last_seen"] = datetime.now(timezone.utc).isoformat()
+    status = body.status.lower()
+    if status in {"error", "failed", "order_failed"}:
+        MT5_BRIDGE_STATE["last_error"] = body.message
+    # Finalize a claimed queue item using the EA's order id. Successful orders are
+    # removed; failed orders are released for a limited retry count.
+    if body.ticket:
+        for idx, item in enumerate(list(MT5_ORDER_QUEUE)):
+            if str(item.get("id")) != str(body.ticket):
+                continue
+            if status in {"order_sent", "sent", "success", "filled"}:
+                MT5_ORDER_QUEUE.pop(idx)
+                MT5_ORDER_ATTEMPTS.pop(str(body.ticket), None)
+            elif status in {"error", "failed", "order_failed"}:
+                attempts = MT5_ORDER_ATTEMPTS.get(str(body.ticket), 1)
+                if attempts >= 3:
+                    MT5_ORDER_QUEUE.pop(idx)
+                    MT5_ORDER_ATTEMPTS.pop(str(body.ticket), None)
+                else:
+                    item["claimed"] = False
+            break
+    return {"ok": True, "queue": len(MT5_ORDER_QUEUE)}
 
 @app.get("/api/health")
 async def api_health() -> dict[str, Any]:
