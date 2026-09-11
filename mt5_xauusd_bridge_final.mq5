@@ -4,8 +4,8 @@
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-input string ApiBase="https://xauusd-production-9fd9.up.railway.app";
-input string BridgeToken="MT5-XAUUSD-DEMO-9f7K2mQ8vL4xP6sR1zN5";
+input string ApiBase="https://YOUR-RAILWAY-DOMAIN";
+input string BridgeToken="CHANGE_ME";
 input int PollSeconds=2;
 input double DefaultLot=0.01;
 input string TradeSymbol=""; // Leave empty: use the chart symbol (e.g. XAUUSDm on Exness)

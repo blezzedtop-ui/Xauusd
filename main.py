@@ -1802,15 +1802,39 @@ def merge_ai_validation(deterministic: dict[str, Any], ai: dict[str, Any]) -> di
     return out
 
 
+def _normalize_swing_point(point: Any) -> tuple[int, float] | None:
+    """Normalize swing points from any legacy/current representation to (index, price)."""
+    try:
+        if isinstance(point, dict):
+            idx = point.get("index", point.get("i"))
+            val = point.get("price", point.get("value", point.get("v")))
+            if idx is None or val is None:
+                return None
+            # Some legacy payloads nested the index inside a tuple/list.
+            if isinstance(idx, (tuple, list)):
+                idx = idx[0]
+            return int(idx), float(val)
+        if isinstance(point, (tuple, list)) and len(point) >= 2:
+            idx, val = point[0], point[1]
+            if isinstance(idx, (tuple, list)):
+                idx = idx[0]
+            if isinstance(val, (tuple, list)):
+                val = val[-1]
+            return int(idx), float(val)
+    except (TypeError, ValueError, IndexError):
+        return None
+    return None
+
+
 def _swing_points(candles: list[dict[str, Any]], left: int = 2, right: int = 2) -> tuple[list[tuple[int,float]], list[tuple[int,float]]]:
     highs=[]; lows=[]
     n=len(candles)
     for i in range(left, n-right):
         hi=float(candles[i]["high"]); lo=float(candles[i]["low"])
         if hi >= max(float(candles[j]["high"]) for j in range(i-left,i+right+1)):
-            highs.append((i,hi))
+            highs.append((int(i),hi))
         if lo <= min(float(candles[j]["low"]) for j in range(i-left,i+right+1)):
-            lows.append((i,lo))
+            lows.append((int(i),lo))
     return highs, lows
 
 
@@ -1877,6 +1901,111 @@ def _structure_state(candles: list[dict[str, Any]]) -> dict[str, Any]:
     return {"bos":bos,"choch":choch,"prior_structure":prior,"internal_structure":internal,"swing_high":round(recent_high,4),"swing_low":round(recent_low,4)}
 
 
+
+def _fibonacci_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per-timeframe Fibonacci retracement/extension based on confirmed market structure.
+
+    Anchors are recalculated only from confirmed swing structure: bullish uses the
+    latest valid swing low before the latest swing high; bearish uses the latest
+    valid swing high before the latest swing low. A new BOS/CHOCH/new structural
+    impulse therefore creates a new Fibonacci anchor instead of moving it on every
+    candle.
+    """
+    n=len(candles)
+    if n < 40:
+        return {"available":False,"direction":"NEUTRAL","reason":"Yetarli candle yo'q"}
+    raw_highs,raw_lows=_swing_points(candles)
+    highs=[]; lows=[]
+    for pt in raw_highs:
+        norm=_normalize_swing_point(pt)
+        if norm and 2 <= norm[0] < n-2: highs.append(norm)
+    for pt in raw_lows:
+        norm=_normalize_swing_point(pt)
+        if norm and 2 <= norm[0] < n-2: lows.append(norm)
+    if not highs or not lows:
+        return {"available":False,"direction":"NEUTRAL","reason":"Valid swing topilmadi"}
+
+    h2=highs[-2:]; l2=lows[-2:]
+    bull=len(h2)==2 and len(l2)==2 and h2[-1][1] > h2[-2][1] and l2[-1][1] > l2[-2][1]
+    bear=len(h2)==2 and len(l2)==2 and h2[-1][1] < h2[-2][1] and l2[-1][1] < l2[-2][1]
+    structure=_structure_state(candles)
+    direction="BULLISH" if bull else "BEARISH" if bear else ("BULLISH" if structure.get("choch")=="BULLISH" else "BEARISH" if structure.get("choch")=="BEARISH" else "NEUTRAL")
+
+    anchor_low=None; anchor_high=None
+    if direction=="BULLISH":
+        latest_high=highs[-1]
+        before=[x for x in lows if x[0] < latest_high[0]]
+        if before:
+            anchor_low=before[-1]; anchor_high=latest_high
+    elif direction=="BEARISH":
+        latest_low=lows[-1]
+        before=[x for x in highs if x[0] < latest_low[0]]
+        if before:
+            anchor_high=before[-1]; anchor_low=latest_low
+
+    # Fallback to the latest opposite swings when structure is transitional.
+    if anchor_low is None or anchor_high is None or anchor_high[0] <= anchor_low[0]:
+        pairs=[]
+        for lo in lows[-12:]:
+            after=[h for h in highs[-12:] if h[0] > lo[0]]
+            if after: pairs.append((after[-1][0]-lo[0],lo,after[-1]))
+        if pairs:
+            _,anchor_low,anchor_high=min(pairs,key=lambda x:x[0])
+        else:
+            pairs=[]
+            for hi in highs[-12:]:
+                after=[lo for lo in lows[-12:] if lo[0] > hi[0]]
+                if after: pairs.append((after[-1][0]-hi[0],hi,after[-1]))
+            if pairs:
+                _,anchor_high,anchor_low=min(pairs,key=lambda x:x[0])
+
+    if anchor_low is None or anchor_high is None:
+        return {"available":False,"direction":direction,"reason":"Fibonacci anchor topilmadi"}
+    low=float(anchor_low[1]); high=float(anchor_high[1]); rng=abs(high-low)
+    if rng <= 0:
+        return {"available":False,"direction":direction,"reason":"Fibonacci range nol"}
+
+    levels=[0.0,0.236,0.382,0.5,0.618,0.786,1.0,1.272,1.618]
+    if direction=="BULLISH":
+        prices={str(x):high-rng*x for x in levels}
+    else:
+        prices={str(x):low+rng*x for x in levels}
+    current=float(candles[-1]["close"])
+    # Nearest key retracement and a confluence zone around 0.50-0.618.
+    key=[0.382,0.5,0.618,0.786]
+    nearest=min(key,key=lambda x:abs(current-prices[str(x)]))
+    zone_width=max(rng*0.035, current*0.0006)
+    zone_lo=min(prices["0.5"],prices["0.618"])-zone_width
+    zone_hi=max(prices["0.5"],prices["0.618"])+zone_width
+    in_zone=zone_lo <= current <= zone_hi
+    # Fibonacci confirmation is directional only when price is in/near a valid
+    # retracement area; it never overrides market structure on its own.
+    # Conservative price-action confirmation from the supplied Fibonacci rules:
+    # after price reaches the 50-61.8% zone, require a closed candle to resume
+    # the dominant direction (close beyond the previous candle close).
+    prev_close=float(candles[-2]["close"]) if len(candles)>1 else current
+    last_open=float(candles[-1]["open"])
+    bullish_candle=current > last_open and current > prev_close
+    bearish_candle=current < last_open and current < prev_close
+    confirmation = "BUY" if direction=="BULLISH" and in_zone and bullish_candle else "SELL" if direction=="BEARISH" and in_zone and bearish_candle else "WAIT"
+    fib_signal=confirmation
+    # Optional RSI confirmation, used as a score/filter rather than a standalone trigger.
+    closes=[float(c["close"]) for c in candles[-15:]]
+    gains=[]; losses=[]
+    for a,b in zip(closes[:-1],closes[1:]):
+        d=b-a; gains.append(max(d,0.0)); losses.append(max(-d,0.0))
+    avg_gain=sum(gains)/max(len(gains),1); avg_loss=sum(losses)/max(len(losses),1)
+    rsi=100.0 if avg_loss==0 else 100.0-(100.0/(1.0+(avg_gain/avg_loss)))
+    rsi_ok=(direction=="BULLISH" and rsi>=50) or (direction=="BEARISH" and rsi<=50)
+    return {
+        "available":True,"direction":direction,"anchor_low":{"index":anchor_low[0],"time":candles[anchor_low[0]].get("time"),"price":round(low,4)},
+        "anchor_high":{"index":anchor_high[0],"time":candles[anchor_high[0]].get("time"),"price":round(high,4)},
+        "range":round(rng,4),"levels":{k:round(v,4) for k,v in prices.items()},
+        "retracement_zone":{"low":round(min(prices["0.5"],prices["0.618"]),4),"high":round(max(prices["0.5"],prices["0.618"]),4)},
+        "nearest_level":nearest,"price_at_level":round(prices[str(nearest)],4),"current_price":round(current,4),
+        "in_zone":in_zone,"signal":fib_signal,"confirmation":confirmation,"price_action_confirmation":(bullish_candle if direction=="BULLISH" else bearish_candle),"rsi":round(rsi,2),"rsi_ok":rsi_ok,"extension_targets":{"1.272":round(prices["1.272"],4),"1.618":round(prices["1.618"],4)},"structure":structure,"reason":f"{direction} structure · Fibonacci {nearest:.3f} · {'50-61.8% ZONE' if in_zone else 'WAIT'} · {'CANDLE CONFIRMED' if confirmation!='WAIT' else 'WAIT CONFIRMATION'}"
+    }
+
 def _snr(candles: list[dict[str, Any]]) -> dict[str, Any]:
     """Strong-zone SNR levels. Prefer repeatedly tested swing clusters over one-off extremes."""
     z=_snr_zone_analysis(candles)
@@ -1923,9 +2052,16 @@ def _trendline_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
         return {"available":False,"trend":"NEUTRAL","type":"NONE","touches":0,"trend_power":0,
                 "breakout":"NO","retest":"NO","confirmation":"WAIT","signal":"WAIT",
                 "reason":"Yetarli candle yo'q"}
-    highs,lows=_swing_points(candles)
-    highs=[(int(i),float(candles[i]["high"])) for i in highs if 2 <= i < n-2]
-    lows=[(int(i),float(candles[i]["low"])) for i in lows if 2 <= i < n-2]
+    raw_highs,raw_lows=_swing_points(candles)
+    highs=[]; lows=[]
+    for pt in raw_highs:
+        norm=_normalize_swing_point(pt)
+        if norm and 2 <= norm[0] < n-2:
+            highs.append(norm)
+    for pt in raw_lows:
+        norm=_normalize_swing_point(pt)
+        if norm and 2 <= norm[0] < n-2:
+            lows.append(norm)
     atrv=max(atr(candles), float(candles[-1]["close"])*0.0003)
     tol=max(atrv*0.18, float(candles[-1]["close"])*0.00035)
 
@@ -2003,10 +2139,22 @@ def _trendline_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
     power=int(max(0,min(99,round(42 + touches*8 + min(18, max(0,(n-p2[0]))/6) + (12 if retest=="YES" else 0) + (8 if breakout!="NO" else 0)))))
     trend="BULLISH" if mode=="UP" else "BEARISH"
     sig="BUY" if confirmation in {"CONFIRMED_BUY","BULLISH_HOLD"} else "SELL" if confirmation in {"CONFIRMED_SELL","BEARISH_HOLD"} else "WAIT"
+    # Visual overlay data: normalized swing points and exact breakout/retest candles.
+    swing_highs=[{"index":pt[0],"time":candles[pt[0]].get("time"),"price":round(pt[1],4)} for pt in highs[-20:]]
+    swing_lows=[{"index":pt[0],"time":candles[pt[0]].get("time"),"price":round(pt[1],4)} for pt in lows[-20:]]
+    retest_idx=None
+    if breakout_idx is not None and retest=="YES":
+        look_start=breakout_idx+1
+        for i in range(look_start,n):
+            lv=_trendline_point_value(p1,p2,i)
+            if abs(float(candles[i]["close"])-lv)<=tol and abs(float(candles[i]["high"])-float(candles[i]["low"]))>tol*0.7:
+                retest_idx=i; break
     return {"available":True,"trend":trend,"type":"SUPPORT" if mode=="UP" else "RESISTANCE",
             "p1":{"index":p1[0],"time":candles[p1[0]].get("time"),"price":round(p1[1],4)},
             "p2":{"index":p2[0],"time":candles[p2[0]].get("time"),"price":round(p2[1],4)},
             "slope":round(slope,8),"touches":touches,"touch_indices":touch_idxs[-10:],
+            "swing_highs":swing_highs,"swing_lows":swing_lows,
+            "breakout_index":breakout_idx,"retest_index":retest_idx,
             "trend_power":power,"breakout":breakout,"retest":retest,"confirmation":confirmation,
             "current_line":round(line_cur,4),"signal":sig,
             "reason":f"{('Support' if mode=='UP' else 'Resistance')} trend line · {touches} touch · power {power}% · {breakout} · retest {retest}."}
@@ -2069,6 +2217,7 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
     ob=_detect_order_block(candles,avtr)
     highs,lows=_swing_points(candles)
     trendline=_trendline_analysis(candles)
+    fibonacci=_fibonacci_analysis(candles)
     liq=_detect_liquidity(candles,highs,lows)
     closes=[float(c["close"]) for c in candles]
     fast=closes[-50:]
@@ -2129,6 +2278,8 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
     if direction=="SELL" and global_trend!="BEARISH": direction="WAIT"; reasons.append("WAIT: global trend not bearish")
     if direction=="BUY" and trendline.get("trend")=="BEARISH": direction="WAIT"; reasons.append("WAIT: trend line bearish filter")
     if direction=="SELL" and trendline.get("trend")=="BULLISH": direction="WAIT"; reasons.append("WAIT: trend line bullish filter")
+    if direction=="BUY" and fibonacci.get("direction")=="BEARISH": direction="WAIT"; reasons.append("WAIT: Fibonacci bearish structure")
+    if direction=="SELL" and fibonacci.get("direction")=="BULLISH": direction="WAIT"; reasons.append("WAIT: Fibonacci bullish structure")
     if trendline.get("trend_power",0) >= 80 and trendline.get("signal") not in {"BUY","SELL"} and direction in {"BUY","SELL"}:
         if direction=="BUY" and trendline.get("trend")!="BULLISH": direction="WAIT"
         if direction=="SELL" and trendline.get("trend")!="BEARISH": direction="WAIT"
@@ -2158,8 +2309,9 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
         "interval":interval,"signal":direction,"entry":round(entry,4),"stop_loss":round(sl,4) if sl is not None else None,
         "take_profit":[round(x,4) for x in tp],"confidence":confidence,"score":score,"setup":setup,
         "components":{"ICT":ict_bias,"SNR":snr,"Strong SNR Zone":zone_gate,"SNR Malaysia":msnr,"Order Block":ob,"FVG":fvg,"Liquidity":liq,
-                       "Trend Line":trendline,"Trend":trend,"Global Trend Line":global_trend,"BOS":structure["bos"],"CHOCH":structure["choch"],"Internal Structure":structure["internal_structure"]},
+                       "Trend Line":trendline,"Fibonacci":fibonacci,"Trend":trend,"Global Trend Line":global_trend,"BOS":structure["bos"],"CHOCH":structure["choch"],"Internal Structure":structure["internal_structure"]},
         "trendline":trendline,
+        "fibonacci":fibonacci,
         "zone_quality":max(zone_gate["support"]["strength"],zone_gate["resistance"]["strength"]),
         "entry_zone":zone_gate["strongest_zone"],
         "risk_reward":round(rr,2),
@@ -2958,7 +3110,8 @@ async def trend_lines(symbol: str, interval: str = DEFAULT_INTERVAL) -> dict[str
         candles_data, mode, warning = await get_candles(key, interval, 320)
         closed = candles_data[:-1] if len(candles_data) > 1 else candles_data
         tl = _trendline_analysis(closed)
-        return {"symbol": key, "interval": interval, "candles": closed[-220:], "trendline": tl,
+        fib = _fibonacci_analysis(closed)
+        return {"symbol": key, "interval": interval, "candles": closed[-220:], "trendline": tl, "fibonacci": fib,
                 "mode": mode, "warning": warning, "generated_at": datetime.now(timezone.utc).isoformat()}
     except Exception as exc:
         cached = ADVANCED_SIGNAL_CACHE.get(key)

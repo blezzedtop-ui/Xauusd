@@ -121,6 +121,7 @@ html,body{background:radial-gradient(circle at 15% 0%,rgba(255,36,58,.10),transp
       <button class="tf active" data-trend-interval="5min">M5</button><button class="tf" data-trend-interval="15min">M15</button><button class="tf" data-trend-interval="30min">M30</button><button class="tf" data-trend-interval="1h">H1</button><button class="tf" data-trend-interval="4h">H4</button><button class="tf" data-trend-interval="1day">D1</button>
     </div>
     <div class="mini" id="trendLineStatus">Har bir timeframe o‘z trend line va signalini alohida hisoblaydi.</div>
+    <div class="card" style="margin-top:12px;padding:0;overflow:hidden"><div class="section-head" style="padding:12px 14px;margin:0"><div><h3>Live Chart — Auto Trend Line</h3><div class="mini">TradingView OANDA:XAUUSD · tanlangan timeframe</div></div><span class="pill" id="trendChartTf">M5</span></div><div id="tvTrendChart" style="height:560px;width:100%;border-top:1px solid var(--line);overflow:hidden"></div></div>
     <div class="grid4" style="margin-top:12px">
       <div class="metric"><small>Trend</small><b id="tlTrend">—</b></div>
       <div class="metric"><small>Touches</small><b id="tlTouches">—</b></div>
@@ -128,6 +129,7 @@ html,body{background:radial-gradient(circle at 15% 0%,rgba(255,36,58,.10),transp
       <div class="metric"><small>Breakout / Retest</small><b id="tlBreakRetest">—</b></div>
     </div>
     <div class="signal-box" style="margin-top:10px"><div class="section-head"><div><div class="mini">FINAL FILTERED SIGNAL</div><div class="signal-main wait" id="tlSignal">WAIT</div></div><span class="pill" id="tlFinalConfidence">—</span></div><div class="mini" id="tlReason">—</div></div>
+    <div class="card" style="margin-top:12px"><div class="section-head"><div><h3>Auto Fibonacci</h3><div class="mini">Market Structure → valid Swing → impulse → Fibonacci</div></div><span class="pill" id="fibSignal">WAIT</span></div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Direction</small><b id="fibDirection">—</b></div><div class="metric"><small>Swing Low</small><b id="fibLow">—</b></div><div class="metric"><small>Swing High</small><b id="fibHigh">—</b></div><div class="metric"><small>Key Level</small><b id="fibLevel">—</b></div></div><div class="grid4" style="margin-top:10px"><div class="metric"><small>0.382</small><b id="fib382">—</b></div><div class="metric"><small>0.500</small><b id="fib500">—</b></div><div class="metric"><small>0.618</small><b id="fib618">—</b></div><div class="metric"><small>0.786</small><b id="fib786">—</b></div></div><div class="grid2" style="margin-top:10px"><div class="metric"><small>Price Action</small><b id="fibPA">—</b></div><div class="metric"><small>RSI</small><b id="fibRSI">—</b></div></div><div class="grid2" style="margin-top:10px"><div class="metric"><small>Extension 1.272</small><b id="fib1272">—</b></div><div class="metric"><small>Extension 1.618</small><b id="fib1618">—</b></div></div><div class="mini" style="margin-top:8px" id="fibReason">—</div></div>
     <div id="trendChart" class="chart" style="height:480px;margin-top:12px"></div>
   </div>
   <div class="card" style="margin-top:12px">
