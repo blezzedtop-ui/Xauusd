@@ -423,7 +423,7 @@ async function loadTrendLines(tf=trendLineInterval){
     if($('trendChartTf')) $('trendChartTf').textContent=tfName(tf);
   }catch(e){$('trendLineStatus').textContent='Trend Line error: '+e.message;}
 }
-function openSection(id){const target=$(id);if(!target)return;window.scrollTo({top:0,left:0,behavior:'auto'});document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',aiSignalsSection:'AI Signals',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',historySection:'Signal History',trendLineSection:'Auto Trend Line'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{})},50);}if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='aiSignalsSection')loadAISignals().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section')loadMT5Status().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
+function openSection(id){const target=$(id);if(!target)return;window.scrollTo({top:0,left:0,behavior:'auto'});document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',aiSignalsSection:'AI Signals',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',historySection:'Signal History',trendLineSection:'Auto Trend Line'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{})},50);}if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='aiSignalsSection')loadAISignals().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section')loadMT5Status().catch(()=>{});if(id==='trendLineSection'){if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null;} loadTrendLines(trendLineInterval).catch(()=>{});} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null;}}
 
 document.addEventListener('click',e=>{const b=e.target.closest('[data-classic-interval]');if(b){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===b));classicInterval=b.dataset.classicInterval;loadClassicTrade(classicInterval)}});
 document.addEventListener('click',e=>{
@@ -522,7 +522,7 @@ async function loadMT5Status(){
   const d=await api('/api/v1/mt5/status'); const st=d.state||{};
   setText('mt5Status', st.connected?'🟢 CONNECTED':'🔴 DISCONNECTED');
   setText('mt5Balance', st.balance==null?'—':fmt(st.balance)); setText('mt5Equity',st.equity==null?'—':fmt(st.equity)); setText('mt5FreeMargin',st.free_margin==null?'—':fmt(st.free_margin)); setText('mt5Positions',st.positions??0); setText('mt5Lot', d.lot==null?'0.01':String(d.lot));
-  const on=!!d.auto_trading; setText('mt5AutoState',on?'🟢 ON':'🔴 OFF'); setText('mt5AutoInfo',on?'Auto trading yoqilgan. Faqat ≥90% + Strong Zone + AI tasdiq + MTF moslik + RR≥1.50 setup navbatiga tushadi.':"OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.");
+  const on=!!d.auto_trading; setText('mt5AutoState',on?'🟢 ON':'🔴 OFF'); setText('mt5AutoInfo',on?'Auto trading yoqilgan. Faqat ≥85% + Strong Zone + AI tasdiq + MTF moslik + RR≥1.50 setup navbatiga tushadi.':"OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.");
   
 }
 async function connectMT5(){
@@ -619,31 +619,50 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
       catch(_){token='';localStorage.removeItem('trading_token')}
       loadStats().catch(()=>{}); loadHistory().catch(()=>{});
     }
-    // Lightweight quote heartbeat; do not hammer REST APIs.
+    // One synchronized dashboard refresh cycle. All visible modules refresh from
+    // the same cycle instead of having independent 12s/15s/30s timers that can
+    // show different moments/candles. A new cycle starts only after the previous
+    // cycle finishes; stale overlapping requests are therefore avoided.
+    let syncRefreshRunning=false;
+    let syncRefreshSeq=0;
+    const syncRefreshCycle=async()=>{
+      if(document.visibilityState!=='visible' || syncRefreshRunning) return;
+      syncRefreshRunning=true; const seq=++syncRefreshSeq;
+      try{
+        // First establish the current market snapshot. Other visible modules are
+        // refreshed immediately after it, so the UI moves forward as one batch.
+        await Promise.allSettled([
+          loadMain(true),
+          loadAnalysisOnly()
+        ]);
+        if(seq!==syncRefreshSeq) return;
+        const tasks=[];
+        if(token) tasks.push(autoEntryTick());
+        if($('overview')?.classList.contains('active')) tasks.push(loadSignalEngine());
+        if($('signalsSection')?.classList.contains('active')) tasks.push(loadAutoSignals());
+        if($('aiSignalsSection')?.classList.contains('active')) tasks.push(loadAISignals());
+        if($('ictSection')?.classList.contains('active')) tasks.push(loadICTSignals());
+        if($('signalSection')?.classList.contains('active')) tasks.push(loadSelectedSignal(signalInterval));
+        if($('classicSection')?.classList.contains('active')) tasks.push(loadClassicTrade(classicInterval));
+        if($('snrSection')?.classList.contains('active')) tasks.push(loadSNR(snrInterval));
+        if($('mtfSection')?.classList.contains('active')) tasks.push(loadMtf());
+        if($('calendarSection')?.classList.contains('active')) tasks.push(loadCalendar());
+        if($('sessionsSection')?.classList.contains('active')) tasks.push(loadSessions());
+        if($('trendLineSection')?.classList.contains('active')) tasks.push(loadTrendLines(trendLineInterval));
+        if($('mt5Section')?.classList.contains('active')) tasks.push(loadMT5Status());
+        if(token && $('historySection')?.classList.contains('active')) tasks.push(loadHistory());
+        tasks.push(loadAIProviders());
+        await Promise.allSettled(tasks);
+      }catch(e){ console.warn('SYNC REFRESH',e); }
+      finally{ syncRefreshRunning=false; }
+    };
+    // Lightweight quote heartbeat; this is price-only and does not alter the
+    // analysis snapshot cadence.
     setInterval(()=>quoteHeartbeat().catch(()=>{}),3000);
-    // Main signal/analysis refresh.
-    setInterval(()=>{
-      if(document.visibilityState!=='visible') return;
-      if(token) autoEntryTick().catch(()=>{});
-      loadAnalysisOnly().catch(()=>{});
-      if($('overview').classList.contains('active')) loadSignalEngine().catch(()=>{});
-      if($('signalsSection').classList.contains('active')) loadAutoSignals().catch(()=>{});if($('aiSignalsSection').classList.contains('active')) loadAISignals().catch(()=>{});if($('ictSection').classList.contains('active')) loadICTSignals().catch(()=>{});
-      if($('signalSection').classList.contains('active')) loadSelectedSignal(signalInterval).catch(()=>{});
-      if($('classicSection').classList.contains('active')) loadClassicTrade(classicInterval).catch(()=>{});
-      if($('snrSection').classList.contains('active')) loadSNR(snrInterval).catch(()=>{});
-    },15000);
-    // Expensive modules refresh only while visible.
-    setInterval(()=>{
-      if(document.visibilityState!=='visible') return;
-      if($('mtfSection').classList.contains('active')) loadMtf().catch(()=>{});
-      
-      if($('calendarSection').classList.contains('active')) loadCalendar().catch(()=>{});
-      if($('sessionsSection').classList.contains('active')) loadSessions().catch(()=>{});
-      if($('trendLineSection').classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{});
-      loadMT5Status().catch(()=>{});
-      loadAIProviders().catch(()=>{});
-      if(token && $('historySection').classList.contains('active')) loadHistory().catch(()=>{});
-    },30000);
+    // All dashboard/analysis modules now share one refresh cadence.
+    setInterval(()=>{syncRefreshCycle().catch(()=>{})},15000);
+    // Run one synchronized cycle shortly after startup.
+    setTimeout(()=>syncRefreshCycle().catch(()=>{}),1200);
     setInterval(updateCountdown,250);
   }catch(e){
     console.error('Dashboard init error',e);
