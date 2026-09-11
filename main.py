@@ -28,7 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi import WebSocket, WebSocketDisconnect
 from book_openai_engine import book_signal, _atr as _atr_local
 from pydantic import BaseModel, Field
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 load_dotenv()
@@ -357,8 +357,12 @@ ADVANCED_CACHE_TTL = float(os.getenv("ADVANCED_CACHE_TTL", "5"))
 MTF_CACHE_TTL = float(os.getenv("MTF_CACHE_TTL", "10"))
 LIVE_PRICE_CACHE_TTL = float(os.getenv("LIVE_PRICE_CACHE_TTL", "1.5"))
 AUTO_ENTRY_ENABLED = os.getenv("AUTO_ENTRY_ENABLED", "true").lower() == "true"
-AUTO_ENTRY_THRESHOLD = float(os.getenv("AUTO_ENTRY_THRESHOLD", "85"))
+AUTO_ENTRY_THRESHOLD = float(os.getenv("AUTO_ENTRY_THRESHOLD", "90"))
 AUTO_ENTRY_DUPLICATE_MINUTES = int(os.getenv("AUTO_ENTRY_DUPLICATE_MINUTES", "5"))
+AUTO_ENTRY_MIN_ZONE = float(os.getenv("AUTO_ENTRY_MIN_ZONE", "88"))
+AUTO_ENTRY_MIN_AI_AGREEMENT = float(os.getenv("AUTO_ENTRY_MIN_AI_AGREEMENT", "75"))
+AUTO_ENTRY_MIN_RR = float(os.getenv("AUTO_ENTRY_MIN_RR", "1.50"))
+AUTO_ENTRY_REQUIRE_MTF = os.getenv("AUTO_ENTRY_REQUIRE_MTF", "true").lower() == "true"
 
 
 def db() -> Session:
@@ -1850,6 +1854,115 @@ def _snr_malaysia(candles: list[dict[str, Any]]) -> dict[str, Any]:
     return {"support":round(min(lows),4),"resistance":round(max(highs),4),"session":"Malaysia 08:00–17:00"}
 
 
+def _trendline_point_value(p1: tuple[int,float], p2: tuple[int,float], idx: int) -> float:
+    i1,v1=p1; i2,v2=p2
+    if i2 == i1:
+        return v2
+    return v1 + (v2-v1) * ((idx-i1)/(i2-i1))
+
+
+def _trendline_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
+    """Per-timeframe trend-line engine using only confirmed/closed candles.
+
+    Finds swing lows/highs, constructs the most recent valid support/resistance line,
+    counts price touches around the line, and detects close-based breakout + retest.
+    It is a filter/confirmation for the main signal engine rather than a standalone
+    trade trigger.
+    """
+    n=len(candles)
+    if n < 40:
+        return {"available":False,"trend":"NEUTRAL","type":"NONE","touches":0,"trend_power":0,
+                "breakout":"NO","retest":"NO","confirmation":"WAIT","signal":"WAIT",
+                "reason":"Yetarli candle yo'q"}
+    highs,lows=_swing_points(candles)
+    highs=[(int(i),float(candles[i]["high"])) for i in highs if 2 <= i < n-2]
+    lows=[(int(i),float(candles[i]["low"])) for i in lows if 2 <= i < n-2]
+    atrv=max(atr(candles), float(candles[-1]["close"])*0.0003)
+    tol=max(atrv*0.18, float(candles[-1]["close"])*0.00035)
+
+    def build(points, mode):
+        if len(points)<2: return None
+        # Search recent pairs, preferring structurally ascending lows for support or
+        # descending highs for resistance.
+        best=None
+        recent=points[-10:]
+        for a in range(len(recent)-2,-1,-1):
+            for b in range(a+1,len(recent)):
+                p1,p2=recent[a],recent[b]
+                if p2[0]-p1[0] < 4: continue
+                if mode=="UP" and p2[1] <= p1[1]: continue
+                if mode=="DOWN" and p2[1] >= p1[1]: continue
+                slope=(p2[1]-p1[1])/(p2[0]-p1[0])
+                touches=0
+                touch_idxs=[]
+                for i in range(p2[0],n):
+                    lv=_trendline_point_value(p1,p2,i)
+                    price=candles[i]["low"] if mode=="UP" else candles[i]["high"]
+                    if abs(float(price)-lv)<=tol:
+                        touches += 1; touch_idxs.append(i)
+                if touches < 2: continue
+                span=n-p2[0]
+                quality=touches*12 + min(20, span/4) + min(15, abs(slope)*1000)
+                candidate=(quality,p1,p2,slope,touches,touch_idxs)
+                if best is None or candidate[0]>best[0]: best=candidate
+        return best
+
+    up=build(lows,"UP")
+    down=build(highs,"DOWN")
+    # Prefer the most recent line with more touches; otherwise use whichever is valid.
+    chosen=None; mode="NONE"
+    for cand,md in ((up,"UP"),(down,"DOWN")):
+        if cand and (chosen is None or cand[1][0] > chosen[1][0] or (cand[4] > chosen[4] and cand[1][0] >= chosen[1][0]-20)):
+            chosen=cand; mode=md
+    if chosen is None:
+        return {"available":False,"trend":"NEUTRAL","type":"NONE","touches":0,"trend_power":0,
+                "breakout":"NO","retest":"NO","confirmation":"WAIT","signal":"WAIT",
+                "reason":"Valid 2-touch trend line topilmadi"}
+
+    quality,p1,p2,slope,touches,touch_idxs=chosen
+    current_i=n-1; prev_i=n-2
+    line_prev=_trendline_point_value(p1,p2,prev_i); line_cur=_trendline_point_value(p1,p2,current_i)
+    prev_close=float(candles[prev_i]["close"]); cur_close=float(candles[current_i]["close"])
+    breakout="NO"; retest="NO"; confirmation="WAIT"
+    breakout_idx=None
+    if mode=="UP" and prev_close <= line_prev + tol and cur_close < line_cur - tol*0.35:
+        breakout="BEARISH_BREAK"; breakout_idx=current_i
+    elif mode=="DOWN" and prev_close >= line_prev - tol and cur_close > line_cur + tol*0.35:
+        breakout="BULLISH_BREAK"; breakout_idx=current_i
+
+    if breakout_idx is None:
+        look_start=max(p2[0]+1,n-8)
+        for i in range(look_start,n-1):
+            lp=_trendline_point_value(p1,p2,i); c=float(candles[i]["close"]); nxt=float(candles[i+1]["close"])
+            if mode=="UP" and c < lp-tol*0.4:
+                breakout_idx=i; breakout="BEARISH_BREAK"; break
+            if mode=="DOWN" and c > lp+tol*0.4:
+                breakout_idx=i; breakout="BULLISH_BREAK"; break
+    if breakout_idx is not None and breakout_idx < n-1:
+        for i in range(breakout_idx+1,n):
+            lv=_trendline_point_value(p1,p2,i)
+            if abs(float(candles[i]["close"])-lv)<=tol and abs(float(candles[i]["high"])-float(candles[i]["low"]))>tol*0.7:
+                retest="YES"
+                break
+        if retest=="YES":
+            if mode=="UP" and cur_close < line_cur-tol*0.25: confirmation="CONFIRMED_SELL"
+            elif mode=="DOWN" and cur_close > line_cur+tol*0.25: confirmation="CONFIRMED_BUY"
+    if breakout=="NO":
+        if mode=="UP" and cur_close > line_cur: confirmation="BULLISH_HOLD"
+        elif mode=="DOWN" and cur_close < line_cur: confirmation="BEARISH_HOLD"
+
+    power=int(max(0,min(99,round(42 + touches*8 + min(18, max(0,(n-p2[0]))/6) + (12 if retest=="YES" else 0) + (8 if breakout!="NO" else 0)))))
+    trend="BULLISH" if mode=="UP" else "BEARISH"
+    sig="BUY" if confirmation in {"CONFIRMED_BUY","BULLISH_HOLD"} else "SELL" if confirmation in {"CONFIRMED_SELL","BEARISH_HOLD"} else "WAIT"
+    return {"available":True,"trend":trend,"type":"SUPPORT" if mode=="UP" else "RESISTANCE",
+            "p1":{"index":p1[0],"time":candles[p1[0]].get("time"),"price":round(p1[1],4)},
+            "p2":{"index":p2[0],"time":candles[p2[0]].get("time"),"price":round(p2[1],4)},
+            "slope":round(slope,8),"touches":touches,"touch_indices":touch_idxs[-10:],
+            "trend_power":power,"breakout":breakout,"retest":retest,"confirmation":confirmation,
+            "current_line":round(line_cur,4),"signal":sig,
+            "reason":f"{('Support' if mode=='UP' else 'Resistance')} trend line · {touches} touch · power {power}% · {breakout} · retest {retest}."}
+
+
 def _snr_zone_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
     current=float(candles[-1]["close"]); highs,lows=_swing_points(candles,2,2); avtr=max(atr(candles), current*0.0004)
     high_vals=[float(v) for _,v in highs[-24:]] or [float(candles[-1]["high"])]
@@ -1906,6 +2019,7 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
     fvg=_detect_fvg(candles)
     ob=_detect_order_block(candles,avtr)
     highs,lows=_swing_points(candles)
+    trendline=_trendline_analysis(candles)
     liq=_detect_liquidity(candles,highs,lows)
     closes=[float(c["close"]) for c in candles]
     fast=closes[-50:]
@@ -1946,14 +2060,29 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
     elif current<snr["support"]: score-=2; reasons.append("SNR support breakdown")
     if msnr["resistance"] and current>msnr["resistance"]: score+=1; reasons.append("Malaysia SNR resistance break")
     elif msnr["support"] and current<msnr["support"]: score-=1; reasons.append("Malaysia SNR support break")
+    if trendline.get("trend")=="BULLISH": score+=2; reasons.append("bullish support trend line")
+    elif trendline.get("trend")=="BEARISH": score-=2; reasons.append("bearish resistance trend line")
+    if trendline.get("signal")=="BUY": score+=1; reasons.append("trend line buy confirmation")
+    elif trendline.get("signal")=="SELL": score-=1; reasons.append("trend line sell confirmation")
 
     zone_gate=_snr_zone_analysis(candles)
     strong_buy_zone=zone_gate["support"]["strength"]>=82 and (zone_gate["support"]["status"]=="IN ZONE" or zone_gate["support"]["distance_pct"]<=0.9)
     strong_sell_zone=zone_gate["resistance"]["strength"]>=82 and (zone_gate["resistance"]["status"]=="IN ZONE" or zone_gate["resistance"]["distance_pct"]<=0.9)
-    confidence=min(99,max(35,50+abs(score)*5 + (6 if (strong_buy_zone or strong_sell_zone) else 0)))
-    direction="BUY" if score>=6 else "SELL" if score<=-6 else "WAIT"
+    confidence=min(99,max(35,50+abs(score)*5 + (8 if (strong_buy_zone or strong_sell_zone) else 0)))
+    direction="BUY" if score>=8 else "SELL" if score<=-8 else "WAIT"
     if direction=="BUY" and not strong_buy_zone: direction="WAIT"; reasons.append("WAIT: no strong support entry zone")
     if direction=="SELL" and not strong_sell_zone: direction="WAIT"; reasons.append("WAIT: no strong resistance entry zone")
+    if direction=="BUY" and r < 55: direction="WAIT"; reasons.append("WAIT: RSI not supportive for BUY")
+    if direction=="SELL" and r > 45: direction="WAIT"; reasons.append("WAIT: RSI not supportive for SELL")
+    if direction=="BUY" and trend!="BULLISH": direction="WAIT"; reasons.append("WAIT: local trend not bullish")
+    if direction=="SELL" and trend!="BEARISH": direction="WAIT"; reasons.append("WAIT: local trend not bearish")
+    if direction=="BUY" and global_trend!="BULLISH": direction="WAIT"; reasons.append("WAIT: global trend not bullish")
+    if direction=="SELL" and global_trend!="BEARISH": direction="WAIT"; reasons.append("WAIT: global trend not bearish")
+    if direction=="BUY" and trendline.get("trend")=="BEARISH": direction="WAIT"; reasons.append("WAIT: trend line bearish filter")
+    if direction=="SELL" and trendline.get("trend")=="BULLISH": direction="WAIT"; reasons.append("WAIT: trend line bullish filter")
+    if trendline.get("trend_power",0) >= 80 and trendline.get("signal") not in {"BUY","SELL"} and direction in {"BUY","SELL"}:
+        if direction=="BUY" and trendline.get("trend")!="BULLISH": direction="WAIT"
+        if direction=="SELL" and trendline.get("trend")!="BEARISH": direction="WAIT"
     if news_blocked: direction="WAIT"
     entry=current
     swing_low=structure["swing_low"]; swing_high=structure["swing_high"]
@@ -1963,14 +2092,30 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
         sl=max(swing_high, current+avtr*1.2); risk=max(sl-entry,avtr*0.6); tp=[entry-risk*1.5,entry-risk*2.5]
     else:
         sl=None; tp=[]
-    setup="ICT+SNR+CONFLUENCE" if direction!="WAIT" else ("NEWS_BLACKOUT" if news_blocked else "WAIT_CONFLUENCE")
+    rr = (abs((tp[0]-entry)/(entry-sl)) if direction=="BUY" and sl is not None and tp else abs((entry-tp[0])/(sl-entry)) if direction=="SELL" and sl is not None and tp else 0.0)
+    confirmations = sum([
+        1 if (direction=="BUY" and liq["type"]=="SELL_SIDE_SWEEP") or (direction=="SELL" and liq["type"]=="BUY_SIDE_SWEEP") else 0,
+        1 if (direction=="BUY" and ob["type"]=="BULLISH") or (direction=="SELL" and ob["type"]=="BEARISH") else 0,
+        1 if (direction=="BUY" and fvg["type"]=="BULLISH") or (direction=="SELL" and fvg["type"]=="BEARISH") else 0,
+        1 if (direction=="BUY" and structure["bos"]=="BULLISH") or (direction=="SELL" and structure["bos"]=="BEARISH") else 0,
+        1 if (direction=="BUY" and trend=="BULLISH") or (direction=="SELL" and trend=="BEARISH") else 0,
+        1 if (direction=="BUY" and global_trend=="BULLISH") or (direction=="SELL" and global_trend=="BEARISH") else 0,
+        1 if (direction=="BUY" and trendline.get("trend")=="BULLISH") or (direction=="SELL" and trendline.get("trend")=="BEARISH") else 0,
+        1 if (direction=="BUY" and trendline.get("signal")=="BUY") or (direction=="SELL" and trendline.get("signal")=="SELL") else 0,
+    ]) if direction!="WAIT" else 0
+    setup="ULTRA_CONFLUENCE" if direction!="WAIT" and confirmations>=5 and rr>=1.5 else ("ICT+SNR+CONFLUENCE" if direction!="WAIT" else ("NEWS_BLACKOUT" if news_blocked else "WAIT_CONFLUENCE"))
+    quality="A+" if direction!="WAIT" and confidence>=90 and max(zone_gate["support"]["strength"],zone_gate["resistance"]["strength"])>=88 and confirmations>=5 and rr>=1.5 else "A" if direction!="WAIT" else "WAIT"
     return {
         "interval":interval,"signal":direction,"entry":round(entry,4),"stop_loss":round(sl,4) if sl is not None else None,
         "take_profit":[round(x,4) for x in tp],"confidence":confidence,"score":score,"setup":setup,
         "components":{"ICT":ict_bias,"SNR":snr,"Strong SNR Zone":zone_gate,"SNR Malaysia":msnr,"Order Block":ob,"FVG":fvg,"Liquidity":liq,
-                       "Trend Line":trend,"Global Trend Line":global_trend,"BOS":structure["bos"],"CHOCH":structure["choch"],"Internal Structure":structure["internal_structure"]},
+                       "Trend Line":trendline,"Trend":trend,"Global Trend Line":global_trend,"BOS":structure["bos"],"CHOCH":structure["choch"],"Internal Structure":structure["internal_structure"]},
+        "trendline":trendline,
         "zone_quality":max(zone_gate["support"]["strength"],zone_gate["resistance"]["strength"]),
         "entry_zone":zone_gate["strongest_zone"],
+        "risk_reward":round(rr,2),
+        "confirmations":confirmations,
+        "quality_grade":quality,
         "reason":("; ".join(dict.fromkeys(reasons)) or "No strong confluence") + ("; news blackout active" if news_blocked else ""),
         "rsi":round(r,2),"atr":round(avtr,4),"current_price":round(current,4),
         "evaluated_at":datetime.now(timezone.utc).isoformat()
@@ -1983,8 +2128,9 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
     async def one(tf: str):
         try:
             candles_data,mode,warning=await get_candles(symbol,tf,260)
-            item=build_advanced_signal(candles_data,tf,news_blocked=news_blocked)
-            candle_time=candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")
+            closed_candles=candles_data[:-1] if len(candles_data)>1 else candles_data
+            item=build_advanced_signal(closed_candles,tf,news_blocked=news_blocked)
+            candle_time=closed_candles[-1].get("time")
             ai=await ai_validate_module_signal("Signal Lab",symbol,tf,candle_time,item)
             item=merge_ai_validation(item,ai)
             item["candle_time"]=candle_time
@@ -2654,7 +2800,7 @@ async def advanced_signals(symbol: str, authorization: str | None = Header(defau
 
 @app.post("/api/v1/signals/auto-record")
 async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    """Auto-enter paper trades only when Signal Lab confidence is strictly > 85%."""
+    """Auto-enter only ultra-conservative setups using closed candles, AI confirmation, strong zones, RR, and MTF alignment."""
     user = current_user(authorization, session)
     key = clean_symbol(symbol)
     # First close any previously opened auto trades using fresh TradingView candles.
@@ -2671,8 +2817,27 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
         entry = item.get("entry")
         sl = item.get("stop_loss")
         tp = item.get("take_profit") or []
+        zone_quality = float(item.get("zone_quality") or 0)
+        ai_check = item.get("ai_validation") or {}
+        ai_conf = float(ai_check.get("confidence") or 0)
+        ai_agreement = float(ai_check.get("agreement") or 0)
+        ai_signal = str(ai_check.get("signal") or "WAIT").upper()
+        risk_flags = ai_check.get("risk_flags") if isinstance(ai_check.get("risk_flags"), list) else []
+        rr = float(item.get("risk_reward") or 0)
         if direction not in ("BUY", "SELL") or confidence < AUTO_ENTRY_THRESHOLD or entry is None or sl is None or not tp:
             continue
+        if zone_quality < AUTO_ENTRY_MIN_ZONE or item.get("quality_grade") not in {"A+","A"}:
+            continue
+        if ai_signal != direction or ai_agreement < AUTO_ENTRY_MIN_AI_AGREEMENT or ai_conf < AUTO_ENTRY_THRESHOLD or risk_flags:
+            continue
+        if rr < AUTO_ENTRY_MIN_RR:
+            continue
+        if AUTO_ENTRY_REQUIRE_MTF:
+            tf_order=["1min","5min","15min","30min","1h","4h","1day"]
+            idx=tf_order.index(tf) if tf in tf_order else -1
+            higher=[result.get("timeframes",{}).get(x,{}) for x in tf_order[idx+1:]] if idx>=0 else []
+            if higher and any(h.get("signal") != direction for h in higher):
+                continue
 
         # One open auto-trade per timeframe. A new trade is allowed after the previous
         # one is closed, even if the direction is unchanged.
@@ -2709,7 +2874,10 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
             "auto_entry": True,
             "confidence_threshold": AUTO_ENTRY_THRESHOLD,
             "confidence_at_entry": confidence,
-            "setup_strength": float(item.get("zone_quality") or confidence),
+            "ai_confidence": ai_conf,
+            "ai_agreement": ai_agreement,
+            "risk_reward": rr,
+            "setup_strength": zone_quality,
             "setup_grade": "STRONG" if float(item.get("zone_quality") or confidence) >= 82 else "GOOD",
             "strong_setup": float(item.get("zone_quality") or confidence) >= 82,
             "entry_time": now.isoformat(),
@@ -2731,6 +2899,16 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
         session.commit()
     rows = await refresh_signal_outcomes(session, user.id, limit=500)
     return {"enabled": True, "threshold": AUTO_ENTRY_THRESHOLD, "saved_timeframes": [x["interval"] for x in created], "trades": created, "count": len(created), "history_count": len(rows), "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "paper_auto_entry"}
+
+
+@app.get("/api/v1/trend-lines/{symbol:path}")
+async def trend_lines(symbol: str, interval: str = DEFAULT_INTERVAL) -> dict[str, Any]:
+    interval=validate_interval(interval)
+    candles_data,mode,warning=await get_candles(clean_symbol(symbol),interval,320)
+    closed=candles_data[:-1] if len(candles_data)>1 else candles_data
+    tl=_trendline_analysis(closed)
+    return {"symbol":clean_symbol(symbol),"interval":interval,"candles":closed[-220:],"trendline":tl,
+            "mode":mode,"warning":warning,"generated_at":datetime.now(timezone.utc).isoformat()}
 
 
 @app.get("/api/v1/signals/live/{symbol:path}")
@@ -3036,3 +3214,20 @@ async def api_health() -> dict[str, Any]:
 @app.get("/")
 async def read_root() -> FileResponse:
     return FileResponse(os.path.join(BASE_DIR, "index.html"))
+
+# Persistent signal-history diagnostics.
+@app.get("/api/v1/signals/storage")
+async def signal_storage_status(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    user = current_user(authorization, session)
+    try:
+        total = session.scalar(select(func.count()).select_from(SignalHistory).where(SignalHistory.user_id == user.id)) or 0
+    except Exception:
+        total = 0
+    backend = "postgresql" if DATABASE_URL.startswith("postgresql") else "sqlite"
+    return {
+        "ok": True,
+        "backend": backend,
+        "persistent_across_railway_redeploy": backend == "postgresql",
+        "signal_history_rows": int(total),
+        "note": "Signal snapshots are stored in signal_history.payload. Use Railway PostgreSQL DATABASE_URL for persistence across redeploys."
+    }
