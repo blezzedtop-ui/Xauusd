@@ -3374,7 +3374,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
             user_id=user.id, symbol=key, interval=tf, direction=direction,
             headline=f"AUTO ENTRY {direction} • {tf.upper()} • {confidence:.1f}%",
             price=float(entry), payload=json.dumps({"setup": {"entry": float(entry), "stop_loss": float(sl), "take_profit": [float(x) for x in tp]}, **trade_payload}, ensure_ascii=False),
-            outcome="OPEN", created_at=now
+            outcome="OPEN", created_at=now, source="Auto Trading", candle_time=str(item.get("candle_time") or "")
         )
         session.add(row)
         created.append({"interval": tf, "direction": direction, "confidence": confidence, "entry": float(entry), "sl": float(sl), "tp": [float(x) for x in tp]})
@@ -3572,10 +3572,21 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     session.add(row); session.commit(); session.refresh(row)
     return {"saved": True, "id": row.id, "source": source, "outcome": row.outcome}
 
+def _payload_is_auto_entry(raw: str | None) -> bool:
+    try:
+        p = json.loads(raw or "{}")
+        return bool(p.get("auto_entry"))
+    except Exception:
+        return False
+
 @app.get("/api/v1/signals/analytics")
-async def signal_analytics(period: str = Query("all"), date: str | None = Query(None), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def signal_analytics(period: str = Query("all"), date: str | None = Query(None), source: str | None = Query(None), auto_only: bool = Query(False), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
     rows = await refresh_signal_outcomes(session, user.id)
+    if auto_only:
+        rows = [r for r in rows if (getattr(r, "source", None) == "Auto Trading") or _payload_is_auto_entry(r.payload)]
+    elif source:
+        rows = [r for r in rows if (getattr(r, "source", None) or "Signals") == source]
     rows = filter_history_rows(rows, period, date)
     wins = sum(1 for r in rows if r.outcome == "TP HIT")
     losses = sum(1 for r in rows if r.outcome == "SL HIT")
@@ -3618,9 +3629,13 @@ async def save_signal(symbol: str, interval: str = DEFAULT_INTERVAL, authorizati
 
 
 @app.get("/api/v1/signals/history")
-async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Query("all"), date: str | None = Query(None), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Query("all"), date: str | None = Query(None), source: str | None = Query(None), auto_only: bool = Query(False), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
     rows = await refresh_signal_outcomes(session, user.id, limit=200)
+    if auto_only:
+        rows = [r for r in rows if (getattr(r, "source", None) == "Auto Trading") or _payload_is_auto_entry(r.payload)]
+    elif source:
+        rows = [r for r in rows if (getattr(r, "source", None) or "Signals") == source]
     rows = filter_history_rows(rows, period, date)
     rows = rows[-limit:][::-1]
     items = []
