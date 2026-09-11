@@ -1,5 +1,5 @@
 #property strict
-#property version "1.1"
+#property version "1.2"
 #property description "XAUUSD Railway <-> Exness MT5 DEMO bridge"
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -7,12 +7,38 @@ CTrade trade;
 input string ApiBase="https://YOUR-RAILWAY-DOMAIN";
 input string BridgeToken="CHANGE_ME";
 input int PollSeconds=2;
+input int StateSeconds=5;
 input double DefaultLot=0.01;
 input string TradeSymbol=""; // Leave empty: use the chart symbol (e.g. XAUUSDm on Exness)
 
 string Url(string path){ return ApiBase+path; }
+datetime g_last_state=0;
 string JsonEscape(string s){ StringReplace(s,"\\","\\\\"); StringReplace(s,"\"","\\\""); return s; }
 string ExecSymbol(){ string s=TradeSymbol; if(StringLen(s)==0) s=_Symbol; return s; }
+string TFKey(ENUM_TIMEFRAMES tf){
+   if(tf==PERIOD_M1) return "1min";
+   if(tf==PERIOD_M5) return "5min";
+   if(tf==PERIOD_M15) return "15min";
+   if(tf==PERIOD_M30) return "30min";
+   if(tf==PERIOD_H1) return "1h";
+   if(tf==PERIOD_H4) return "4h";
+   if(tf==PERIOD_D1) return "1day";
+   return "";
+}
+string RatesJson(string symbol, ENUM_TIMEFRAMES tf, int count){
+   MqlRates rates[];
+   int copied=CopyRates(symbol,tf,0,count,rates);
+   if(copied<=0) return "[]";
+   int start=MathMax(0,copied-count);
+   string out="["; bool first=true;
+   for(int i=start;i<copied;i++){
+      if(!first) out+=","; first=false;
+      out += StringFormat("{\"time\":%I64d,\"open\":%.5f,\"high\":%.5f,\"low\":%.5f,\"close\":%.5f}",
+         (long)rates[i].time,rates[i].open,rates[i].high,rates[i].low,rates[i].close);
+   }
+   out+="]"; return out;
+}
+
 
 int Http(string method,string url,string body,string &out){
    char data[]; if(StringLen(body)>0) StringToCharArray(body,data,0,StringLen(body),CP_UTF8);
@@ -33,6 +59,7 @@ bool EnsureSymbol(string symbol){
 }
 
 void ReportState(){
+   string symbol=ExecSymbol();
    string body="{";
    body += "\"connected\":true";
    body += ",\"login\":\"" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + "\"";
@@ -42,8 +69,14 @@ void ReportState(){
    body += ",\"free_margin\":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_FREE),2);
    body += ",\"margin\":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN),2);
    body += ",\"positions\":" + IntegerToString(PositionsTotal());
-   body += "}";
-   Print("[MT5 BRIDGE] STATE BODY=",body);
+   body += ",\"candles\":{";
+   ENUM_TIMEFRAMES tfs[6]={PERIOD_M5,PERIOD_M15,PERIOD_M30,PERIOD_H1,PERIOD_H4,PERIOD_D1};
+   for(int i=0;i<6;i++){
+      if(i>0) body+=","; string k=TFKey(tfs[i]);
+      body += "\""+k+"\":"+RatesJson(symbol,tfs[i],120);
+   }
+   body += "}}";
+   Print("[MT5 BRIDGE] STATE BODY size=",StringLen(body));
    string out; Http("POST",Url("/api/v1/mt5/state?token="+BridgeToken),body,out);
 }
 
@@ -87,7 +120,7 @@ void OnInit(){
 void OnDeinit(const int reason){ EventKillTimer(); Print("[MT5 BRIDGE] STOPPED reason=",reason); }
 
 void OnTimer(){
-   ReportState();
+   if(g_last_state==0 || (TimeCurrent()-g_last_state)>=StateSeconds){ ReportState(); g_last_state=TimeCurrent(); }
    string out; int code=Http("GET",Url("/api/v1/mt5/poll?token="+BridgeToken),"",out);
    if(code!=200){ Print("[MT5 BRIDGE] POLL FAILED HTTP=",code," LastError=",GetLastError()); return; }
    if(StringFind(out,"\"orders\":[]")>=0){ Print("[MT5 BRIDGE] POLL OK - no queued orders"); return; }

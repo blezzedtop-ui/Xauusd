@@ -202,7 +202,7 @@ TRADINGVIEW_TIMEOUT = float(os.getenv("TRADINGVIEW_TIMEOUT", "10"))
 MT5_BRIDGE_TOKEN = os.getenv("MT5_BRIDGE_TOKEN", "change-this-mt5-bridge-token").strip()
 MT5_AUTO_TRADING = os.getenv("MT5_AUTO_TRADING", "false").lower() == "true"
 MT5_LOT_SIZE = float(os.getenv("MT5_DEFAULT_LOT", "0.01"))
-MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": ""}
+MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "candles": {}}
 MT5_ORDER_QUEUE: list[dict[str, Any]] = []
 MT5_ORDER_ATTEMPTS: dict[str, int] = {}
 TRADINGVIEW_CACHE_TTL = float(os.getenv("TRADINGVIEW_CACHE_TTL", "2.0"))
@@ -300,21 +300,30 @@ def history_period_bounds(period: str | None) -> tuple[datetime | None, datetime
         raise HTTPException(status_code=400, detail="period faqat all, day yoki month bo‘lishi mumkin")
     return start_local.astimezone(timezone.utc), end_local.astimezone(timezone.utc)
 
-def filter_history_rows(rows: list[SignalHistory], period: str | None) -> list[SignalHistory]:
+def filter_history_rows(rows: list[SignalHistory], period: str | None, exact_date: str | None = None) -> list[SignalHistory]:
+    if exact_date:
+        try:
+            d = datetime.strptime(exact_date, "%Y-%m-%d").date()
+        except ValueError:
+            return []
+        out=[]
+        tz=ZoneInfo("Asia/Tashkent")
+        for r in rows:
+            dt=r.created_at
+            if dt is None: continue
+            if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
+            local=dt.astimezone(tz)
+            if local.date()==d: out.append(r)
+        return out
     start, end = history_period_bounds(period)
-    if start is None:
-        return rows
+    if start is None: return rows
     out=[]
     for r in rows:
         dt = r.created_at
-        if dt is None:
-            continue
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        else:
-            dt = dt.astimezone(timezone.utc)
-        if start <= dt < end:
-            out.append(r)
+        if dt is None: continue
+        if dt.tzinfo is None: dt = dt.replace(tzinfo=timezone.utc)
+        else: dt = dt.astimezone(timezone.utc)
+        if start <= dt < end: out.append(r)
     return out
 
 def ensure_schema() -> None:
@@ -3246,32 +3255,51 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
     return {"enabled": True, "threshold": AUTO_ENTRY_THRESHOLD, "saved_timeframes": [x["interval"] for x in created], "trades": created, "count": len(created), "history_count": len(rows), "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "paper_auto_entry"}
 
 
+MT5_CANDLE_MAX_AGE = int(os.getenv("MT5_CANDLE_MAX_AGE", "20"))
+MT5_TF_KEYS = {"1min":"1min","5min":"5min","15min":"15min","30min":"30min","1h":"1h","4h":"4h","1day":"1day"}
+
+def _mt5_state_fresh() -> bool:
+    if not MT5_BRIDGE_STATE.get("connected"):
+        return False
+    raw = MT5_BRIDGE_STATE.get("last_seen")
+    try:
+        ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        return (datetime.now(timezone.utc) - ts).total_seconds() <= MT5_CANDLE_MAX_AGE
+    except Exception:
+        return False
+
+def get_mt5_candles(interval: str, limit: int = 320) -> list[dict[str, Any]]:
+    if not _mt5_state_fresh():
+        raise MarketDataError("Exness MT5 bridge ulanmagan yoki candle ma'lumoti eskirgan")
+    key = MT5_TF_KEYS.get(validate_interval(interval), validate_interval(interval))
+    rows = (MT5_BRIDGE_STATE.get("candles") or {}).get(key) or []
+    out=[]
+    for c in rows:
+        try:
+            out.append({"time":int(c["time"]),"open":float(c["open"]),"high":float(c["high"]),"low":float(c["low"]),"close":float(c["close"])})
+        except Exception:
+            continue
+    out.sort(key=lambda x:x["time"])
+    return out[-max(2, min(limit, 500)):]
+
 @app.get("/api/v1/trend-lines/{symbol:path}")
 async def trend_lines(symbol: str, interval: str = DEFAULT_INTERVAL) -> dict[str, Any]:
     interval = validate_interval(interval)
     key = clean_symbol(symbol)
     try:
-        candles_data, mode, warning = await get_candles(key, interval, 320)
+        candles_data = get_mt5_candles(interval, 320)
         closed = candles_data[:-1] if len(candles_data) > 1 else candles_data
         tl = _trendline_analysis(closed)
         fib = _fibonacci_analysis(closed)
-        return {"symbol": key, "interval": interval, "candles": closed[-220:], "trendline": tl, "fibonacci": fib,
-                "mode": mode, "warning": warning, "generated_at": datetime.now(timezone.utc).isoformat()}
-    except Exception as exc:
-        cached = ADVANCED_SIGNAL_CACHE.get(key)
-        tl = {}
-        if cached:
-            try:
-                tl = ((cached[1].get("timeframes") or {}).get(interval) or {}).get("trendline") or {}
-            except Exception:
-                tl = {}
-        fallback = tl or {"available": False, "trend": "NEUTRAL", "type": "NONE", "touches": 0,
-                          "trend_power": 0, "breakout": "NO", "retest": "NO", "confirmation": "WAIT",
-                          "signal": "WAIT", "reason": f"TradingView data vaqtincha mavjud emas: {exc}"}
-        return {"symbol": key, "interval": interval, "candles": [], "trendline": fallback,
-                "mode": "unavailable", "warning": str(exc), "degraded": True,
+        return {"symbol": key, "interval": interval, "candles": candles_data[-260:], "trendline": tl, "fibonacci": fib,
+                "mode": "mt5", "warning": None, "provider": "Exness MT5", "source": "MT5 XAUUSDm terminal candles",
                 "generated_at": datetime.now(timezone.utc).isoformat()}
-
+    except Exception as exc:
+        return {"symbol": key, "interval": interval, "candles": [],
+                "trendline": {"available": False, "trend": "NEUTRAL", "type": "NONE", "touches": 0, "trend_power": 0, "breakout": "NO", "retest": "NO", "confirmation": "WAIT", "signal": "WAIT", "reason": str(exc)},
+                "fibonacci": {"available": False, "direction": "NEUTRAL", "signal": "WAIT", "reason": str(exc), "levels": {}},
+                "mode": "mt5_unavailable", "warning": str(exc), "provider": "Exness MT5",
+                "generated_at": datetime.now(timezone.utc).isoformat()}
 
 @app.get("/api/v1/signals/live/{symbol:path}")
 async def live_signals(symbol: str) -> dict[str, Any]:
@@ -3336,6 +3364,7 @@ class MT5StateBody(BaseModel):
     margin: float | None = None
     positions: int = 0
     error: str = ""
+    candles: dict[str, list[dict[str, Any]]] = {}
 
 class MT5ReportBody(BaseModel):
     action: str = ""
@@ -3403,10 +3432,10 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     return {"saved": True, "id": row.id, "source": source, "outcome": row.outcome}
 
 @app.get("/api/v1/signals/analytics")
-async def signal_analytics(period: str = Query("all"), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def signal_analytics(period: str = Query("all"), date: str | None = Query(None), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
     rows = await refresh_signal_outcomes(session, user.id)
-    rows = filter_history_rows(rows, period)
+    rows = filter_history_rows(rows, period, date)
     wins = sum(1 for r in rows if r.outcome == "TP HIT")
     losses = sum(1 for r in rows if r.outcome == "SL HIT")
     completed = wins + losses
@@ -3448,10 +3477,10 @@ async def save_signal(symbol: str, interval: str = DEFAULT_INTERVAL, authorizati
 
 
 @app.get("/api/v1/signals/history")
-async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Query("all"), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Query("all"), date: str | None = Query(None), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
     rows = await refresh_signal_outcomes(session, user.id, limit=200)
-    rows = filter_history_rows(rows, period)
+    rows = filter_history_rows(rows, period, date)
     rows = rows[-limit:][::-1]
     items = []
     for r in rows:
@@ -3541,7 +3570,7 @@ async def mt5_poll(token: str = Query(...)) -> dict[str, Any]:
 async def mt5_state(body: MT5StateBody, token: str = Query(...)) -> dict[str, Any]:
     if not secrets.compare_digest(token, MT5_BRIDGE_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid MT5 bridge token")
-    MT5_BRIDGE_STATE.update({"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": datetime.now(timezone.utc).isoformat(), "last_error": body.error or ""})
+    MT5_BRIDGE_STATE.update({"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": datetime.now(timezone.utc).isoformat(), "last_error": body.error or "", "candles": body.candles or {}})
     return {"ok": True}
 
 @app.post("/api/v1/mt5/report")
