@@ -357,7 +357,7 @@ function mountAutoTrendFibChart(tf,candles,t,fib){
   clearTrendOverlay();
   const LC=window.LightweightCharts;
   const width=Math.max(320,el.clientWidth||900);
-  trendOverlayChart=LC.createChart(el,{width,height:560,layout:{backgroundColor:'#080d13',textColor:'#cbd5e1'},grid:{vertLines:{color:'#17202b'},horzLines:{color:'#17202b'}},crosshair:{mode:LC.CrosshairMode.Normal},rightPriceScale:{borderColor:'#26313d'},timeScale:{borderColor:'#26313d',timeVisible:true,secondsVisible:false},handleScroll:true,handleScale:true});
+  trendOverlayChart=LC.createChart(el,{width,height:560,layout:{backgroundColor:'#000000',textColor:'#cbd5e1'},grid:{vertLines:{color:'#17202b'},horzLines:{color:'#17202b'}},crosshair:{mode:LC.CrosshairMode.Normal},rightPriceScale:{borderColor:'#26313d'},timeScale:{borderColor:'#26313d',timeVisible:true,secondsVisible:false},handleScroll:true,handleScale:true});
   trendOverlaySeries=trendOverlayChart.addCandlestickSeries({upColor:'#20c997',downColor:'#ff5d72',borderVisible:false,wickUpColor:'#20c997',wickDownColor:'#ff5d72'});
   const data=candles.map(c=>({time:Number(c.time),open:+c.open,high:+c.high,low:+c.low,close:+c.close})).filter((x,i,a)=>Number.isFinite(x.time)&& (i===0||x.time>a[i-1].time));
   trendOverlaySeries.setData(data);
@@ -384,11 +384,11 @@ function mountAutoTrendFibChart(tf,candles,t,fib){
     const endTime=Number(fib.draw_end_time)||data[data.length-1].time;
     if(Number.isFinite(startTime)&&Number.isFinite(endTime)){
       const levs=[['0','#8ea0b5',1],['0.236','#70859b',1],['0.382','#5f9ee8',1],['0.5','#f5c15d',2],['0.618','#ff9f43',2],['0.786','#a98cff',1],['1','#70859b',1],['1.272','#31d39a',1],['1.618','#31d39a',1]];
-      levs.forEach(([k,col,w])=>{const v=Number(fib.levels[k]);if(!Number.isFinite(v))return;addLine(trendOverlayLineData(data,startTime,v,endTime,v),{color:col,lineWidth:w,lineStyle:0,lastValueVisible:true,priceLineVisible:false});});
+      levs.forEach(([k,col,w])=>{const v=Number(fib.levels[k]);if(!Number.isFinite(v))return;addLine(trendOverlayLineData(data,startTime,v,endTime,v),{color:col,lineWidth:w,lineStyle:0,lastValueVisible:true,priceLineVisible:true,title:k});});
       const z=fib.retracement_zone;
       if(z && Number.isFinite(Number(z.low)) && Number.isFinite(Number(z.high))){
-        addLine(trendOverlayLineData(data,startTime,Number(z.low),endTime,Number(z.low)),{color:'#f5c15d',lineWidth:1,lineStyle:2,lastValueVisible:false,priceLineVisible:false});
-        addLine(trendOverlayLineData(data,startTime,Number(z.high),endTime,Number(z.high)),{color:'#f5c15d',lineWidth:1,lineStyle:2,lastValueVisible:false,priceLineVisible:false});
+        addLine(trendOverlayLineData(data,startTime,Number(z.low),endTime,Number(z.low)),{color:'#f5c15d',lineWidth:1,lineStyle:2,lastValueVisible:true,priceLineVisible:true});
+        addLine(trendOverlayLineData(data,startTime,Number(z.high),endTime,Number(z.high)),{color:'#f5c15d',lineWidth:1,lineStyle:2,lastValueVisible:true,priceLineVisible:true});
       }
     }
   }
@@ -410,7 +410,7 @@ async function loadTrendLines(tf=trendLineInterval){
     $('tlReason').textContent=(x.reason||t.reason||'—')+` | Trend Line: ${t.confirmation||'WAIT'} | Fibonacci: ${fib.reason||'WAIT'}`;
     $('fibSignal').textContent=fib.signal||'WAIT'; $('fibSignal').className='pill '+(fib.signal==='BUY'?'buy':fib.signal==='SELL'?'sell':'wait');
     $('fibDirection').textContent=fib.direction||'—'; $('fibLow').textContent=fmt(fib.anchor_low?.price); $('fibHigh').textContent=fmt(fib.anchor_high?.price); $('fibLevel').textContent=fib.nearest_level!=null?String(fib.nearest_level):'—';
-    $('fib382').textContent=fmt(fib.levels?.['0.382']); $('fib500').textContent=fmt(fib.levels?.['0.5']); $('fib618').textContent=fmt(fib.levels?.['0.618']); $('fib786').textContent=fmt(fib.levels?.['0.786']); $('fibPA').textContent=fib.confirmation||'WAIT'; $('fibRSI').textContent=Number.isFinite(Number(fib.rsi))?Number(fib.rsi).toFixed(2):'—'; $('fib1272').textContent=fmt(fib.extension_targets?.['1.272']); $('fib1618').textContent=fmt(fib.extension_targets?.['1.618']); $('fibReason').textContent=fib.reason||'—';
+    $('fib0').textContent=fmt(fib.levels?.['0']); $('fib236').textContent=fmt(fib.levels?.['0.236']); $('fib382').textContent=fmt(fib.levels?.['0.382']); $('fib500').textContent=fmt(fib.levels?.['0.5']); $('fib618').textContent=fmt(fib.levels?.['0.618']); $('fib786').textContent=fmt(fib.levels?.['0.786']); $('fib1').textContent=fmt(fib.levels?.['1']); $('fib1272').textContent=fmt(fib.levels?.['1.272'] ?? fib.extension_targets?.['1.272']); $('fib1618').textContent=fmt(fib.levels?.['1.618'] ?? fib.extension_targets?.['1.618']); $('fibPA').textContent=fib.confirmation||'WAIT'; $('fibRSI').textContent=Number.isFinite(Number(fib.rsi))?Number(fib.rsi).toFixed(2):'—'; $('fibReason').textContent=fib.reason||'—';
     const order=['5min','15min','30min','1h','4h','1day'];
     const matrix=await Promise.allSettled(order.map(k=>api(`/api/v1/trend-lines/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(k)}`)));
     const frames=Object.fromEntries(order.map((k,i)=>[k,matrix[i].status==='fulfilled'?matrix[i].value:null]));

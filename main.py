@@ -733,6 +733,99 @@ def calculate_pivot_levels(high: float, low: float, close: float, current: float
     }
 
 
+
+def normalize_trade_geometry(result: dict[str, Any], candles: list[dict[str, Any]] | None = None, atr_value: float | None = None) -> dict[str, Any]:
+    """Enforce direction-consistent Entry/SL/TP geometry for every signal module.
+
+    BUY  => SL < Entry < TP1 < TP2
+    SELL => TP2 < TP1 < Entry < SL
+    WAIT/other => no trade levels.
+    When a module supplies geometrically invalid levels, replace targets with
+    deterministic ATR-based levels rather than allowing a contradictory signal
+    into history/auto-trading.
+    """
+    out = dict(result or {})
+    direction = str(out.get("signal") or out.get("direction") or "WAIT").upper()
+    if direction not in {"BUY", "SELL"}:
+        out["signal"] = direction
+        out["entry"] = None
+        out["stop_loss"] = None
+        out["take_profit"] = []
+        out["risk_reward"] = 0.0
+        return out
+
+    try:
+        entry = float(out.get("entry"))
+    except (TypeError, ValueError):
+        out["signal"] = "WAIT"
+        out["entry"] = out.get("entry")
+        out["stop_loss"] = None
+        out["take_profit"] = []
+        out["reason"] = (str(out.get("reason") or "") + "; INVALID: missing entry").strip("; ")
+        return out
+
+    a = float(atr_value or 0.0)
+    if a <= 0 and candles:
+        try:
+            a = atr(candles)
+        except Exception:
+            a = 0.0
+    a = max(a, abs(entry) * 0.0005, 0.5)
+
+    try:
+        sl = float(out.get("stop_loss")) if out.get("stop_loss") is not None else None
+    except (TypeError, ValueError):
+        sl = None
+    raw_tp = out.get("take_profit") or []
+    tps=[]
+    for x in raw_tp:
+        try: tps.append(float(x))
+        except (TypeError, ValueError): pass
+
+    geometry_ok = (
+        direction == "BUY" and sl is not None and sl < entry and len(tps) >= 1 and tps[0] > entry
+    ) or (
+        direction == "SELL" and sl is not None and sl > entry and len(tps) >= 1 and tps[0] < entry
+    )
+
+    if direction == "BUY":
+        if not geometry_ok:
+            sl = entry - max(a * 1.2, abs(entry) * 0.0010)
+            risk = entry - sl
+            tps = [entry + risk * 1.5, entry + risk * 2.5]
+        else:
+            risk = max(entry - sl, a * 0.2)
+            valid_tps=[x for x in tps if x > entry]
+            if not valid_tps:
+                valid_tps=[entry+risk*1.5, entry+risk*2.5]
+            tps=sorted(valid_tps)
+            if len(tps)==1: tps.append(max(tps[0]+risk*0.5, entry+risk*2.5))
+        rr=(tps[0]-entry)/max(entry-sl,1e-9)
+    else:
+        if not geometry_ok:
+            sl = entry + max(a * 1.2, abs(entry) * 0.0010)
+            risk = sl - entry
+            tps = [entry - risk * 1.5, entry - risk * 2.5]
+        else:
+            risk = max(sl - entry, a * 0.2)
+            valid_tps=[x for x in tps if x < entry]
+            if not valid_tps:
+                valid_tps=[entry-risk*1.5, entry-risk*2.5]
+            tps=sorted(valid_tps, reverse=True)
+            if len(tps)==1: tps.append(min(tps[0]-risk*0.5, entry-risk*2.5))
+        rr=(entry-tps[0])/max(sl-entry,1e-9)
+
+    out["signal"]=direction
+    out["entry"]=round(entry,4)
+    out["stop_loss"]=round(sl,4)
+    out["take_profit"]= [round(tps[0],4), round(tps[1],4)]
+    out["risk_reward"]=round(float(rr),2)
+    if not geometry_ok:
+        old_reason=str(out.get("reason") or "").strip()
+        note=f"{old_reason}; trade levels normalized to {direction} geometry" if old_reason else f"Trade levels normalized to {direction} geometry"
+        out["reason"]=note
+    return out
+
 def build_key_level_signal(candles: list[dict[str, Any]], levels: dict[str, Any], news_blocked: bool = False) -> dict[str, Any]:
     current = candles[-1]
     prev = candles[-2] if len(candles) > 1 else current
@@ -768,7 +861,7 @@ def build_key_level_signal(candles: list[dict[str, Any]], levels: dict[str, Any]
         result.update(setup="TARGET_REACHED", reason="S2/S3 target zone reached; fresh SELL entries are blocked.")
     elif bias == "BULLISH" and current["close"] >= levels["r2"]:
         result.update(setup="TARGET_REACHED", reason="R2/R3 target zone reached; fresh BUY entries are blocked.")
-    return result
+    return normalize_trade_geometry(result, candles)
 
 
 async def td_get(endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -1646,11 +1739,11 @@ def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dic
         sl = round(max(float(cur["high"]), levels["r1"]) + max(a*0.15, 0.1), 2)
         tp = [round(levels["s1"],2), round(levels["s2"],2)]
     else: sl=None; tp=[]
-    return {"signal":direction,"confidence":confidence,"score":score,"entry":entry,"stop_loss":sl,"take_profit":tp,
+    return normalize_trade_geometry({"signal":direction,"confidence":confidence,"score":score,"entry":entry,"stop_loss":sl,"take_profit":tp,
             "trend":trend,"rsi":round(r,2),"rsi_state":"OVERBOUGHT" if r>=70 else "OVERSOLD" if r<=30 else "NEUTRAL",
             "ema20":round(ema20,2),"ema50":round(ema50,2),"macd":round(macd_line,5),"macd_state":macd_state,
             "pattern":pattern,"pivot":levels["pivot"],"support":[levels["s1"],levels["s2"],levels["s3"]],"resistance":[levels["r1"],levels["r2"],levels["r3"]],
-            "reason":"; ".join(reasons),"method":"Classic · Trend + Pivot + SNR + RSI + MACD + EMA + Candlestick"}
+            "reason":"; ".join(reasons),"method":"Classic · Trend + Pivot + SNR + RSI + MACD + EMA + Candlestick"}, candles)
 
 async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict[str, Any], str | None]:
     """Classic Pivot levels based on the previous completed candle of the selected timeframe.
@@ -2350,9 +2443,28 @@ def _snr_zone_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
     else: signal="WAIT"
     confidence=max(sup["strength"],res["strength"]) if signal!="WAIT" else round((sup["strength"]+res["strength"])/2)
     pos="ABOVE RESISTANCE" if current>res["high"] else "BELOW SUPPORT" if current<sup["low"] else "NEAR SUPPORT" if current<=sup["mid"] else "NEAR RESISTANCE" if current>=res["mid"] else "BETWEEN ZONES"
-    if signal=="BUY": entry=current; stop_loss=sup["low"]; take_profit=[res["mid"],res["high"]]
-    elif signal=="SELL": entry=current; stop_loss=res["high"]; take_profit=[sup["mid"],sup["low"]]
-    else: entry=current; stop_loss=None; take_profit=[]
+    if signal=="BUY":
+        entry=current; stop_loss=sup["low"]
+        # BUY targets must always be above entry. Select the nearest resistance above price.
+        above=[v for v in high_vals if float(v)>current + max(width*0.25, avtr*0.10)]
+        if above:
+            lvl=min(above)
+            take_profit=[round(lvl,4), round(lvl+max(width, avtr*0.40),4)]
+        else:
+            risk=max(entry-stop_loss, avtr*0.60)
+            take_profit=[round(entry+risk*1.5,4), round(entry+risk*2.5,4)]
+    elif signal=="SELL":
+        entry=current; stop_loss=res["high"]
+        # SELL targets must always be below entry. Select the nearest support below price.
+        below=[v for v in low_vals if float(v)<current - max(width*0.25, avtr*0.10)]
+        if below:
+            lvl=max(below)
+            take_profit=[round(lvl,4), round(lvl-max(width, avtr*0.40),4)]
+        else:
+            risk=max(stop_loss-entry, avtr*0.60)
+            take_profit=[round(entry-risk*1.5,4), round(entry-risk*2.5,4)]
+    else:
+        entry=current; stop_loss=None; take_profit=[]
     strongest=max(sup,res,key=lambda z:z["strength"])
     reason=f"{pos.lower()}; strongest zone {strongest['strength']}% ({strongest['quality']}); Support {sup['strength']}% · Resistance {res['strength']}%."
     return {"support":sup,"resistance":res,"signal":signal,"confidence":confidence,"position":pos,
@@ -2487,6 +2599,7 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
             candle_time=closed_candles[-1].get("time")
             ai=await ai_validate_module_signal("Signal Lab",symbol,tf,candle_time,item)
             item=merge_ai_validation(item,ai)
+            item=normalize_trade_geometry(item, closed_candles)
             item["candle_time"]=candle_time
             # Every timeframe and signal component is calculated from the same
             # TradingView OHLC series returned by get_candles(). No secondary
@@ -2885,6 +2998,18 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 1
         if sl is None or tp1 is None or row.direction not in ("BUY", "SELL"):
             continue
 
+        # Never classify an upside target below a BUY entry (or a downside target above a SELL entry) as TP.
+        # Such legacy records are invalid setups, not successful trades.
+        geometry_ok = (row.direction == "BUY" and sl < entry and tp1 > entry) or (row.direction == "SELL" and sl > entry and tp1 < entry)
+        if not geometry_ok:
+            payload["result"] = {"type": "INVALID SETUP", "price": None, "reason": "TP/SL geometry contradicts signal direction; excluded from win-rate calculations."}
+            payload["trade_status"] = "INVALID"
+            row.payload = json.dumps(payload, ensure_ascii=False)
+            row.outcome = "INVALID"
+            row.closed_at = None
+            changed = True
+            continue
+
         tf = validate_interval(row.interval)
         if tf not in cache:
             try:
@@ -3129,6 +3254,7 @@ async def get_ict_signals(symbol: str) -> dict[str, Any]:
         candle_time=c5[-2].get("time") if len(c5)>1 else c5[-1].get("time")
         ai=await ai_validate_module_signal("ICT Signals",symbol,"5min",candle_time,result)
         result=merge_ai_validation(result,ai)
+        result=normalize_trade_geometry(result, c5[:-1] if len(c5)>1 else c5)
         result["candle_time"]=candle_time
         return {"ok":True,"symbol":symbol,"mode":"live","source":"TradingView/OANDA canonical candle series",
                 "m30_candles":len(c30),"m5_candles":len(c5),"warnings":[x for x in (w30,w5) if x],
@@ -3178,6 +3304,10 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
         ai_signal = str(ai_check.get("signal") or "WAIT").upper()
         risk_flags = ai_check.get("risk_flags") if isinstance(ai_check.get("risk_flags"), list) else []
         rr = float(item.get("risk_reward") or 0)
+        item = normalize_trade_geometry(item)
+        direction = str(item.get("signal") or direction).upper()
+        entry, sl, tp = item.get("entry"), item.get("stop_loss"), item.get("take_profit") or []
+        rr = float(item.get("risk_reward") or rr)
         if direction not in ("BUY", "SELL") or confidence < AUTO_ENTRY_THRESHOLD or entry is None or sl is None or not tp:
             continue
         if zone_quality < AUTO_ENTRY_MIN_ZONE or item.get("quality_grade") not in {"A+","A"}:
@@ -3314,6 +3444,7 @@ async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = D
     interval = validate_interval(interval)
     candles_data, mode, warning = await get_candles(clean_symbol(symbol), interval, 260)
     item = {**build_advanced_signal(candles_data, interval, news_blocked=False), "mode":mode, "warning":warning}
+    item = normalize_trade_geometry(item, candles_data)
     if not item or item.get("signal") not in ("BUY","SELL"):
         raise HTTPException(status_code=400, detail="Bu timeframe uchun tasdiqlangan BUY/SELL signal mavjud emas.")
     row = SignalHistory(user_id=user.id, symbol=clean_symbol(symbol), interval=interval, direction=item["signal"], headline=f'{item["signal"]} • {item["setup"]}', price=float(item["entry"]), payload=json.dumps({"advanced":item,"setup":{"entry":item.get("entry"),"stop_loss":item.get("stop_loss"),"take_profit":item.get("take_profit",[])},"symbol":clean_symbol(symbol),"interval":interval,"source":"Signal Lab","candle_time":candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")}), outcome="OPEN", created_at=datetime.now(timezone.utc), source="Signal Lab", candle_time=str(candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")))
@@ -3411,6 +3542,16 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         return {"saved": False, "duplicate": True, "id": existing.id}
     payload = dict(body.payload or {})
     setup_strength, setup_grade, strong_setup = _setup_strength_from_payload(payload, body.confidence)
+    # Reject contradictory module levels at the source so every module shares the same geometry rule.
+    try:
+        ent=float(body.entry) if body.entry is not None else None
+        slv=float(body.stop_loss) if body.stop_loss is not None else None
+        tpv=[float(x) for x in (body.take_profit or [])]
+        geometry_ok = ent is not None and slv is not None and bool(tpv) and ((direction=="BUY" and slv < ent < tpv[0]) or (direction=="SELL" and tpv[0] < ent < slv))
+    except (TypeError, ValueError):
+        geometry_ok=False
+    if not geometry_ok:
+        return {"saved": False, "reason": "INVALID_TRADE_GEOMETRY", "message": "BUY uchun SL < Entry < TP, SELL uchun TP < Entry < SL bo‘lishi shart."}
     payload.update({
         "source": source,
         "confidence_at_entry": body.confidence,
