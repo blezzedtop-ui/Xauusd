@@ -321,46 +321,74 @@ function trendCard(tf,x){
   return `<div class="trend-card"><div class="section-head"><div><div class="mini">${tfName(tf)}</div><div class="tl-big ${tlClass(sig)}">${sig}</div></div><span class="pill">${adv.confidence??0}%</span></div><div class="mini">${tl.type||'NONE'} · Trend ${tl.trend||'NEUTRAL'}</div><div class="tl-grid"><div><div class="tl-mini">TOUCH</div><b>${tl.touches??0}</b></div><div><div class="tl-mini">POWER</div><b>${power}%</b></div><div><div class="tl-mini">BREAK</div><b>${tl.breakout||'NO'}</b></div><div><div class="tl-mini">RETEST</div><b>${tl.retest||'NO'}</b></div><div><div class="tl-mini">FIB</div><b>${fib.nearest_level??'—'}</b></div><div><div class="tl-mini">FIB SIG</div><b>${fib.signal||'WAIT'}</b></div></div><div class="mini" style="margin-top:8px">${fib.reason||adv.reason||tl.reason||'—'}</div></div>`;
 }
 
+function removeLegacyTrendCharts(){
+  const section=$('trendLineSection');
+  if(!section) return;
+  section.querySelectorAll('#trendChart, .trend-chart-legacy, [data-legacy-trend-chart=\"1\"]').forEach(el=>{ try{el.remove()}catch(_){} });
+  // Keep exactly one chart container in Auto Trend Line.
+  const keep=$('tvTrendChart');
+  section.querySelectorAll('.chart').forEach(el=>{ if(el!==keep) { try{el.remove()}catch(_){} } });
+}
+
 function clearTrendOverlay(){
   try{ if(trendOverlayChart){ trendOverlayChart.remove(); } }catch(_){ }
   trendOverlayChart=null; trendOverlaySeries=null; trendOverlayLayers=[];
   const el=$('tvTrendChart'); if(el) el.innerHTML='';
 }
-function trendOverlayLineData(candles, startIdx, startPrice, endIdx, endPrice){
-  if(!candles?.length) return [];
-  const a=Math.max(0,Math.min(candles.length-1,Number(startIdx)||0));
-  const b=Math.max(a+1,Math.min(candles.length-1,Number(endIdx ?? candles.length-1)));
-  return [{time:Number(candles[a].time),value:Number(startPrice)},{time:Number(candles[b].time),value:Number(endPrice)}];
+function trendOverlayLineData(candles, startTime, startPrice, endTime, endPrice){
+  if(!Array.isArray(candles)||!candles.length) return [];
+  const a=Number(startTime), b=Number(endTime);
+  if(!Number.isFinite(a)||!Number.isFinite(b)||!Number.isFinite(Number(startPrice))||!Number.isFinite(Number(endPrice))) return [];
+  return [{time:a,value:Number(startPrice)},{time:b,value:Number(endPrice)}];
 }
 function mountAutoTrendFibChart(tf,candles,t,fib){
-  const el=$('tvTrendChart'); if(!el || !window.LightweightCharts || !Array.isArray(candles) || !candles.length) return;
+  const el=$('tvTrendChart');
+  if(!el || !window.LightweightCharts || !Array.isArray(candles) || candles.length<2) return;
+  removeLegacyTrendCharts();
   clearTrendOverlay();
   const LC=window.LightweightCharts;
-  trendOverlayChart=LC.createChart(el,{width:el.clientWidth||900,height:560,layout:{background:{type:'solid',color:'#080d13'},textColor:'#cbd5e1'},grid:{vertLines:{color:'#17202b'},horzLines:{color:'#17202b'}},crosshair:{mode:LC.CrosshairMode?.Normal ?? 0},rightPriceScale:{borderColor:'#26313d'},timeScale:{borderColor:'#26313d',timeVisible:true,secondsVisible:false},handleScroll:true,handleScale:true});
-  trendOverlaySeries=trendOverlayChart.addSeries(LC.CandlestickSeries,{upColor:'#20c997',downColor:'#ff5d72',borderVisible:false,wickUpColor:'#20c997',wickDownColor:'#ff5d72'});
-  const data=candles.map(c=>({time:Number(c.time),open:+c.open,high:+c.high,low:+c.low,close:+c.close})).filter((x,i,a)=>i===0||x.time>a[i-1].time);
+  const width=Math.max(320,el.clientWidth||900);
+  trendOverlayChart=LC.createChart(el,{width,height:560,layout:{backgroundColor:'#080d13',textColor:'#cbd5e1'},grid:{vertLines:{color:'#17202b'},horzLines:{color:'#17202b'}},crosshair:{mode:LC.CrosshairMode.Normal},rightPriceScale:{borderColor:'#26313d'},timeScale:{borderColor:'#26313d',timeVisible:true,secondsVisible:false},handleScroll:true,handleScale:true});
+  trendOverlaySeries=trendOverlayChart.addCandlestickSeries({upColor:'#20c997',downColor:'#ff5d72',borderVisible:false,wickUpColor:'#20c997',wickDownColor:'#ff5d72'});
+  const data=candles.map(c=>({time:Number(c.time),open:+c.open,high:+c.high,low:+c.low,close:+c.close})).filter((x,i,a)=>Number.isFinite(x.time)&& (i===0||x.time>a[i-1].time));
   trendOverlaySeries.setData(data);
-  const addLine=(points,opts)=>{const s=trendOverlayChart.addSeries(LC.LineSeries,opts);s.setData(points);trendOverlayLayers.push(s);return s;};
+  const timeByIndex=i=>data[Math.max(0,Math.min(data.length-1,Number(i)||0))]?.time;
+  const addLine=(points,opts)=>{if(points.length<2)return null;const ss=trendOverlayChart.addLineSeries(opts);ss.setData(points);trendOverlayLayers.push(ss);return ss;};
+
+  // Trend line: use backend anchor TIMES, never array indexes. This avoids the
+  // classic bug where the API calculates on 319 candles but the chart displays
+  // only the last 220 and the line is therefore shifted/off-screen.
   if(t?.available && t?.p1 && t?.p2){
-    const p1=Number(t.p1.index),p2=Number(t.p2.index); const y2=Number(t.current_line ?? t.p2.price);
-    addLine(trendOverlayLineData(data,p1,t.p1.price,data.length-1,y2),{color:t.trend==='BULLISH'?'#21b6ff':'#4aa3ff',lineWidth:3,lineStyle:0,lastValueVisible:false,priceLineVisible:false});
+    const p1Time=Number(t.p1.time)||timeByIndex(t.p1.index);
+    const p2Time=Number(t.p2.time)||timeByIndex(t.p2.index);
+    const endTime=data[data.length-1].time;
+    const endValue=Number(t.current_line);
+    if(Number.isFinite(p1Time)&&Number.isFinite(p2Time)&&Number.isFinite(endValue)){
+      addLine(trendOverlayLineData(data,p1Time,t.p1.price,endTime,endValue),{color:t.trend==='BULLISH'?'#21b6ff':'#4aa3ff',lineWidth:3,lineStyle:0,lastValueVisible:false,priceLineVisible:false});
+    }
   }
+
+  // Fibonacci: draw only from the selected timeframe's actual impulse anchors
+  // to the latest candle. Every level therefore changes when TF/structure changes.
   if(fib?.available && fib.levels){
-    const start=Math.max(0,Number(fib.draw_start_index ?? 0)); const end=Math.max(start+1,Math.min(data.length-1,Number(fib.draw_end_index ?? data.length-1)));
-    const levs=[['0','#8ea0b5',1],['0.236','#70859b',1],['0.382','#5f9ee8',1],['0.5','#f5c15d',2],['0.618','#ff9f43',2],['0.786','#a98cff',1],['1','#70859b',1],['1.272','#31d39a',1],['1.618','#31d39a',1]];
-    levs.forEach(([k,col,w])=>{const v=Number(fib.levels[k]);if(!Number.isFinite(v))return;addLine(trendOverlayLineData(data,start,v,end,v),{color:col,lineWidth:w,lineStyle:0,lastValueVisible:true,priceLineVisible:false});});
-    const z=fib.retracement_zone;
-    if(z && Number.isFinite(Number(z.low)) && Number.isFinite(Number(z.high))){
-      addLine(trendOverlayLineData(data,start,Number(z.low),end,Number(z.low)),{color:'rgba(245,193,93,.75)',lineWidth:1,lineStyle:2,lastValueVisible:false,priceLineVisible:false});
-      addLine(trendOverlayLineData(data,start,Number(z.high),end,Number(z.high)),{color:'rgba(245,193,93,.75)',lineWidth:1,lineStyle:2,lastValueVisible:false,priceLineVisible:false});
+    const startTime=Number(fib.draw_start_time)||timeByIndex(fib.draw_start_index);
+    const endTime=Number(fib.draw_end_time)||data[data.length-1].time;
+    if(Number.isFinite(startTime)&&Number.isFinite(endTime)){
+      const levs=[['0','#8ea0b5',1],['0.236','#70859b',1],['0.382','#5f9ee8',1],['0.5','#f5c15d',2],['0.618','#ff9f43',2],['0.786','#a98cff',1],['1','#70859b',1],['1.272','#31d39a',1],['1.618','#31d39a',1]];
+      levs.forEach(([k,col,w])=>{const v=Number(fib.levels[k]);if(!Number.isFinite(v))return;addLine(trendOverlayLineData(data,startTime,v,endTime,v),{color:col,lineWidth:w,lineStyle:0,lastValueVisible:true,priceLineVisible:false});});
+      const z=fib.retracement_zone;
+      if(z && Number.isFinite(Number(z.low)) && Number.isFinite(Number(z.high))){
+        addLine(trendOverlayLineData(data,startTime,Number(z.low),endTime,Number(z.low)),{color:'#f5c15d',lineWidth:1,lineStyle:2,lastValueVisible:false,priceLineVisible:false});
+        addLine(trendOverlayLineData(data,startTime,Number(z.high),endTime,Number(z.high)),{color:'#f5c15d',lineWidth:1,lineStyle:2,lastValueVisible:false,priceLineVisible:false});
+      }
     }
   }
   trendOverlayChart.timeScale().fitContent();
-  const ro=new ResizeObserver(()=>{if(trendOverlayChart&&el.clientWidth)trendOverlayChart.applyOptions({width:el.clientWidth});}); ro.observe(el);
-  el.dataset.resizeObserver='1';
+  if(window.ResizeObserver){const ro=new ResizeObserver(()=>{if(trendOverlayChart&&el.clientWidth)trendOverlayChart.applyOptions({width:el.clientWidth});});ro.observe(el);el._trendResizeObserver=ro;}
 }
 async function loadTrendLines(tf=trendLineInterval){
   trendLineInterval=tf;
+  removeLegacyTrendCharts();
   try{
     if($('trendChartTf')) $('trendChartTf').textContent=tfName(tf);
     $('trendLineStatus').textContent=`${tfName(tf)} · faqat ${tfName(tf)} candlelari asosida Trend Line + Fibonacci hisoblanmoqda…`;
