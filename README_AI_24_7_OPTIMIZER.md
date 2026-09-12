@@ -10,6 +10,6 @@
 
 Recommended Railway variables:
 - `AI_PROVIDER=auto`
-- `AI_FALLBACK_ORDER=groq,gemini,openrouter,groq_qwen,mistral,cerebras,cloudflare,huggingface,openai`
+- `AI_FALLBACK_ORDER=groq,gemini,openrouter,groq_qwen,mistral,cerebras,cloudflare,deepseek,openai`
 - `AI_CACHE_TTL=86400`
 - `AI_PROVIDER_COOLDOWN_SECONDS=120`

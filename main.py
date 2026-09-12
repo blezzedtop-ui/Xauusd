@@ -10,7 +10,6 @@ import asyncio
 import smtplib
 import random
 import string
-import xml.etree.ElementTree as ET
 from email.message import EmailMessage
 import csv
 import io
@@ -35,11 +34,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, rela
 load_dotenv()
 
 APP_TITLE = os.getenv("APP_TITLE", "Trading SaaS Analytics Platform")
-
-# Lightweight live market-news ticker (public Google News RSS + Uzbek translation fallback).
-NEWS_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
-NEWS_CACHE_TTL = int(os.getenv("NEWS_CACHE_TTL", "45"))
-NEWS_MAX_ITEMS = int(os.getenv("NEWS_MAX_ITEMS", "12"))
 MARKET_PROVIDER = os.getenv("MARKET_PROVIDER", "auto").lower()
 REALMARKET_API_KEY = os.getenv("REALMARKET_API_KEY", "").strip()
 REALMARKET_API_BASE = os.getenv("REALMARKET_API_BASE", "https://api.realmarketapi.com").strip().rstrip("/")
@@ -62,12 +56,26 @@ MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest").strip() or "m
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "").strip()
 CEREBRAS_MODEL = os.getenv("CEREBRAS_MODEL", "gpt-oss-120b").strip() or "gpt-oss-120b"
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
-CLOUDFLARE_API_TOKEN = os.getenv("CLOUDFLARE_API_TOKEN", "").strip()
+CLOUDFLARE_API_TOKEN = (os.getenv("CLOUDFLARE_API_TOKEN", "").strip() or os.getenv("CLOUDFLARE_API_KEY", "").strip())
 CLOUDFLARE_MODEL = os.getenv("CLOUDFLARE_MODEL", "@cf/meta/llama-3.1-8b-instruct").strip() or "@cf/meta/llama-3.1-8b-instruct"
-HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
-HF_MODEL = os.getenv("HF_MODEL", "openai/gpt-oss-120b:fastest").strip() or "openai/gpt-oss-120b:fastest"
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
 AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto"
-AI_FALLBACK_ORDER = [x.strip().lower() for x in os.getenv("AI_FALLBACK_ORDER", "groq,gemini,openrouter,groq_qwen,mistral,cerebras,cloudflare,huggingface,openai").split(",") if x.strip()]
+AI_FALLBACK_ORDER = [x.strip().lower() for x in os.getenv("AI_FALLBACK_ORDER", "groq,deepseek,gemini,groq_qwen,openai,mistral,cerebras,cloudflare,openrouter").split(",") if x.strip()]
+AI_ROUTER_MODE = os.getenv("AI_ROUTER_MODE", "score").strip().lower() or "score"
+# Provider profile: quality, speed, capacity/limits, cost-efficiency (0-100).
+# These are routing heuristics, not provider guarantees; live status is weighted dynamically.
+AI_PROVIDER_PROFILE = {
+    "groq": {"quality": 95, "speed": 99, "capacity": 78, "cost": 94},
+    "deepseek": {"quality": 96, "speed": 88, "capacity": 99, "cost": 97},
+    "gemini": {"quality": 94, "speed": 91, "capacity": 88, "cost": 88},
+    "groq_qwen": {"quality": 86, "speed": 98, "capacity": 78, "cost": 94},
+    "openai": {"quality": 97, "speed": 82, "capacity": 70, "cost": 62},
+    "mistral": {"quality": 84, "speed": 89, "capacity": 78, "cost": 88},
+    "cerebras": {"quality": 88, "speed": 100, "capacity": 82, "cost": 90},
+    "cloudflare": {"quality": 73, "speed": 86, "capacity": 84, "cost": 95},
+    "openrouter": {"quality": 76, "speed": 78, "capacity": 68, "cost": 100},
+}
 ALLOW_DEMO = os.getenv("ALLOW_DEMO", "false").lower() == "true"
 DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "XAU/USD").strip() or "XAU/USD"
 DEFAULT_INTERVAL = os.getenv("DEFAULT_INTERVAL", "30min").strip() or "30min"
@@ -142,8 +150,8 @@ async def _provider_call(provider: str, prompt: str) -> tuple[str, str]:
         return await _openai_compatible_completion(CEREBRAS_API_KEY, "https://api.cerebras.ai/v1", CEREBRAS_MODEL, prompt, "cerebras", {"X-Cerebras-Version-Patch":"2"})
     if provider == "cloudflare" and CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN:
         return await _cloudflare_completion(prompt)
-    if provider == "huggingface" and HF_TOKEN:
-        return await _openai_compatible_completion(HF_TOKEN, "https://router.huggingface.co/v1", HF_MODEL, prompt, "huggingface")
+    if provider == "deepseek" and DEEPSEEK_API_KEY:
+        return await _openai_compatible_completion(DEEPSEEK_API_KEY, "https://api.deepseek.com", DEEPSEEK_MODEL, prompt, "deepseek")
     if provider == "openai" and OPENAI_API_KEY:
         from openai import AsyncOpenAI
         client = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=REQUEST_TIMEOUT, max_retries=0)
@@ -160,10 +168,37 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
     market data. A provider error, timeout or rate limit immediately advances
     to the next configured provider. The deterministic engine remains the final fallback.
     """
-    order = [AI_PROVIDER] if AI_PROVIDER not in {"auto", ""} else AI_FALLBACK_ORDER
-    # If explicitly selecting a provider, still permit only that provider.
+    configured={
+        "groq": bool(GROQ_API_KEY),
+        "gemini": bool(GEMINI_API_KEY),
+        "openrouter": bool(OPENROUTER_API_KEY),
+        "groq_qwen": bool(GROQ_API_KEY),
+        "mistral": bool(MISTRAL_API_KEY),
+        "cerebras": bool(CEREBRAS_API_KEY),
+        "cloudflare": bool(CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN),
+        "deepseek": bool(DEEPSEEK_API_KEY),
+        "openai": bool(OPENAI_API_KEY),
+    }
+    raw_order = [AI_PROVIDER] if AI_PROVIDER not in {"auto", ""} else AI_FALLBACK_ORDER
+    # Never call or mark a provider that has no credentials configured.
+    candidates = [p for p in raw_order if configured.get(p, False)]
     errors=[]
     now_mono = asyncio.get_running_loop().time()
+
+    def route_score(provider: str) -> float:
+        prof = AI_PROVIDER_PROFILE.get(provider, {"quality":70,"speed":70,"capacity":60,"cost":60})
+        base = (prof["quality"]*0.40 + prof["speed"]*0.20 + prof["capacity"]*0.25 + prof["cost"]*0.15)
+        st = AI_PROVIDER_STATUS.get(provider) or {}
+        status = st.get("status")
+        if status == "ONLINE": base += 8
+        elif status == "LIMITED": base -= 18
+        if AI_PROVIDER_COOLDOWN_UNTIL.get(provider, 0.0) > now_mono: base -= 35
+        return round(base, 2)
+
+    # In AUTO mode choose the best currently healthy provider by a weighted
+    # quality/speed/capacity/cost score. If it fails, immediately fall through
+    # the remaining providers in descending score order.
+    order = sorted(candidates, key=route_score, reverse=True) if AI_ROUTER_MODE == "score" else candidates
     for provider in order:
         # Skip a provider briefly after a rate-limit response instead of hammering it.
         cooldown_until = AI_PROVIDER_COOLDOWN_UNTIL.get(provider, 0.0)
@@ -382,111 +417,7 @@ def initialize_database() -> None:
     ensure_admin_user()
 
 
-
-
 app = FastAPI(title=APP_TITLE, version="19.0.0")
-
-MARKET_NEWS_QUERIES = [
-    ("GOLD", "gold OR XAUUSD price OR bullion market"),
-    ("NEFT", "oil OR crude OR Brent OR WTI price"),
-    ("USD", "US dollar OR USD index OR DXY"),
-    ("FED", "Federal Reserve OR Fed rates OR inflation CPI PPI NFP"),
-]
-
-UZ_FALLBACK = {
-    "gold": "oltin", "bullion": "oltin", "oil": "neft", "crude": "xom neft", "price": "narxi",
-    "prices": "narxlari", "dollar": "dollar", "fed": "Fed", "rates": "stavkalar",
-    "rate": "stavka", "inflation": "inflyatsiya", "rises": "oshdi", "rise": "o‘sdi",
-    "falls": "pasaydi", "fall": "pasayish", "higher": "yuqori", "lower": "pastroq",
-    "market": "bozor", "markets": "bozorlar", "investors": "investorlar", "investor": "investor",
-    "stocks": "aksiyalar", "economy": "iqtisodiyot", "economic": "iqtisodiy", "demand": "talab",
-    "supply": "taklif", "demand": "talab", "forecast": "prognoz", "data": "ma’lumotlar",
-    "report": "hisobot", "reports": "hisobotlar", "rate cut": "stavka pasayishi",
-    "rate hike": "stavka oshishi", "central bank": "markaziy bank", "treasury": "g‘aznachilik",
-    "yield": "daromadlilik", "yields": "daromadlilik", "war": "urush", "sanctions": "sanksiyalar",
-}
-
-def _news_category_score(title: str, preferred: str) -> str:
-    t = title.lower()
-    if preferred == "GOLD" or any(k in t for k in ["gold", "xau", "bullion"]): return "GOLD"
-    if preferred == "NEFT" or any(k in t for k in ["oil", "brent", "wti", "crude"]): return "NEFT"
-    if preferred == "USD" or any(k in t for k in ["dollar", "dxy", "usd"]): return "USD"
-    return "FED"
-
-async def _translate_uz(text: str) -> str:
-    """Translate short news headlines to Uzbek. Falls back to a conservative lexical translation."""
-    text = (text or "").strip()
-    if not text:
-        return ""
-    try:
-        url = "https://translate.googleapis.com/translate_a/single"
-        params = {"client":"gtx", "sl":"auto", "tl":"uz", "dt":"t", "q":text}
-        async with httpx.AsyncClient(timeout=5.0, headers={"User-Agent":"Mozilla/5.0"}) as client:
-            r = await client.get(url, params=params)
-            r.raise_for_status()
-            data = r.json()
-            parts = data[0] if isinstance(data, list) else []
-            out = "".join(str(x[0]) for x in parts if isinstance(x, list) and x and x[0])
-            if out.strip():
-                return out.strip()
-    except Exception:
-        pass
-    out = text
-    for src, dst in sorted(UZ_FALLBACK.items(), key=lambda kv: len(kv[0]), reverse=True):
-        out = re.sub(rf"\b{re.escape(src)}\b", dst, out, flags=re.I)
-    return out
-
-async def _fetch_google_news_rss(query: str) -> list[dict[str, Any]]:
-    url = "https://news.google.com/rss/search"
-    params = {"q": query, "hl":"en-US", "gl":"US", "ceid":"US:en"}
-    try:
-        async with httpx.AsyncClient(timeout=8.0, headers={"User-Agent":"Mozilla/5.0"}) as client:
-            r = await client.get(url, params=params)
-            r.raise_for_status()
-        root = ET.fromstring(r.text)
-        out=[]
-        for item in root.findall("./channel/item")[:8]:
-            title=(item.findtext("title") or "").strip()
-            link=(item.findtext("link") or "").strip()
-            pub=(item.findtext("pubDate") or "").strip()
-            source_el=item.find("source")
-            source=(source_el.text or "").strip() if source_el is not None else "Google News"
-            if title:
-                out.append({"title":title,"link":link,"published":pub,"source":source})
-        return out
-    except Exception:
-        return []
-
-@app.get("/api/v1/market-news")
-async def get_market_news() -> dict[str, Any]:
-    now = asyncio.get_running_loop().time()
-    if NEWS_CACHE["items"] and now - float(NEWS_CACHE["ts"] or 0) < NEWS_CACHE_TTL:
-        return {"mode":"live-cache", "items":NEWS_CACHE["items"], "updated_at":datetime.now(timezone.utc).isoformat()}
-    buckets = await asyncio.gather(*[_fetch_google_news_rss(q) for _, q in MARKET_NEWS_QUERIES], return_exceptions=True)
-    candidates=[]
-    seen=set()
-    for (preferred,_), rows in zip(MARKET_NEWS_QUERIES,buckets):
-        if isinstance(rows, Exception):
-            continue
-        for row in rows:
-            title=row.get("title","").strip()
-            key=re.sub(r"\W+"," ",title.lower()).strip()
-            if not title or key in seen:
-                continue
-            seen.add(key)
-            row["category"]=_news_category_score(title, preferred)
-            candidates.append(row)
-    # Prefer a balanced rotation across GOLD/NEFT/USD/FED.
-    ordered=[]
-    for cat in ["GOLD","NEFT","USD","FED"]:
-        ordered.extend([x for x in candidates if x["category"]==cat][:3])
-    items=[]
-    for row in ordered[:NEWS_MAX_ITEMS]:
-        uz=await _translate_uz(row["title"])
-        items.append({**row, "title_uz":uz or row["title"]})
-    NEWS_CACHE.update({"ts":now,"items":items})
-    return {"mode":"live" if items else "empty", "items":items, "updated_at":datetime.now(timezone.utc).isoformat()}
-
 origins_raw = os.getenv("FRONTEND_ORIGINS", "*")
 origins = [x.strip() for x in origins_raw.split(",") if x.strip()] or ["*"]
 app.add_middleware(
@@ -542,7 +473,7 @@ ADVANCED_CACHE_TTL = float(os.getenv("ADVANCED_CACHE_TTL", "5"))
 MTF_CACHE_TTL = float(os.getenv("MTF_CACHE_TTL", "10"))
 LIVE_PRICE_CACHE_TTL = float(os.getenv("LIVE_PRICE_CACHE_TTL", "1.5"))
 AUTO_ENTRY_ENABLED = os.getenv("AUTO_ENTRY_ENABLED", "true").lower() == "true"
-AUTO_ENTRY_THRESHOLD = float(os.getenv("AUTO_ENTRY_THRESHOLD", "85"))
+AUTO_ENTRY_THRESHOLD = float(os.getenv("AUTO_ENTRY_THRESHOLD", "84"))
 AUTO_ENTRY_DUPLICATE_MINUTES = int(os.getenv("AUTO_ENTRY_DUPLICATE_MINUTES", "5"))
 AUTO_ENTRY_MIN_ZONE = float(os.getenv("AUTO_ENTRY_MIN_ZONE", "88"))
 AUTO_ENTRY_MIN_AI_AGREEMENT = float(os.getenv("AUTO_ENTRY_MIN_AI_AGREEMENT", "75"))
@@ -843,99 +774,6 @@ def calculate_pivot_levels(high: float, low: float, close: float, current: float
     }
 
 
-
-def normalize_trade_geometry(result: dict[str, Any], candles: list[dict[str, Any]] | None = None, atr_value: float | None = None) -> dict[str, Any]:
-    """Enforce direction-consistent Entry/SL/TP geometry for every signal module.
-
-    BUY  => SL < Entry < TP1 < TP2
-    SELL => TP2 < TP1 < Entry < SL
-    WAIT/other => no trade levels.
-    When a module supplies geometrically invalid levels, replace targets with
-    deterministic ATR-based levels rather than allowing a contradictory signal
-    into history/auto-trading.
-    """
-    out = dict(result or {})
-    direction = str(out.get("signal") or out.get("direction") or "WAIT").upper()
-    if direction not in {"BUY", "SELL"}:
-        out["signal"] = direction
-        out["entry"] = None
-        out["stop_loss"] = None
-        out["take_profit"] = []
-        out["risk_reward"] = 0.0
-        return out
-
-    try:
-        entry = float(out.get("entry"))
-    except (TypeError, ValueError):
-        out["signal"] = "WAIT"
-        out["entry"] = out.get("entry")
-        out["stop_loss"] = None
-        out["take_profit"] = []
-        out["reason"] = (str(out.get("reason") or "") + "; INVALID: missing entry").strip("; ")
-        return out
-
-    a = float(atr_value or 0.0)
-    if a <= 0 and candles:
-        try:
-            a = atr(candles)
-        except Exception:
-            a = 0.0
-    a = max(a, abs(entry) * 0.0005, 0.5)
-
-    try:
-        sl = float(out.get("stop_loss")) if out.get("stop_loss") is not None else None
-    except (TypeError, ValueError):
-        sl = None
-    raw_tp = out.get("take_profit") or []
-    tps=[]
-    for x in raw_tp:
-        try: tps.append(float(x))
-        except (TypeError, ValueError): pass
-
-    geometry_ok = (
-        direction == "BUY" and sl is not None and sl < entry and len(tps) >= 1 and tps[0] > entry
-    ) or (
-        direction == "SELL" and sl is not None and sl > entry and len(tps) >= 1 and tps[0] < entry
-    )
-
-    if direction == "BUY":
-        if not geometry_ok:
-            sl = entry - max(a * 1.2, abs(entry) * 0.0010)
-            risk = entry - sl
-            tps = [entry + risk * 1.5, entry + risk * 2.5]
-        else:
-            risk = max(entry - sl, a * 0.2)
-            valid_tps=[x for x in tps if x > entry]
-            if not valid_tps:
-                valid_tps=[entry+risk*1.5, entry+risk*2.5]
-            tps=sorted(valid_tps)
-            if len(tps)==1: tps.append(max(tps[0]+risk*0.5, entry+risk*2.5))
-        rr=(tps[0]-entry)/max(entry-sl,1e-9)
-    else:
-        if not geometry_ok:
-            sl = entry + max(a * 1.2, abs(entry) * 0.0010)
-            risk = sl - entry
-            tps = [entry - risk * 1.5, entry - risk * 2.5]
-        else:
-            risk = max(sl - entry, a * 0.2)
-            valid_tps=[x for x in tps if x < entry]
-            if not valid_tps:
-                valid_tps=[entry-risk*1.5, entry-risk*2.5]
-            tps=sorted(valid_tps, reverse=True)
-            if len(tps)==1: tps.append(min(tps[0]-risk*0.5, entry-risk*2.5))
-        rr=(entry-tps[0])/max(sl-entry,1e-9)
-
-    out["signal"]=direction
-    out["entry"]=round(entry,4)
-    out["stop_loss"]=round(sl,4)
-    out["take_profit"]= [round(tps[0],4), round(tps[1],4)]
-    out["risk_reward"]=round(float(rr),2)
-    if not geometry_ok:
-        old_reason=str(out.get("reason") or "").strip()
-        note=f"{old_reason}; trade levels normalized to {direction} geometry" if old_reason else f"Trade levels normalized to {direction} geometry"
-        out["reason"]=note
-    return out
-
 def build_key_level_signal(candles: list[dict[str, Any]], levels: dict[str, Any], news_blocked: bool = False) -> dict[str, Any]:
     current = candles[-1]
     prev = candles[-2] if len(candles) > 1 else current
@@ -971,7 +809,7 @@ def build_key_level_signal(candles: list[dict[str, Any]], levels: dict[str, Any]
         result.update(setup="TARGET_REACHED", reason="S2/S3 target zone reached; fresh SELL entries are blocked.")
     elif bias == "BULLISH" and current["close"] >= levels["r2"]:
         result.update(setup="TARGET_REACHED", reason="R2/R3 target zone reached; fresh BUY entries are blocked.")
-    return normalize_trade_geometry(result, candles)
+    return result
 
 
 async def td_get(endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -1849,11 +1687,11 @@ def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dic
         sl = round(max(float(cur["high"]), levels["r1"]) + max(a*0.15, 0.1), 2)
         tp = [round(levels["s1"],2), round(levels["s2"],2)]
     else: sl=None; tp=[]
-    return normalize_trade_geometry({"signal":direction,"confidence":confidence,"score":score,"entry":entry,"stop_loss":sl,"take_profit":tp,
+    return {"signal":direction,"confidence":confidence,"score":score,"entry":entry,"stop_loss":sl,"take_profit":tp,
             "trend":trend,"rsi":round(r,2),"rsi_state":"OVERBOUGHT" if r>=70 else "OVERSOLD" if r<=30 else "NEUTRAL",
             "ema20":round(ema20,2),"ema50":round(ema50,2),"macd":round(macd_line,5),"macd_state":macd_state,
             "pattern":pattern,"pivot":levels["pivot"],"support":[levels["s1"],levels["s2"],levels["s3"]],"resistance":[levels["r1"],levels["r2"],levels["r3"]],
-            "reason":"; ".join(reasons),"method":"Classic · Trend + Pivot + SNR + RSI + MACD + EMA + Candlestick"}, candles)
+            "reason":"; ".join(reasons),"method":"Classic · Trend + Pivot + SNR + RSI + MACD + EMA + Candlestick"}
 
 async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict[str, Any], str | None]:
     """Classic Pivot levels based on the previous completed candle of the selected timeframe.
@@ -1913,7 +1751,7 @@ async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
             "Confidence must be an integer 0-100. Do not claim certainty or guaranteed profits.\n\n"
             + json.dumps(analysis_context, ensure_ascii=False, default=str)
         )
-        if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY, CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, HF_TOKEN, OPENAI_API_KEY)):
+        if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY, CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, DEEPSEEK_API_KEY, OPENAI_API_KEY)):
             try:
                 text, ai_provider = await ai_json_completion(prompt)
                 if text:
@@ -2553,28 +2391,9 @@ def _snr_zone_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
     else: signal="WAIT"
     confidence=max(sup["strength"],res["strength"]) if signal!="WAIT" else round((sup["strength"]+res["strength"])/2)
     pos="ABOVE RESISTANCE" if current>res["high"] else "BELOW SUPPORT" if current<sup["low"] else "NEAR SUPPORT" if current<=sup["mid"] else "NEAR RESISTANCE" if current>=res["mid"] else "BETWEEN ZONES"
-    if signal=="BUY":
-        entry=current; stop_loss=sup["low"]
-        # BUY targets must always be above entry. Select the nearest resistance above price.
-        above=[v for v in high_vals if float(v)>current + max(width*0.25, avtr*0.10)]
-        if above:
-            lvl=min(above)
-            take_profit=[round(lvl,4), round(lvl+max(width, avtr*0.40),4)]
-        else:
-            risk=max(entry-stop_loss, avtr*0.60)
-            take_profit=[round(entry+risk*1.5,4), round(entry+risk*2.5,4)]
-    elif signal=="SELL":
-        entry=current; stop_loss=res["high"]
-        # SELL targets must always be below entry. Select the nearest support below price.
-        below=[v for v in low_vals if float(v)<current - max(width*0.25, avtr*0.10)]
-        if below:
-            lvl=max(below)
-            take_profit=[round(lvl,4), round(lvl-max(width, avtr*0.40),4)]
-        else:
-            risk=max(stop_loss-entry, avtr*0.60)
-            take_profit=[round(entry-risk*1.5,4), round(entry-risk*2.5,4)]
-    else:
-        entry=current; stop_loss=None; take_profit=[]
+    if signal=="BUY": entry=current; stop_loss=sup["low"]; take_profit=[res["mid"],res["high"]]
+    elif signal=="SELL": entry=current; stop_loss=res["high"]; take_profit=[sup["mid"],sup["low"]]
+    else: entry=current; stop_loss=None; take_profit=[]
     strongest=max(sup,res,key=lambda z:z["strength"])
     reason=f"{pos.lower()}; strongest zone {strongest['strength']}% ({strongest['quality']}); Support {sup['strength']}% · Resistance {res['strength']}%."
     return {"support":sup,"resistance":res,"signal":signal,"confidence":confidence,"position":pos,
@@ -2709,7 +2528,6 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
             candle_time=closed_candles[-1].get("time")
             ai=await ai_validate_module_signal("Signal Lab",symbol,tf,candle_time,item)
             item=merge_ai_validation(item,ai)
-            item=normalize_trade_geometry(item, closed_candles)
             item["candle_time"]=candle_time
             # Every timeframe and signal component is calculated from the same
             # TradingView OHLC series returned by get_candles(). No secondary
@@ -2772,7 +2590,7 @@ async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, An
 
         if ai is None:
             ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI unavailable.", "mode": "fallback"}
-            if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY, CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, HF_TOKEN, OPENAI_API_KEY)):
+            if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY, CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, DEEPSEEK_API_KEY, OPENAI_API_KEY)):
                 try:
                     prompt = (
                         "You are the second-opinion validator for XAU/USD. "
@@ -3108,18 +2926,6 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 1
         if sl is None or tp1 is None or row.direction not in ("BUY", "SELL"):
             continue
 
-        # Never classify an upside target below a BUY entry (or a downside target above a SELL entry) as TP.
-        # Such legacy records are invalid setups, not successful trades.
-        geometry_ok = (row.direction == "BUY" and sl < entry and tp1 > entry) or (row.direction == "SELL" and sl > entry and tp1 < entry)
-        if not geometry_ok:
-            payload["result"] = {"type": "INVALID SETUP", "price": None, "reason": "TP/SL geometry contradicts signal direction; excluded from win-rate calculations."}
-            payload["trade_status"] = "INVALID"
-            row.payload = json.dumps(payload, ensure_ascii=False)
-            row.outcome = "INVALID"
-            row.closed_at = None
-            changed = True
-            continue
-
         tf = validate_interval(row.interval)
         if tf not in cache:
             try:
@@ -3364,7 +3170,6 @@ async def get_ict_signals(symbol: str) -> dict[str, Any]:
         candle_time=c5[-2].get("time") if len(c5)>1 else c5[-1].get("time")
         ai=await ai_validate_module_signal("ICT Signals",symbol,"5min",candle_time,result)
         result=merge_ai_validation(result,ai)
-        result=normalize_trade_geometry(result, c5[:-1] if len(c5)>1 else c5)
         result["candle_time"]=candle_time
         return {"ok":True,"symbol":symbol,"mode":"live","source":"TradingView/OANDA canonical candle series",
                 "m30_candles":len(c30),"m5_candles":len(c5),"warnings":[x for x in (w30,w5) if x],
@@ -3414,10 +3219,6 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
         ai_signal = str(ai_check.get("signal") or "WAIT").upper()
         risk_flags = ai_check.get("risk_flags") if isinstance(ai_check.get("risk_flags"), list) else []
         rr = float(item.get("risk_reward") or 0)
-        item = normalize_trade_geometry(item)
-        direction = str(item.get("signal") or direction).upper()
-        entry, sl, tp = item.get("entry"), item.get("stop_loss"), item.get("take_profit") or []
-        rr = float(item.get("risk_reward") or rr)
         if direction not in ("BUY", "SELL") or confidence < AUTO_ENTRY_THRESHOLD or entry is None or sl is None or not tp:
             continue
         if zone_quality < AUTO_ENTRY_MIN_ZONE or item.get("quality_grade") not in {"A+","A"}:
@@ -3484,7 +3285,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
             user_id=user.id, symbol=key, interval=tf, direction=direction,
             headline=f"AUTO ENTRY {direction} • {tf.upper()} • {confidence:.1f}%",
             price=float(entry), payload=json.dumps({"setup": {"entry": float(entry), "stop_loss": float(sl), "take_profit": [float(x) for x in tp]}, **trade_payload}, ensure_ascii=False),
-            outcome="OPEN", created_at=now, source="Auto Trading", candle_time=str(item.get("candle_time") or "")
+            outcome="OPEN", created_at=now
         )
         session.add(row)
         created.append({"interval": tf, "direction": direction, "confidence": confidence, "entry": float(entry), "sl": float(sl), "tp": [float(x) for x in tp]})
@@ -3554,7 +3355,6 @@ async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = D
     interval = validate_interval(interval)
     candles_data, mode, warning = await get_candles(clean_symbol(symbol), interval, 260)
     item = {**build_advanced_signal(candles_data, interval, news_blocked=False), "mode":mode, "warning":warning}
-    item = normalize_trade_geometry(item, candles_data)
     if not item or item.get("signal") not in ("BUY","SELL"):
         raise HTTPException(status_code=400, detail="Bu timeframe uchun tasdiqlangan BUY/SELL signal mavjud emas.")
     row = SignalHistory(user_id=user.id, symbol=clean_symbol(symbol), interval=interval, direction=item["signal"], headline=f'{item["signal"]} • {item["setup"]}', price=float(item["entry"]), payload=json.dumps({"advanced":item,"setup":{"entry":item.get("entry"),"stop_loss":item.get("stop_loss"),"take_profit":item.get("take_profit",[])},"symbol":clean_symbol(symbol),"interval":interval,"source":"Signal Lab","candle_time":candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")}), outcome="OPEN", created_at=datetime.now(timezone.utc), source="Signal Lab", candle_time=str(candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")))
@@ -3652,16 +3452,6 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         return {"saved": False, "duplicate": True, "id": existing.id}
     payload = dict(body.payload or {})
     setup_strength, setup_grade, strong_setup = _setup_strength_from_payload(payload, body.confidence)
-    # Reject contradictory module levels at the source so every module shares the same geometry rule.
-    try:
-        ent=float(body.entry) if body.entry is not None else None
-        slv=float(body.stop_loss) if body.stop_loss is not None else None
-        tpv=[float(x) for x in (body.take_profit or [])]
-        geometry_ok = ent is not None and slv is not None and bool(tpv) and ((direction=="BUY" and slv < ent < tpv[0]) or (direction=="SELL" and tpv[0] < ent < slv))
-    except (TypeError, ValueError):
-        geometry_ok=False
-    if not geometry_ok:
-        return {"saved": False, "reason": "INVALID_TRADE_GEOMETRY", "message": "BUY uchun SL < Entry < TP, SELL uchun TP < Entry < SL bo‘lishi shart."}
     payload.update({
         "source": source,
         "confidence_at_entry": body.confidence,
@@ -3682,21 +3472,10 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     session.add(row); session.commit(); session.refresh(row)
     return {"saved": True, "id": row.id, "source": source, "outcome": row.outcome}
 
-def _payload_is_auto_entry(raw: str | None) -> bool:
-    try:
-        p = json.loads(raw or "{}")
-        return bool(p.get("auto_entry"))
-    except Exception:
-        return False
-
 @app.get("/api/v1/signals/analytics")
-async def signal_analytics(period: str = Query("all"), date: str | None = Query(None), source: str | None = Query(None), auto_only: bool = Query(False), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def signal_analytics(period: str = Query("all"), date: str | None = Query(None), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
     rows = await refresh_signal_outcomes(session, user.id)
-    if auto_only:
-        rows = [r for r in rows if (getattr(r, "source", None) == "Auto Trading") or _payload_is_auto_entry(r.payload)]
-    elif source:
-        rows = [r for r in rows if (getattr(r, "source", None) or "Signals") == source]
     rows = filter_history_rows(rows, period, date)
     wins = sum(1 for r in rows if r.outcome == "TP HIT")
     losses = sum(1 for r in rows if r.outcome == "SL HIT")
@@ -3739,13 +3518,9 @@ async def save_signal(symbol: str, interval: str = DEFAULT_INTERVAL, authorizati
 
 
 @app.get("/api/v1/signals/history")
-async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Query("all"), date: str | None = Query(None), source: str | None = Query(None), auto_only: bool = Query(False), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Query("all"), date: str | None = Query(None), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
     rows = await refresh_signal_outcomes(session, user.id, limit=200)
-    if auto_only:
-        rows = [r for r in rows if (getattr(r, "source", None) == "Auto Trading") or _payload_is_auto_entry(r.payload)]
-    elif source:
-        rows = [r for r in rows if (getattr(r, "source", None) or "Signals") == source]
     rows = filter_history_rows(rows, period, date)
     rows = rows[-limit:][::-1]
     items = []
@@ -3767,6 +3542,8 @@ async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Que
 
 @app.get("/api/v1/ai/providers")
 async def ai_providers_status():
+    # Only configured providers are exposed to the dashboard. Missing-key
+    # providers are intentionally hidden instead of showing "OFFLINE".
     configured={
         "groq": bool(GROQ_API_KEY),
         "gemini": bool(GEMINI_API_KEY),
@@ -3775,11 +3552,37 @@ async def ai_providers_status():
         "mistral": bool(MISTRAL_API_KEY),
         "cerebras": bool(CEREBRAS_API_KEY),
         "cloudflare": bool(CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN),
-        "huggingface": bool(HF_TOKEN),
+        "deepseek": bool(DEEPSEEK_API_KEY),
         "openai": bool(OPENAI_API_KEY),
     }
-    models={"groq":GROQ_MODEL,"gemini":GEMINI_MODEL,"openrouter":OPENROUTER_MODEL,"groq_qwen":GROQ_QWEN_MODEL,"mistral":MISTRAL_MODEL,"cerebras":CEREBRAS_MODEL,"cloudflare":CLOUDFLARE_MODEL,"huggingface":HF_MODEL,"openai":OPENAI_MODEL}
-    return {"order":AI_FALLBACK_ORDER,"providers":[{"id":p,"configured":configured[p],"status":(AI_PROVIDER_STATUS.get(p) or {}).get("status", "READY" if configured[p] else "NOT_CONFIGURED"),"model":models[p]} for p in configured]}
+    models={"groq":GROQ_MODEL,"gemini":GEMINI_MODEL,"openrouter":OPENROUTER_MODEL,"groq_qwen":GROQ_QWEN_MODEL,"mistral":MISTRAL_MODEL,"cerebras":CEREBRAS_MODEL,"cloudflare":CLOUDFLARE_MODEL,"deepseek":DEEPSEEK_MODEL,"openai":OPENAI_MODEL}
+    providers=[]
+    now_mono = asyncio.get_running_loop().time()
+    def display_score(p: str) -> float:
+        prof=AI_PROVIDER_PROFILE.get(p, {"quality":70,"speed":70,"capacity":60,"cost":60})
+        base=prof["quality"]*0.40 + prof["speed"]*0.20 + prof["capacity"]*0.25 + prof["cost"]*0.15
+        st=AI_PROVIDER_STATUS.get(p) or {}
+        status=st.get("status") or "READY"
+        if status == "ONLINE": base += 8
+        elif status == "LIMITED": base -= 18
+        if AI_PROVIDER_COOLDOWN_UNTIL.get(p,0.0)>now_mono: base -= 35
+        return round(base,1)
+    configured_ids=[p for p in AI_FALLBACK_ORDER if p in configured and configured[p]]
+    for p in sorted(configured_ids, key=display_score, reverse=True):
+        st=AI_PROVIDER_STATUS.get(p) or {}
+        status=st.get("status") or "READY"
+        error=(st.get("error") or "").strip()
+        if status == "ONLINE":
+            reason="AI so‘rovi muvaffaqiyatli bajarildi."
+        elif status == "LIMITED":
+            reason=error or "Rate limit/quota vaqtincha cheklangan."
+        elif status == "OFFLINE":
+            reason=error or "Provider javob bermadi yoki API xatosi."
+        else:
+            reason="Hali real AI so‘rovi bilan tekshirilmagan."
+        prof=AI_PROVIDER_PROFILE.get(p,{"quality":70,"speed":70,"capacity":60,"cost":60})
+        providers.append({"id":p,"configured":True,"status":status,"model":models[p],"reason":reason,"checked_at":st.get("checked_at"),"score":display_score(p),"quality":prof["quality"],"speed":prof["speed"],"capacity":prof["capacity"],"cost":prof["cost"]})
+    return {"order":[x["id"] for x in providers],"router":"score","providers":providers}
 
 @app.get("/api/v1/mt5/status")
 async def mt5_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
