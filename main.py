@@ -1308,7 +1308,7 @@ async def fetch_yahoo_price(symbol: str) -> float:
 
 async def get_chart_history(symbol: str, interval: str, days: int = 31) -> tuple[list[dict[str, Any]], str, str | None]:
     data=await fetch_tradingview_candles(symbol,interval,min(CANDLE_LIMIT,TRADINGVIEW_BARS))
-    return data,"tradingview",f"TradingView {TRADINGVIEW_SYMBOL} chart series"
+    return data,"tradingview",f"TradingView {tv_symbol_for(symbol)} chart series"
 
 
 def _tv_session(prefix: str) -> str:
@@ -1317,6 +1317,13 @@ def _tv_session(prefix: str) -> str:
 def _tv_frame(method: str, params: list[Any]) -> str:
     payload=json.dumps({"m":method,"p":params},separators=(",",":"))
     return f"~m~{len(payload.encode('utf-8'))}~m~{payload}"
+
+def tv_symbol_for(symbol: str) -> str:
+    """Return the TradingView symbol matching the requested instrument page."""
+    key = clean_symbol(symbol)
+    if key in {"EURUSD", "EUR/USD"}:
+        return os.getenv("TRADINGVIEW_EURUSD_SYMBOL", "OANDA:EURUSD").strip() or "OANDA:EURUSD"
+    return os.getenv("TRADINGVIEW_SYMBOL", "OANDA:XAUUSD").strip() or "OANDA:XAUUSD"
 
 def _tv_interval(interval: str) -> str:
     return {"1min":"1","5min":"5","15min":"15","30min":"30","1h":"60","4h":"240","1day":"1D"}[validate_interval(interval)]
@@ -1346,8 +1353,9 @@ async def _fetch_tradingview_candles_once(symbol: str, interval: str, limit: int
             await send("chart_create_session",[cs,""])
             await send("quote_create_session",[qs])
             await send("quote_set_fields",[qs,"lp","ch","chp"])
-            await send("quote_add_symbols",[qs,TRADINGVIEW_SYMBOL])
-            resolve=json.dumps({"symbol":TRADINGVIEW_SYMBOL,"adjustment":"splits","session":"regular"},separators=(",",":"))
+            tv_symbol = tv_symbol_for(symbol)
+            await send("quote_add_symbols",[qs,tv_symbol])
+            resolve=json.dumps({"symbol":tv_symbol,"adjustment":"splits","session":"regular"},separators=(",",":"))
             await send("resolve_symbol",[cs,"sds_sym_1","="+resolve])
             await send("create_series",[cs,"sds_1","s1","sds_sym_1",tf,int(limit),""])
             deadline=asyncio.get_running_loop().time()+TRADINGVIEW_TIMEOUT
@@ -1420,14 +1428,8 @@ async def fetch_tradingview_candles(symbol: str, interval: str, limit: int = TRA
 
 
 async def fetch_tradingview_price(symbol: str) -> float:
-    """Return the TradingView/OANDA XAUUSD quote used by the embedded chart.
-
-    OANDA:XAUUSD is a CFD/metal symbol, so try TradingView's CFD scanner first.
-    The forex scanner is retained only as a compatibility fallback.  We NEVER
-    fall back to RealMarketAPI here: a different provider would create a visible
-    price mismatch between the dashboard and the TradingView chart.
-    """
-    tv_symbol = os.getenv("TRADINGVIEW_SYMBOL", "OANDA:XAUUSD").strip() or "OANDA:XAUUSD"
+    """Return the latest TradingView quote for the requested instrument."""
+    tv_symbol = tv_symbol_for(symbol)
     payload = {
         "filter": [],
         "options": {"lang": "en"},
@@ -1459,7 +1461,7 @@ async def fetch_tradingview_price(symbol: str) -> float:
                 errors.append(f"{market}: no close")
             except Exception as exc:
                 errors.append(f"{market}: {type(exc).__name__}: {exc}")
-    raise MarketDataError("TradingView OANDA:XAUUSD quote unavailable. " + " | ".join(errors))
+    raise MarketDataError(f"TradingView {tv_symbol} quote unavailable. " + " | ".join(errors))
 
 
 async def fetch_realmarket_price(symbol: str, interval: str = DEFAULT_INTERVAL) -> float:
@@ -1509,7 +1511,7 @@ async def fetch_live_price_any(symbol: str, interval: str = DEFAULT_INTERVAL) ->
     if cached and now-cached[0]<1.0:return cached[1],cached[2]
     bars=await fetch_tradingview_candles(symbol,interval,2)
     if not bars: raise MarketDataError("TradingView returned no live candle")
-    price=float(bars[-1]["close"]); source=f"TradingView {TRADINGVIEW_SYMBOL} chart series"
+    price=float(bars[-1]["close"]); source=f"TradingView {tv_symbol_for(symbol)} chart series"
     LIVE_PRICE_CACHE[key]=(now,price,source); return price,source
 
 def merge_live_price_into_candles(candles: list[dict[str, Any]], interval: str, price: float) -> list[dict[str, Any]]:
@@ -1541,7 +1543,7 @@ def merge_live_price_into_candles(candles: list[dict[str, Any]], interval: str, 
 async def get_candles(symbol: str, interval: str, limit: int) -> tuple[list[dict[str, Any]], str, str | None]:
     interval = validate_interval(interval)
     data, _, _ = await get_chart_history(symbol, interval, max(31, min(limit, 260)))
-    return data[-limit:], "tradingview", f"TradingView {TRADINGVIEW_SYMBOL} chart series"
+    return data[-limit:], "tradingview", f"TradingView {tv_symbol_for(symbol)} chart series"
 
 
 async def get_pivot_reference(symbol: str) -> tuple[dict[str, float], str | None]:
@@ -2898,7 +2900,7 @@ async def candles_endpoint(symbol: str, interval: str = Query(DEFAULT_INTERVAL),
             "interval": interval,
             "mode": "live",
             "provider": "TradingView",
-            "source": TRADINGVIEW_SYMBOL,
+            "source": tv_symbol_for(symbol),
             "candles": rows,
             "candle": rows[-1],
             "warning": None,
@@ -2931,7 +2933,7 @@ async def quote(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[st
         return {
             "symbol": symbol, "price": round(float(price), 4), "mode": "live",
             "provider": source, "timestamp": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
-            "source": "TradingView OANDA:XAUUSD chart series",
+            "source": tv_symbol_for(symbol),
         }
     except Exception as exc:
         raise HTTPException(status_code=503, detail="TradingView live quote unavailable: " + str(exc))
@@ -3007,7 +3009,7 @@ async def get_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> 
         technical["ai_validation"] = None
         return {
             "ok": True, "symbol": symbol, "interval": interval, "mode": "tradingview",
-            "provider": "TradingView", "source": TRADINGVIEW_SYMBOL,
+            "provider": "TradingView", "source": tv_symbol_for(symbol),
             "current_price": round(float(candles_data[-1]["close"]), 4),
             "candles": candles_data, "candle_time": candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time"), "levels": levels, "technical": technical,
             "setup": setup, "direction": setup.get("signal", "WAIT"),
@@ -3556,7 +3558,7 @@ async def live_signals(symbol: str) -> dict[str, Any]:
     # Every request recomputes signals from the current live candle feed.
     # No demo/static signal data is used.
     result = await build_advanced_signals(clean_symbol(symbol), news_blocked=False)
-    return {**result, "mode": "live", "source": f"TradingView {TRADINGVIEW_SYMBOL} chart series"}
+    return {**result, "mode": "live", "source": f"TradingView {tv_symbol_for(symbol)} chart series"}
 
 @app.post("/api/v1/signals/save-advanced")
 async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
@@ -3616,6 +3618,7 @@ class MT5StateBody(BaseModel):
     positions: int = 0
     error: str = ""
     candles: dict[str, list[dict[str, Any]]] = {}
+    markets: dict[str, dict[str, Any]] = {}
 
 class MT5ReportBody(BaseModel):
     action: str = ""
@@ -3883,6 +3886,32 @@ async def mt5_state(body: MT5StateBody, token: str = Query(...)) -> dict[str, An
     if not secrets.compare_digest(token, MT5_BRIDGE_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid MT5 bridge token")
     now_iso = datetime.now(timezone.utc).isoformat()
+    markets_payload = body.markets or {}
+    if markets_payload:
+        saved = []
+        for raw_key, raw_market in markets_payload.items():
+            key = _mt5_market_key(raw_key)
+            if not isinstance(raw_market, dict):
+                continue
+            snapshot = {
+                "connected": bool(raw_market.get("connected", body.connected)),
+                "account": raw_market.get("account") or body.login or None,
+                "server": raw_market.get("server") or body.server or None,
+                "balance": raw_market.get("balance", body.balance),
+                "equity": raw_market.get("equity", body.equity),
+                "free_margin": raw_market.get("free_margin", body.free_margin),
+                "margin": raw_market.get("margin", body.margin),
+                "positions": raw_market.get("positions", body.positions),
+                "last_seen": now_iso,
+                "last_error": raw_market.get("error") or body.error or "",
+                "symbol": key,
+                "candles": raw_market.get("candles") or {},
+            }
+            MT5_BRIDGE_STATE.setdefault("markets", {})[key] = snapshot
+            saved.append(key)
+        # Keep global heartbeat fresh while preserving the per-symbol snapshots.
+        MT5_BRIDGE_STATE.update({"connected": bool(body.connected), "login": body.login or None, "server": body.server or None, "last_seen": now_iso, "last_error": body.error or "", "symbol": saved[0] if saved else body.symbol or None})
+        return {"ok": True, "symbols": saved}
     key = _mt5_market_key(body.symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL)
     snapshot = {"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": now_iso, "last_error": body.error or "", "symbol": key, "candles": body.candles or {}}
     MT5_BRIDGE_STATE.update(snapshot)

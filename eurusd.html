@@ -88,6 +88,7 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
 .nav-external{display:block;width:100%;border:1px solid transparent;background:transparent;color:var(--gold);text-align:left;padding:11px 12px;border-radius:10px;cursor:pointer;font-weight:800}.nav-external:hover{background:#111923;color:#fff}.nav-external::after{content:" ↗";opacity:.65}
 </style>
 
+<style>
 /* Premium 3D liquid-glass instrument logo */
 .brand{position:relative;gap:9px;flex-wrap:wrap}
 .brand-logo{position:relative;flex:0 0 auto;width:54px;height:54px;border-radius:18px;display:grid;place-items:center;overflow:visible;background:linear-gradient(145deg,rgba(255,255,255,.13),rgba(245,193,93,.06) 45%,rgba(0,0,0,.18));border:1px solid rgba(245,193,93,.34);box-shadow:inset 0 1px 0 rgba(255,255,255,.24),0 10px 28px rgba(0,0,0,.26),0 0 26px rgba(245,193,93,.11);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);transform:translateZ(0);animation:logoFloat 4.8s ease-in-out infinite}
@@ -105,6 +106,7 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
 @keyframes logoPulse{0%,100%{transform:perspective(180px) rotateX(10deg) rotateY(-10deg) scale(1)}50%{transform:perspective(180px) rotateX(-4deg) rotateY(7deg) scale(1.06)}}
 @keyframes logoFloat{0%,100%{transform:translateY(0) rotate(0deg)}50%{transform:translateY(-3px) rotate(.5deg)}}
 @media(max-width:900px){.brand-logo{width:46px;height:46px;border-radius:15px}.logo-core{width:32px;height:32px}.brand-eur .logo-core,.brand-eur .logo-core b{font-size:18px}}
+</style>
 </head>
 <body>
 <div class="gold-3d-orb"></div>
@@ -140,7 +142,7 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
     <div class="dashboard">
       <div>
         <div class="card"><div class="hero"><div><div class="symbol">EUR/USD</div><div class="sub" id="tfLabel">5 MIN</div><div class="countdown-box"><div class="countdown-label">Candle closes</div><div class="countdown" id="countdown">—</div><div class="close-time" id="closeTime">Close time: —</div></div></div><div><div class="price" id="price">—</div><div class="change" id="change">—</div></div></div>
-          <div class="history-note"><span id="historyInfo">Tarix yuklanmoqda…</span><span>Real market history</span></div><div class="tfbar" id="timeframes"><button class="tf" data-interval="1min">1M</button><button class="tf active" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div>
+          <div class="history-note"><span id="historyInfo">Tarix yuklanmoqda…</span><span>EURUSD real market history</span></div><div class="tfbar" id="timeframes"><button class="tf" data-interval="1min">1M</button><button class="tf active" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div>
           <div class="chart" id="chart"></div></div>
         <div class="card"><div class="section-head"><div><h3>Signal Engine</h3><div class="mini">Har bir timeframe uchun alohida signal</div></div><div><span class="pill" id="bias">—</span> <button class="btn" id="refreshSignalEngine" type="button">↻ Yangilash</button></div></div><div class="signal-box"><div class="signal-main wait" id="signalMain">WAIT</div><div class="mini" id="signalReason">—</div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Entry</small><b id="entry">—</b></div><div class="metric"><small>SL</small><b id="sl">—</b></div><div class="metric"><small>TP1</small><b id="tp1">—</b></div><div class="metric"><small>TP2</small><b id="tp2">—</b></div></div></div><div id="signalEngineGrid" class="advanced-grid" style="margin-top:12px"></div><div style="margin-top:10px"><button class="btn primary" id="saveSignal" type="button">Signalni saqlash</button></div></div>
       </div>

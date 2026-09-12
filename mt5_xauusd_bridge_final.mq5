@@ -1,6 +1,6 @@
 #property strict
 #property version "1.2"
-#property description "XAUUSD Railway <-> Exness MT5 DEMO bridge"
+#property description "XAUUSD + EURUSD Railway <-> Exness MT5 DEMO bridge"
 #include <Trade/Trade.mqh>
 CTrade trade;
 
@@ -15,6 +15,8 @@ string Url(string path){ return ApiBase+path; }
 datetime g_last_state=0;
 string JsonEscape(string s){ StringReplace(s,"\\","\\\\"); StringReplace(s,"\"","\\\""); return s; }
 string ExecSymbol(){ string s=TradeSymbol; if(StringLen(s)==0) s=_Symbol; return s; }
+string XAUStateSymbol(){ return "XAUUSDm"; }
+string EURStateSymbol(){ return "EURUSDm"; }
 string TFKey(ENUM_TIMEFRAMES tf){
    if(tf==PERIOD_M1) return "1min";
    if(tf==PERIOD_M5) return "5min";
@@ -58,12 +60,12 @@ bool EnsureSymbol(string symbol){
    return true;
 }
 
-void ReportState(){
-   string symbol=ExecSymbol();
-   string body="{";
+void AppendMarketState(string &body, string symbol, ENUM_TIMEFRAMES tfs[], int n, bool &firstMarket){
+   if(!EnsureSymbol(symbol)) return;
+   if(!firstMarket) body += ","; firstMarket=false;
+   body += "\"" + JsonEscape(symbol) + "\":{";
    body += "\"connected\":true";
-   body += ",\"symbol\":\"" + JsonEscape(symbol) + "\"";
-   body += ",\"login\":\"" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + "\"";
+   body += ",\"account\":\"" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + "\"";
    body += ",\"server\":\"" + JsonEscape(AccountInfoString(ACCOUNT_SERVER)) + "\"";
    body += ",\"balance\":" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE),2);
    body += ",\"equity\":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY),2);
@@ -71,13 +73,32 @@ void ReportState(){
    body += ",\"margin\":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN),2);
    body += ",\"positions\":" + IntegerToString(PositionsTotal());
    body += ",\"candles\":{";
-   ENUM_TIMEFRAMES tfs[6]={PERIOD_M5,PERIOD_M15,PERIOD_M30,PERIOD_H1,PERIOD_H4,PERIOD_D1};
-   for(int i=0;i<6;i++){
+   for(int i=0;i<n;i++){
       if(i>0) body+=","; string k=TFKey(tfs[i]);
       body += "\""+k+"\":"+RatesJson(symbol,tfs[i],120);
    }
    body += "}}";
-   Print("[MT5 BRIDGE] STATE BODY size=",StringLen(body));
+}
+
+void ReportState(){
+   ENUM_TIMEFRAMES tfs[6]={PERIOD_M5,PERIOD_M15,PERIOD_M30,PERIOD_H1,PERIOD_H4,PERIOD_D1};
+   string body="{";
+   body += "\"connected\":true";
+   body += ",\"symbol\":\"XAUUSDm\"";
+   body += ",\"login\":\"" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + "\"";
+   body += ",\"server\":\"" + JsonEscape(AccountInfoString(ACCOUNT_SERVER)) + "\"";
+   body += ",\"balance\":" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE),2);
+   body += ",\"equity\":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY),2);
+   body += ",\"free_margin\":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_FREE),2);
+   body += ",\"margin\":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN),2);
+   body += ",\"positions\":" + IntegerToString(PositionsTotal());
+   body += ",\"candles\":{}";
+   body += ",\"markets\":{";
+   bool firstMarket=true;
+   AppendMarketState(body,XAUStateSymbol(),tfs,6,firstMarket);
+   AppendMarketState(body,EURStateSymbol(),tfs,6,firstMarket);
+   body += "}}";
+   Print("[MT5 BRIDGE] DUAL STATE BODY size=",StringLen(body));
    string out; Http("POST",Url("/api/v1/mt5/state?token="+BridgeToken),body,out);
 }
 
@@ -136,8 +157,9 @@ void OnTimer(){
       double vol=ExtractNumber(out,"volume",pos); if(vol<=0) vol=DefaultLot;
       string symbol=ExecSymbol();
       string req=StringUpper(requested_symbol);
+      if(StringFind(req,"EURUSD")>=0) symbol=EURStateSymbol(); else if(StringFind(req,"XAUUSD")>=0) symbol=XAUStateSymbol();
       string chart=StringUpper(symbol);
-      bool requested_matches_chart=(StringLen(req)==0) || ((StringFind(req,"XAUUSD")>=0 && StringFind(chart,"XAUUSD")>=0) || (StringFind(req,"EURUSD")>=0 && StringFind(chart,"EURUSD")>=0));
+      bool requested_matches_chart=(StringLen(req)==0) || ((StringFind(req,"XAUUSD")>=0 && StringFind(StringUpper(symbol),"XAUUSD")>=0) || (StringFind(req,"EURUSD")>=0 && StringFind(StringUpper(symbol),"EURUSD")>=0));
 
       bool ok=false;
       if(!requested_matches_chart){
