@@ -245,7 +245,9 @@ body:before{background:radial-gradient(circle at 20% 20%,rgba(0,153,255,.12),tra
 @media(max-width:390px){.main{padding:6px!important}.nav button{padding:7px 8px!important;font-size:10px!important}.btn,.tf{padding:7px 8px!important;font-size:10px!important}.card{padding:8px!important}.chart{height:325px!important}.brand-copy b{font-size:18px!important}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
 </style>
-<link rel="stylesheet" href="/signalx-premium-theme.css?v=20260912-exact">
+<link rel="stylesheet" href="signalx-premium-theme.css?v=20260912-exact">
+<link rel="stylesheet" href="signalx-exact-shell.css?v=20260912-exact-shell-1">
+<link rel="stylesheet" href="signalx-reference-final.css?v=20260912-reference-final-1">
 </head>
 <body>
 <div class="gold-3d-orb"></div>
@@ -271,32 +273,60 @@ body:before{background:radial-gradient(circle at 20% 20%,rgba(0,153,255,.12),tra
     <button data-section="activeSessionsSection">◉ Aktiv Seanslar</button>
     <button class="admin-only" data-section="mt5Section">◉ MetaTrader 5</button>
     <button type="button" id="xauUsdPageBtn" class="nav-external">🥇 XAUUSD</button>
+    <button id="mobileMoreBtn" type="button" aria-label="More">☰</button>
   </div>
   <div class="sidebar-bottom"><div class="tiny">Pivot + Key Levels engine<br>Live data via backend API</div><button class="sx-pro-btn" id="goProBtn" type="button">👑 GO PRO →</button></div>
 </aside>
 <main class="main">
+  <div class="sx-mobile-top"><div><strong>SignalX</strong><span>SMARTER TRADING</span></div><div class="pill">LIVE</div></div>
   <div class="topbar"><div><h1 id="pageTitle" class="title-shimmer">EURUSD Market Overview</h1><p>Har bir bo‘lim alohida ishlaydi. Timeframe o‘zgarsa tanlangan modul qayta hisoblanadi.</p></div><div class="tools"><div class="health"><span class="dot"></span><span class="pill" id="mode">Checking…</span></div><span class="pill" id="plan">Guest</span><button class="btn primary auth-top" id="authBtn">Kirish</button></div></div>
 
   <section class="section active" id="overview">
-    <div class="signalx-visual-hero" aria-hidden="true">
-      <div class="sx-hero-copy"><span>WELCOME TO</span><strong>SignalX</strong><em>AI POWERED TRADING TERMINAL</em></div>
-      <div class="sx-hero-orbit"><i></i><b></b><span></span></div>
-      <div class="sx-hero-tag">TRADE SMARTER<br><small>DISCIPLINE TODAY • PROFIT TOMORROW</small></div>
+    <div class="sx-ref-hero" role="img" aria-label="SignalX neon trading terminal hero">
+      <div class="sx-ref-hero-overlay"></div>
+      <div class="sx-hero-live">● LIVE MARKET</div>
     </div>
-    <div class="dashboard">
-      <div>
-        <div class="card"><div class="hero"><div><div class="symbol">EUR/USD</div><div class="sub" id="tfLabel">5 MIN</div><div class="countdown-box"><div class="countdown-label">Candle closes</div><div class="countdown" id="countdown">—</div><div class="close-time" id="closeTime">Close time: —</div></div></div><div><div class="price" id="price">—</div><div class="change" id="change">—</div></div></div>
-          <div class="history-note"><span id="historyInfo">Tarix yuklanmoqda…</span><span>EURUSD real market history</span></div><div class="tfbar" id="timeframes"><button class="tf" data-interval="1min">1M</button><button class="tf active" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div>
-          <div class="chart" id="chart"></div></div>
-        <div class="card admin-only"><div class="section-head"><div><h3>Signal Engine</h3><div class="mini">Har bir timeframe uchun alohida signal</div></div><div><span class="pill" id="bias">—</span> <button class="btn" id="refreshSignalEngine" type="button">↻ Yangilash</button></div></div><div class="signal-box"><div class="signal-main wait" id="signalMain">WAIT</div><div class="mini" id="signalReason">—</div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Entry</small><b id="entry">—</b></div><div class="metric"><small>SL</small><b id="sl">—</b></div><div class="metric"><small>TP1</small><b id="tp1">—</b></div><div class="metric"><small>TP2</small><b id="tp2">—</b></div></div></div><div id="signalEngineGrid" class="advanced-grid" style="margin-top:12px"></div><div style="margin-top:10px"><button class="btn primary" id="saveSignal" type="button">Signalni saqlash</button></div></div>
+    <div class="sx-metrics-row">
+      <div class="sx-metric"><span>▣</span><div><b>15+</b><small>Technical Indicators</small></div></div>
+      <div class="sx-metric"><span>◷</span><div><b>24/7</b><small>Market Monitoring</small></div></div>
+      <div class="sx-metric"><span>◈</span><div><b>99.8%</b><small>System Uptime</small></div></div>
+      <div class="sx-metric"><span>✦</span><div><b>AI</b><small>Powered Analysis</small></div></div>
+      <div class="sx-metric"><span>▱</span><div><b>5 Assets</b><small>XAUUSD · EURUSD · BTC · USOIL · GBPUSD</small></div></div>
+    </div>
+    <div class="sx-terminal-grid">
+      <div class="sx-main-column">
+        <div class="card sx-market-card">
+          <div class="sx-market-head">
+            <div class="sx-symbol-block"><div class="sx-coin">●</div><div><div class="symbol">XAUUSD</div><div class="sub">Gold Spot / U.S. Dollar</div></div></div>
+            <div class="sx-price-block"><div class="price" id="price">—</div><div class="change up" id="change">TradingView LIVE</div></div>
+            <div class="sx-market-stats"><span>High <b>—</b></span><span>Low <b>—</b></span><span>Open <b>—</b></span><span>Volume <b>—</b></span></div>
+            <div class="sx-buy-sell"><button class="btn primary">Buy</button><button class="btn danger">Sell</button></div>
+          </div>
+          <div class="tfbar" id="timeframes"><button class="tf" data-interval="1min">1M</button><button class="tf active" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button><span class="sx-chart-tool">⌁ Indicators</span><span class="sx-chart-tool">♧ Alert</span><span class="sx-chart-tool">↻ Replay</span></div>
+          <div class="sx-chart-meta"><span id="tfLabel">5 MIN</span><span id="historyInfo">TradingView LIVE · Real market history</span><span id="closeTime">Close time: —</span></div>
+          <div class="chart" id="chart"></div>
+          <div class="sx-rsi-line"><span>RSI 14</span><b>56.27</b><i></i></div>
+        </div>
       </div>
-      <aside>
-        <div class="card"><div class="section-head"><h3>Pivot / Key Levels</h3><span class="pill" id="pivotFilter">5 MIN</span></div><div class="tfbar pivot-tfbar" id="pivotTfBar"><button class="tf" data-pivot-interval="1min">1M</button><button class="tf active" data-pivot-interval="5min">5M</button><button class="tf" data-pivot-interval="15min">15M</button><button class="tf" data-pivot-interval="30min">30M</button><button class="tf" data-pivot-interval="1h">1H</button><button class="tf" data-pivot-interval="4h">4H</button><button class="tf" data-pivot-interval="1day">1D</button></div><div class="levels" id="levels"></div><div class="mini" id="pivotSource" style="margin-top:8px">Selected timeframe Pivot</div></div>
-        <div class="card"><div class="section-head"><h3>Performance</h3><button class="btn" id="refreshStats">↻</button></div><div class="grid2"><div class="metric"><small>Total</small><b id="totalSignals">0</b></div><div class="metric"><small>Completed</small><b id="completedSignals">0</b></div><div class="metric"><small>Wins</small><b id="wins">0</b></div><div class="metric"><small>Losses</small><b id="losses">0</b></div></div><div class="metric" style="margin-top:8px"><small>Winrate (TP HIT / TP HIT + SL HIT)</small><b id="winrate">0%</b></div></div>
-        <div class="card admin-only"><div class="section-head"><div><h3>AI Fallback Network</h3><div class="mini">AI faqat signal tasdig‘ida chaqiriladi · oddiy refresh AI request yubormaydi</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" id="aiAutoMode" type="button">AUTO</button><button class="btn" id="aiAllOn" type="button">ALL ON</button><button class="btn" id="aiAllOff" type="button">ALL OFF</button><button class="btn" id="refreshAIProviders" type="button">↻</button></div></div><div id="aiProvidersGrid" class="component-grid" style="margin-top:10px"></div></div>
-        <div class="card"><div class="section-head"><h3>Market Sessions</h3><span class="pill" id="sessionClock">—</span></div><div class="sessions" id="sessions"></div></div>
+      <aside class="sx-right-column">
+        <div class="card sx-ai-card admin-only">
+          <div class="section-head"><h3>◈ AI Signal <span>(Admin Only)</span></h3><span class="sx-live-badge">● Live</span></div>
+          <div class="sx-ai-row"><b>🟡 XAUUSD</b><strong class="buy">STRONG BUY</strong></div>
+          <div class="sx-levels"><span>Entry <b id="entry">—</b></span><span>TP1 <b id="tp1">—</b></span><span>TP2 <b id="tp2">—</b></span><span>SL <b id="sl">—</b></span></div>
+          <div class="sx-confidence"><div><span>Confidence</span><b id="bias">—</b></div><div class="sx-progress"><i></i></div></div>
+          <div class="sx-ai-face">AI</div><button class="btn primary sx-full" id="refreshSignalEngine" type="button">✦ Get AI Analysis</button>
+          <div class="mini" id="signalReason">AI tasdiqlash faqat administrator uchun.</div><div class="signal-main wait" id="signalMain" style="display:none">WAIT</div>
+        </div>
+        <div class="card sx-sentiment-card"><div class="section-head"><h3>◉ Market Sentiment</h3><span class="sx-chevron">›</span></div><div class="sx-sentiment-body"><div class="sx-donut"><div><b>72%</b><small>Bullish</small></div></div><div class="sx-legend"><span><i class="bull"></i>72% Bullish</span><span><i class="neutral"></i>18% Neutral</span><span><i class="bear"></i>10% Bearish</span></div></div></div>
+        <div class="card sx-news-card"><div class="section-head"><h3>◉ Live Market News</h3><span class="sx-view">View All →</span></div><div class="sx-news-item"><b>16:00</b><span>USD Core CPI (MoM)</span><em>High</em><small>2h 33m</small></div><div class="sx-news-item"><b>18:30</b><span>USD Crude Oil Inventories</span><em>High</em><small>5h 3m</small></div><div class="sx-news-item"><b>20:00</b><span>FOMC Press Conference</span><em>High</em><small>6h 33m</small></div></div>
       </aside>
     </div>
+    <div class="sx-bottom-grid">
+      <div class="card sx-bottom-card"><div class="section-head"><h3>♛ Latest Signals</h3><span class="sx-view">View All →</span></div><div class="sx-signal-row"><span>🟡 XAUUSD</span><b class="buy">BUY</b><strong>3,642.50</strong><em>87%</em><small>2m ago</small></div><div class="sx-signal-row"><span>🇺🇸 EURUSD</span><b class="sell">SELL</b><strong>1.1073</strong><em>82%</em><small>15m ago</small></div><div class="sx-signal-row"><span>🟡 XAUUSD</span><b class="buy">BUY</b><strong>3,638.20</strong><em>78%</em><small>1h ago</small></div><div class="sx-signal-row"><span>🇺🇸 EURUSD</span><b class="sell">SELL</b><strong>1.1068</strong><em>75%</em><small>2h ago</small></div></div>
+      <div class="card sx-bottom-card"><div class="section-head"><h3>◉ Active Sessions</h3><span class="sx-view">View All →</span></div><div class="sx-session-row"><span>🇺🇿</span><div><b>Tashkent, UZ</b><small>Windows · Chrome</small></div><em>● Online</em><small>Now</small></div><div class="sx-session-row"><span>🇷🇺</span><div><b>Moscow, RU</b><small>Windows · Chrome</small></div><em>● Online</em><small>2m ago</small></div><div class="sx-session-row"><span>🇹🇷</span><div><b>Istanbul, TR</b><small>iPhone · Safari</small></div><em>● Online</em><small>5m ago</small></div><div class="sx-session-row"><span>🇺🇸</span><div><b>New York, US</b><small>Windows · Edge</small></div><em>● Online</em><small>12m ago</small></div></div>
+      <div class="card sx-bottom-card sx-performance"><div class="section-head"><h3>▣ Performance <span>(This Month)</span></h3><button class="btn">This Month⌄</button></div><div class="sx-perf-stats"><div><small>Total Signals</small><b id="totalSignals">0</b></div><div><small>Win Rate</small><b id="winrate">0%</b></div><div><small>Total Profit</small><b>+245.6%</b></div></div><div class="sx-bars"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="sx-chart-labels">1&nbsp;&nbsp;&nbsp;5&nbsp;&nbsp;&nbsp;10&nbsp;&nbsp;&nbsp;15&nbsp;&nbsp;&nbsp;20&nbsp;&nbsp;&nbsp;25&nbsp;&nbsp;&nbsp;30</div></div>
+    </div>
+    <div class="sx-engine-cache" aria-hidden="true"><div id="countdown">—</div><div id="closeTimeCache">—</div><div id="pivotFilter">5 MIN</div><div id="pivotSource">Selected timeframe Pivot</div><div id="levels"></div><div id="sessionClock">—</div><div id="sessions"></div><div id="aiProvidersGrid"></div><div id="completedSignals">0</div><div id="wins">0</div><div id="losses">0</div><div id="signalEngineGrid"></div><button id="saveSignal" type="button"></button><button id="refreshStats" type="button"></button><button id="refreshAISignals" type="button"></button></div>
   </section>
 
   <section class="section" id="chartSection"><div class="card"><div class="section-head"><h2>Live Chart</h2><span class="pill" id="chartStatus">—</span></div><div class="tfbar"><button class="tf" data-interval="1min">1M</button><button class="tf" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div><div class="chart" id="chart2"></div></div></section>
@@ -414,6 +444,30 @@ body:before{background:radial-gradient(circle at 20% 20%,rgba(0,153,255,.12),tra
   </div>
 </div>
 
-<script src="/config.js?v=20260908f"></script>
-<script src="/app.js?v=20260912-eurusd-nav-fix-2"></script>
+<script>
+/* SignalX UI interaction bridge: navigation/visual controls only. TradingView and MT5 internals are untouched. */
+(function(){
+  function toast(msg){
+    var t=document.getElementById('toast');
+    if(!t){t=document.createElement('div');t.id='toast';t.className='toast';document.body.appendChild(t)}
+    t.textContent=msg;t.classList.add('show');clearTimeout(window.__sxToast);window.__sxToast=setTimeout(function(){t.classList.remove('show')},1800)
+  }
+  document.addEventListener('click',function(e){
+    var el=e.target.closest && e.target.closest('.sx-chart-tool');
+    if(el){toast(el.textContent.trim()+' — TradingView chart boshqaruvi');return}
+    var buy=e.target.closest && e.target.closest('.sx-buy-sell .btn');
+    if(buy){toast((buy.textContent.trim()||'Order')+' — Demo action');return}
+    var view=e.target.closest && e.target.closest('.sx-view');
+    if(view){
+      var card=view.closest('.sx-bottom-card');
+      if(card && /latest signals/i.test(card.textContent)) window.openSection && window.openSection('historySection');
+      else if(card && /active sessions/i.test(card.textContent)) window.openSection && window.openSection('activeSessionsSection');
+      return;
+    }
+  },true);
+})();
+</script>
+<script src="config.js?v=20260908f"></script>
+<script src="app.js?v=20260912-eurusd-nav-fix-2"></script>
+<script src="signalx-mobile-nav.js?v=20260912-mobile-nav-1"></script>
 </body></html>
