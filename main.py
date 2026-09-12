@@ -316,7 +316,7 @@ TRADINGVIEW_TIMEOUT = float(os.getenv("TRADINGVIEW_TIMEOUT", "10"))
 MT5_BRIDGE_TOKEN = os.getenv("MT5_BRIDGE_TOKEN", "change-this-mt5-bridge-token").strip()
 MT5_AUTO_TRADING = os.getenv("MT5_AUTO_TRADING", "false").lower() == "true"
 MT5_LOT_SIZE = float(os.getenv("MT5_DEFAULT_LOT", "0.01"))
-MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "candles": {}}
+MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "symbol": None, "candles": {}, "markets": {}}
 MT5_ORDER_QUEUE: list[dict[str, Any]] = []
 MT5_ORDER_ATTEMPTS: dict[str, int] = {}
 TRADINGVIEW_CACHE_TTL = float(os.getenv("TRADINGVIEW_CACHE_TTL", "2.0"))
@@ -3398,11 +3398,32 @@ def _mt5_is_connected_now() -> bool:
     age = _mt5_last_seen_age()
     return age is not None and age <= MT5_HEARTBEAT_TIMEOUT
 
-def get_mt5_candles(interval: str, limit: int = 320) -> list[dict[str, Any]]:
-    if not _mt5_state_fresh():
-        raise MarketDataError("Exness MT5 bridge ulanmagan yoki candle ma'lumoti eskirgan")
+def _mt5_market_key(symbol: str | None) -> str:
+    key = clean_symbol(symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL)
+    if key in {"XAUUSD", "XAU/USD"}: return "XAU/USD"
+    if key in {"EURUSD", "EUR/USD"}: return "EUR/USD"
+    return key
+
+def _mt5_market_state(symbol: str | None) -> dict[str, Any]:
+    mk = _mt5_market_key(symbol)
+    markets = MT5_BRIDGE_STATE.get("markets") or {}
+    if mk in markets and isinstance(markets[mk], dict):
+        return markets[mk]
+    return MT5_BRIDGE_STATE
+
+def get_mt5_candles(interval: str, limit: int = 320, symbol: str | None = None) -> list[dict[str, Any]]:
+    market = _mt5_market_state(symbol)
+    if not market.get("connected"):
+        raise MarketDataError(f"Exness MT5 bridge {clean_symbol(symbol or DEFAULT_SYMBOL)} uchun ulanmagan")
+    raw_seen = market.get("last_seen")
+    try:
+        age = max(0.0, (datetime.now(timezone.utc) - datetime.fromisoformat(str(raw_seen).replace("Z", "+00:00"))).total_seconds()) if raw_seen else None
+    except Exception:
+        age = None
+    if age is None or age > MT5_CANDLE_MAX_AGE:
+        raise MarketDataError(f"Exness MT5 {clean_symbol(symbol or DEFAULT_SYMBOL)} candle ma'lumoti eskirgan")
     key = MT5_TF_KEYS.get(validate_interval(interval), validate_interval(interval))
-    rows = (MT5_BRIDGE_STATE.get("candles") or {}).get(key) or []
+    rows = (market.get("candles") or {}).get(key) or []
     out=[]
     for c in rows:
         try:
@@ -3417,12 +3438,12 @@ async def trend_lines(symbol: str, interval: str = DEFAULT_INTERVAL) -> dict[str
     interval = validate_interval(interval)
     key = clean_symbol(symbol)
     try:
-        candles_data = get_mt5_candles(interval, 320)
+        candles_data = get_mt5_candles(interval, 320, key)
         closed = candles_data[:-1] if len(candles_data) > 1 else candles_data
         tl = _trendline_analysis(closed)
         fib = _fibonacci_analysis(closed)
         return {"symbol": key, "interval": interval, "candles": candles_data[-260:], "trendline": tl, "fibonacci": fib,
-                "mode": "mt5", "warning": None, "provider": "Exness MT5", "source": "MT5 XAUUSDm terminal candles",
+                "mode": "mt5", "warning": None, "provider": "Exness MT5", "source": f"MT5 {key} terminal candles",
                 "generated_at": datetime.now(timezone.utc).isoformat()}
     except Exception as exc:
         return {"symbol": key, "interval": interval, "candles": [],
@@ -3486,6 +3507,7 @@ class MT5LotBody(BaseModel):
 
 class MT5StateBody(BaseModel):
     connected: bool = False
+    symbol: str = ""
     login: str = ""
     server: str = ""
     balance: float | None = None
@@ -3696,18 +3718,19 @@ async def ai_providers_status():
     return {"order":[x["id"] for x in providers],"router":"score","providers":providers}
 
 @app.get("/api/v1/mt5/status")
-async def mt5_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    state = dict(MT5_BRIDGE_STATE)
-    age = _mt5_last_seen_age()
-    connected_now = _mt5_is_connected_now()
+async def mt5_status(symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+    key = _mt5_market_key(symbol)
+    state = dict(_mt5_market_state(key))
+    raw_seen = state.get("last_seen")
+    try:
+        age = max(0.0, (datetime.now(timezone.utc) - datetime.fromisoformat(str(raw_seen).replace("Z", "+00:00"))).total_seconds()) if raw_seen else None
+    except Exception:
+        age = None
+    connected_now = bool(state.get("connected")) and age is not None and age <= MT5_HEARTBEAT_TIMEOUT
     state["connected"] = connected_now
     state["heartbeat_age_sec"] = round(age, 1) if age is not None else None
     state["connection_state"] = "CONNECTED" if connected_now else ("STALE" if age is not None and age <= 60 else "DISCONNECTED")
-    if not connected_now and MT5_BRIDGE_STATE.get("connected"):
-        # Prevent an old heartbeat from being treated as a live terminal forever.
-        MT5_BRIDGE_STATE["connected"] = False
-        state["connected"] = False
-    return {"ok": True, "auto_trading": MT5_AUTO_TRADING, "lot": MT5_LOT_SIZE, "state": state, "queue": len(MT5_ORDER_QUEUE), "demo_only": True, "heartbeat_timeout_sec": MT5_HEARTBEAT_TIMEOUT}
+    return {"ok": True, "symbol": key, "auto_trading": MT5_AUTO_TRADING, "lot": MT5_LOT_SIZE, "state": state, "queue": len(MT5_ORDER_QUEUE), "demo_only": True, "heartbeat_timeout_sec": MT5_HEARTBEAT_TIMEOUT}
 
 @app.post("/api/v1/mt5/connect")
 async def mt5_connect(body: MT5ConnectBody, authorization: str | None = Header(default=None)) -> dict[str, Any]:
@@ -3760,8 +3783,12 @@ async def mt5_poll(token: str = Query(...)) -> dict[str, Any]:
 async def mt5_state(body: MT5StateBody, token: str = Query(...)) -> dict[str, Any]:
     if not secrets.compare_digest(token, MT5_BRIDGE_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid MT5 bridge token")
-    MT5_BRIDGE_STATE.update({"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": datetime.now(timezone.utc).isoformat(), "last_error": body.error or "", "candles": body.candles or {}})
-    return {"ok": True}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    key = _mt5_market_key(body.symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL)
+    snapshot = {"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": now_iso, "last_error": body.error or "", "symbol": key, "candles": body.candles or {}}
+    MT5_BRIDGE_STATE.update(snapshot)
+    MT5_BRIDGE_STATE.setdefault("markets", {})[key] = snapshot
+    return {"ok": True, "symbol": key}
 
 @app.post("/api/v1/mt5/report")
 async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, Any]:
@@ -3793,6 +3820,10 @@ async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, 
 @app.get("/api/health")
 async def api_health() -> dict[str, Any]:
     return {"ok": True, "service": "xauusd-trading", "timestamp": datetime.now(timezone.utc).isoformat()}
+
+@app.get("/eurusd")
+async def read_eurusd() -> FileResponse:
+    return FileResponse(os.path.join(BASE_DIR, "eurusd.html"))
 
 @app.get("/")
 async def read_root() -> FileResponse:

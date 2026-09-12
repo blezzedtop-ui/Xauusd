@@ -1,4 +1,4 @@
-const symbol='XAU/USD';let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,lastRestQuoteAt=0,streamKey='';
+const IS_EUR_PAGE=/^\/eurusd(?:\/?$)/i.test(location.pathname);const symbol=IS_EUR_PAGE?'EUR/USD':'XAU/USD';const TV_SYMBOL=IS_EUR_PAGE?'OANDA:EURUSD':'OANDA:XAUUSD';let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,lastRestQuoteAt=0,streamKey='';
 const $=id=>document.getElementById(id);let trendLineInterval='5min';let trendLiveRefreshTimer=null;let trendOverlayChart=null,trendOverlaySeries=null,trendOverlayLayers=[];const setText=(id,v)=>{const el=$(id);if(el)el.textContent=v??'—';};const fmt=v=>v==null?'—':Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
 function showToast(m){$('toast').textContent=m;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),2300)}
 
@@ -28,7 +28,7 @@ function mountTradingView(id, tf=interval){
  script.type='text/javascript'; script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js'; script.async=true;
  const cfg={
    autosize:true,
-   symbol:'OANDA:XAUUSD',
+   symbol:TV_SYMBOL,
    interval:tvInterval(tf),
    timezone:'Etc/UTC',
    theme:'dark',
@@ -148,7 +148,7 @@ function mountTradingViewTechnical(containerId, tf){
   script.src='https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js';
   script.type='text/javascript'; script.async=true;
   const intervalMap={'1min':'1m','5min':'5m','15min':'15m','30min':'30m','1h':'1h','4h':'4h','1day':'1D'};
-  script.textContent=JSON.stringify({interval:intervalMap[tf]||'5m',width:'100%',height:500,symbol:'OANDA:XAUUSD',showIntervalTabs:true,displayMode:'single',colorTheme:'dark',isTransparent:true,locale:'en',largeChartUrl:''});
+  script.textContent=JSON.stringify({interval:intervalMap[tf]||'5m',width:'100%',height:500,symbol:TV_SYMBOL,showIntervalTabs:true,displayMode:'single',colorTheme:'dark',isTransparent:true,locale:'en',largeChartUrl:''});
   el.appendChild(script);
 }
 function mountTradingViewCalendar(){
@@ -523,7 +523,7 @@ function connectMarketStream(){
 }
 function setAuth(mode){authMode=mode;$('authTitle').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSubmit').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSwitch').textContent=mode==='login'?'Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish':'Hisobingiz bormi? Kirish';$('email').placeholder=mode==='login'?'Login yoki elektron pochta':'Elektron pochta';$('password').required=mode==='login';$('password').style.display=mode==='login'?'block':'none';$('password').value='';$('authMsg').textContent=mode==='register'?'Email kiriting — login va parol avtomatik yaratiladi.':''}
 async function loadMT5Status(){
-  const d=await api('/api/v1/mt5/status'); const st=d.state||{};
+  const d=await api(`/api/v1/mt5/status?symbol=${encodeURIComponent(symbol)}`); const st=d.state||{};
   const connState=String(st.connection_state||'').toUpperCase();
   const connLabel=connState==='CONNECTED' || st.connected ? '🟢 CONNECTED' : (connState==='STALE' ? '🟡 STALE' : '🔴 DISCONNECTED');
   setText('mt5Status', connLabel);
