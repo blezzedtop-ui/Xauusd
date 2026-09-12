@@ -3822,6 +3822,9 @@ async def api_health() -> dict[str, Any]:
     return {"ok": True, "service": "xauusd-trading", "timestamp": datetime.now(timezone.utc).isoformat()}
 
 @app.get("/eurusd")
+@app.get("/eurusd/")
+@app.get("/EURUSD")
+@app.get("/EURUSD/")
 async def read_eurusd() -> FileResponse:
     return FileResponse(os.path.join(BASE_DIR, "eurusd.html"))
 

@@ -85,7 +85,7 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
 @keyframes goldWallpaper{from{background-position:48% 46%;transform:scale(1)}to{background-position:54% 52%;transform:scale(1.05)}}
 @keyframes goldOrb{from{transform:translate3d(0,0,0) rotate(0deg)}to{transform:translate3d(-80px,55px,0) rotate(18deg)}}
 @media(max-width:900px){.gold-3d-orb{width:150px;height:150px;right:-30px;top:18vh}.gold-photo-bg{opacity:.17!important}}
-.nav-external{display:block;width:100%;border:1px solid transparent;background:transparent;color:var(--gold);text-align:left;padding:11px 12px;border-radius:10px;cursor:pointer;font-weight:800}.nav-external:hover{background:#111923;color:#fff}.nav-external::after{content:" ↗";opacity:.65}
+.nav-external{display:block;position:relative;z-index:1000;pointer-events:auto!important;user-select:none;-webkit-user-select:none;width:100%;border:1px solid transparent;background:transparent;color:var(--gold);text-align:left;padding:11px 12px;border-radius:10px;cursor:pointer;font-weight:800}.nav-external:hover{background:#111923;color:#fff}.nav-external::after{content:" ↗";opacity:.65}.nav-external-form{display:block;margin:0;padding:0;width:100%}.nav-external-form .nav-external{width:100%;display:block;font:inherit}
 </style>
 </head>
 <body>
@@ -110,7 +110,7 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
     <button data-section="sessionsSection">◉ Market Sessions</button>
     <button data-section="historySection">▤ Signal History</button>
     <button data-section="mt5Section">◉ MetaTrader 5</button>
-    <button type="button" id="eurUsdPageBtn" class="nav-external">💱 EURUSD</button>
+    <form id="eurUsdPageForm" class="nav-external-form" action="/eurusd" method="get"><button id="eurUsdPageBtn" class="nav-external" type="submit">💱 EURUSD</button></form>
   </div>
   <div class="sidebar-bottom"><div class="tiny">Pivot + Key Levels engine<br>Live data via backend API</div></div>
 </aside>
@@ -248,5 +248,5 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
 </div>
 
 <script src="/config.js?v=20260908f"></script>
-<script src="/app.js?v=20260912-eurusd-nav-fix-1"></script>
+<script src="/app.js?v=20260912-eurusd-nav-hardfix-3"></script>
 </body></html>
