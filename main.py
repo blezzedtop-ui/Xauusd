@@ -107,6 +107,14 @@ AI_PROVIDER_COOLDOWN_SECONDS = int(os.getenv("AI_PROVIDER_COOLDOWN_SECONDS", "12
 AI_PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
 
 AI_PROVIDER_STATUS: dict[str, dict[str, Any]] = {}
+# Runtime AI controls. OFF providers are never called by the router.
+AI_PROVIDER_ENABLED: dict[str, bool] = {
+    "groq": True, "deepseek": True, "gemini": True, "groq_qwen": True,
+    "openai": True, "mistral": True, "cerebras": True, "cloudflare": True,
+    "huggingface": True, "openrouter": True,
+}
+AI_AUTO_MODE = True
+AI_SIGNAL_CONFIRM_ONLY = os.getenv("AI_SIGNAL_CONFIRM_ONLY", "true").lower() == "true"
 
 def _provider_error_details(exc: Exception) -> tuple[str, int | None]:
     """Return a compact, user-safe provider error and HTTP status when available."""
@@ -246,7 +254,7 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
     }
     raw_order = [AI_PROVIDER] if AI_PROVIDER not in {"auto", ""} else AI_FALLBACK_ORDER
     # Never call or mark a provider that has no credentials configured.
-    candidates = [p for p in raw_order if configured.get(p, False)]
+    candidates = [p for p in raw_order if configured.get(p, False) and AI_PROVIDER_ENABLED.get(p, True)]
     errors=[]
     now_mono = asyncio.get_running_loop().time()
 
@@ -2756,7 +2764,7 @@ async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
         "support": [levels["s1"], levels["s2"], levels["s3"]],
         "resistance": [levels["r1"], levels["r2"], levels["r3"]],
     }
-    ai = await ai_smart_analysis(ai_context)
+    ai = {"mode":"confirmation-only","summary":"AI faqat Auto Trading signal tasdig‘ida chaqiriladi.","bias":"—","confidence":0,"advice":"Oddiy sahifa/grafik refresh AI request yubormaydi."}
     return {
         "ok": True,
         "symbol": symbol,
@@ -2851,8 +2859,7 @@ async def get_snr(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[
         if len(candles)<35: raise MarketDataError("SNR uchun candle yetarli emas")
         candle_time=candles[-2].get("time") if len(candles)>1 else candles[-1].get("time")
         snr=_snr_zone_analysis(candles)
-        ai=await ai_validate_module_signal("SNR",symbol,interval,candle_time,snr)
-        snr=merge_ai_validation(snr,ai)
+        snr["ai_validation"] = None
         return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(float(candles[-1]["close"]),4),"candle_time":candle_time,"snr":snr,"generated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as exc: raise HTTPException(status_code=503,detail="SNR unavailable: "+str(exc))
 
@@ -2865,8 +2872,7 @@ async def get_classic_trade(symbol: str, interval: str = Query(DEFAULT_INTERVAL)
         ref = candles[-2]; price = float(candles[-1]["close"])
         levels = calculate_pivot_levels(float(ref["high"]), float(ref["low"]), float(ref["close"]), price)
         classic = _classic_trade(candles, levels)
-        ai = await ai_validate_module_signal("Classic Trade", symbol, interval, ref.get("time"), classic)
-        classic = merge_ai_validation(classic, ai)
+        classic["ai_validation"] = None
         return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(price,4),"candle_time":ref.get("time"),"classic":classic,"generated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Classic Trade unavailable: "+str(exc))
@@ -2899,8 +2905,7 @@ async def get_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> 
         setup = build_key_level_signal(candles_data, levels, news_blocked=False)
         technical = technical_analysis(candles_data, levels, setup)
         candle_time=candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")
-        ai=await ai_validate_module_signal("Technical Analysis",symbol,interval,candle_time,{**technical, "reason": technical.get("summary"), "entry": float(candles_data[-1]["close"])})
-        technical=merge_ai_validation(technical,ai)
+        technical["ai_validation"] = None
         return {
             "ok": True, "symbol": symbol, "interval": interval, "mode": "tradingview",
             "provider": "TradingView", "source": TRADINGVIEW_SYMBOL,
@@ -3232,8 +3237,7 @@ async def get_ict_signals(symbol: str) -> dict[str, Any]:
         c5,mode5,w5=await get_candles(symbol,"5min",260)
         result=build_ict_m30_m5(c30,c5)
         candle_time=c5[-2].get("time") if len(c5)>1 else c5[-1].get("time")
-        ai=await ai_validate_module_signal("ICT Signals",symbol,"5min",candle_time,result)
-        result=merge_ai_validation(result,ai)
+        result["ai_validation"] = None
         result["candle_time"]=candle_time
         return {"ok":True,"symbol":symbol,"mode":"live","source":"TradingView/OANDA canonical candle series",
                 "m30_candles":len(c30),"m5_candles":len(c5),"warnings":[x for x in (w30,w5) if x],
@@ -3277,11 +3281,6 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
         sl = item.get("stop_loss")
         tp = item.get("take_profit") or []
         zone_quality = float(item.get("zone_quality") or 0)
-        ai_check = item.get("ai_validation") or {}
-        ai_conf = float(ai_check.get("confidence") or 0)
-        ai_agreement = float(ai_check.get("agreement") or 0)
-        ai_signal = str(ai_check.get("signal") or "WAIT").upper()
-        risk_flags = ai_check.get("risk_flags") if isinstance(ai_check.get("risk_flags"), list) else []
         if direction not in ("BUY", "SELL") or confidence < AUTO_ENTRY_THRESHOLD or entry is None or sl is None or not tp:
             continue
         if zone_quality < AUTO_ENTRY_MIN_ZONE or item.get("quality_grade") not in {"A+","A"}:
@@ -3294,6 +3293,22 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
             higher=[result.get("timeframes",{}).get(x,{}) for x in tf_order[idx+1:]] if idx>=0 else []
             if higher and any(h.get("signal") != direction for h in higher):
                 continue
+
+        # AI is called only for a deterministic Auto Trading candidate that
+        # already passed confidence, Strong Zone and MTF gates.
+        candle_key = item.get("candle_time") or item.get("evaluated_at")
+        ai_check = await ai_validate_module_signal("Auto Trading", key, tf, candle_key, item)
+        item = merge_ai_validation(item, ai_check)
+        direction = item.get("signal")
+        confidence = float(item.get("confidence") or 0)
+        ai_conf = float(ai_check.get("confidence") or 0)
+        ai_agreement = float(ai_check.get("agreement") or 0)
+        ai_signal = str(ai_check.get("signal") or "WAIT").upper()
+        risk_flags = ai_check.get("risk_flags") if isinstance(ai_check.get("risk_flags"), list) else []
+        if direction not in ("BUY","SELL") or confidence < AUTO_ENTRY_THRESHOLD:
+            continue
+        if ai_signal != direction or ai_agreement < AUTO_ENTRY_MIN_AI_AGREEMENT or ai_conf < AUTO_ENTRY_THRESHOLD or risk_flags:
+            continue
 
         # One open auto-trade per timeframe. A new trade is allowed after the previous
         # one is closed, even if the direction is unchanged.
@@ -3614,6 +3629,27 @@ async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Que
     return {"items": items}
 
 
+class AIControlBody(BaseModel):
+    provider: str | None = None
+    enabled: bool | None = None
+    all_enabled: bool | None = None
+
+@app.post("/api/v1/ai/providers/control")
+async def ai_providers_control(body: AIControlBody):
+    global AI_AUTO_MODE
+    if body.all_enabled is not None:
+        for p in list(AI_PROVIDER_ENABLED):
+            AI_PROVIDER_ENABLED[p] = bool(body.all_enabled)
+        AI_AUTO_MODE = bool(body.all_enabled)
+        return {"ok":True,"auto_mode":AI_AUTO_MODE,"enabled":dict(AI_PROVIDER_ENABLED)}
+    if body.provider:
+        provider = body.provider.strip().lower()
+        if provider not in AI_PROVIDER_ENABLED:
+            raise HTTPException(status_code=404, detail="Unknown AI provider")
+        AI_PROVIDER_ENABLED[provider] = (not AI_PROVIDER_ENABLED[provider]) if body.enabled is None else bool(body.enabled)
+        return {"ok":True,"provider":provider,"enabled":AI_PROVIDER_ENABLED[provider],"auto_mode":AI_AUTO_MODE}
+    raise HTTPException(status_code=400, detail="provider yoki all_enabled kerak")
+
 @app.get("/api/v1/ai/providers")
 async def ai_providers_status():
     # Only configured providers are exposed to the dashboard. Missing-key
@@ -3656,7 +3692,7 @@ async def ai_providers_status():
         else:
             reason="Hali real AI so‘rovi bilan tekshirilmagan."
         prof=AI_PROVIDER_PROFILE.get(p,{"quality":70,"speed":70,"capacity":60,"cost":60})
-        providers.append({"id":p,"configured":True,"status":status,"model":models[p],"reason":reason,"error":error,"http_status":st.get("http_status"),"checked_at":st.get("checked_at"),"score":display_score(p),"quality":prof["quality"],"speed":prof["speed"],"capacity":prof["capacity"],"cost":prof["cost"]})
+        providers.append({"id":p,"configured":True,"enabled":AI_PROVIDER_ENABLED.get(p,True),"status":("OFF" if not AI_PROVIDER_ENABLED.get(p,True) else status),"model":models[p],"reason":("Qo‘lda o‘chirilgan — router bu AI'ni chaqirmaydi." if not AI_PROVIDER_ENABLED.get(p,True) else reason),"error":error,"http_status":st.get("http_status"),"checked_at":st.get("checked_at"),"score":display_score(p),"quality":prof["quality"],"speed":prof["speed"],"capacity":prof["capacity"],"cost":prof["cost"]})
     return {"order":[x["id"] for x in providers],"router":"score","providers":providers}
 
 @app.get("/api/v1/mt5/status")
