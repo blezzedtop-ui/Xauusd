@@ -697,16 +697,3 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
     try{mountTradingView('chart', interval)}catch(_){}
   }
 })();;
-/* SignalX GO PRO: open the owner's Telegram profile/chat. UI-only; no trading logic touched. */
-(function bindSignalXTelegram(){
-  function bind(){
-    const b=document.getElementById('goProBtn');
-    if(!b || b.dataset.telegramBound==='1') return;
-    b.dataset.telegramBound='1';
-    b.addEventListener('click',function(e){
-      e.preventDefault(); e.stopPropagation();
-      window.location.href='https://t.me/Shohrux_Ravshanov';
-    });
-  }
-  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',bind,{once:true}); else bind();
-})();

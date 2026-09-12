@@ -543,12 +543,6 @@ async def serve_app_js() -> FileResponse:
 async def serve_config_js() -> FileResponse:
     return FileResponse(os.path.join(BASE_DIR, "config.js"), media_type="application/javascript")
 
-@app.get("/signalx-premium-theme.css")
-async def serve_signalx_theme_css() -> FileResponse:
-    # UI-only stylesheet. TradingView / Exness MT5 chart internals are untouched.
-    return FileResponse(os.path.join(BASE_DIR, "signalx-premium-theme.css"), media_type="text/css")
-
-
 @app.get("/manifest.webmanifest")
 async def serve_manifest() -> FileResponse:
     return FileResponse(os.path.join(BASE_DIR, "manifest.webmanifest"), media_type="application/manifest+json")
