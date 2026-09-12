@@ -54,12 +54,16 @@ OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free").strip() or "
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "").strip()
 MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest").strip() or "mistral-small-latest"
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "").strip()
-CEREBRAS_MODEL = os.getenv("CEREBRAS_MODEL", "gpt-oss-120b").strip() or "gpt-oss-120b"
+CEREBRAS_MODEL = os.getenv("CEREBRAS_MODEL", "qwen-3.8-27b").strip() or "qwen-3.8-27b"
+if CEREBRAS_MODEL in {"llama-3.3-70b", "llama-3.3-70b-versatile", "gpt-oss-120b"}:
+    CEREBRAS_MODEL = "qwen-3.8-27b"
 CLOUDFLARE_ACCOUNT_ID = os.getenv("CLOUDFLARE_ACCOUNT_ID", "").strip()
 CLOUDFLARE_API_TOKEN = (os.getenv("CLOUDFLARE_API_TOKEN", "").strip() or os.getenv("CLOUDFLARE_API_KEY", "").strip())
 CLOUDFLARE_MODEL = os.getenv("CLOUDFLARE_MODEL", "@cf/meta/llama-3.1-8b-instruct").strip() or "@cf/meta/llama-3.1-8b-instruct"
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash").strip() or "deepseek-v4-flash"
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash").strip() or "deepseek-flash"
+if DEEPSEEK_MODEL == "deepseek-v4-flash":
+    DEEPSEEK_MODEL = "deepseek-flash"
 AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto"
 AI_FALLBACK_ORDER = [x.strip().lower() for x in os.getenv("AI_FALLBACK_ORDER", "groq,deepseek,gemini,groq_qwen,openai,mistral,cerebras,cloudflare,openrouter").split(",") if x.strip()]
 AI_ROUTER_MODE = os.getenv("AI_ROUTER_MODE", "score").strip().lower() or "score"
@@ -101,6 +105,35 @@ AI_PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
 
 AI_PROVIDER_STATUS: dict[str, dict[str, Any]] = {}
 
+def _provider_error_details(exc: Exception) -> tuple[str, int | None]:
+    """Return a compact, user-safe provider error and HTTP status when available."""
+    status = getattr(exc, "status_code", None)
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        err = body.get("error")
+        if isinstance(err, dict):
+            msg = err.get("message") or err.get("type") or err.get("code")
+        else:
+            msg = body.get("message") or body.get("detail")
+    else:
+        msg = None
+    raw = str(msg or exc).strip().replace("\n", " ")
+    low = raw.lower()
+    if "rate limit" in low or "too many requests" in low or "quota" in low:
+        category = "rate limit / quota"
+    elif status in (401, 403) or "invalid api key" in low or "unauthorized" in low or "forbidden" in low:
+        category = "authentication / permission"
+    elif status == 404 or "not found" in low or "model" in low and "found" in low:
+        category = "model / endpoint"
+    elif "timeout" in low or "timed out" in low:
+        category = "timeout / network"
+    elif "connection" in low or "dns" in low:
+        category = "network / connection"
+    else:
+        category = "provider error"
+    prefix = f"HTTP {status} · {category}" if status else category
+    return f"{prefix} · {raw[:280]}", status
+
 async def _openai_compatible_completion(api_key: str, base_url: str, model: str, prompt: str, provider: str, extra_headers: dict[str, str] | None = None) -> tuple[str, str]:
     from openai import AsyncOpenAI
     client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=REQUEST_TIMEOUT, max_retries=0, default_headers=extra_headers or None)
@@ -141,7 +174,33 @@ async def _provider_call(provider: str, prompt: str) -> tuple[str, str]:
     if provider == "groq_qwen" and GROQ_API_KEY:
         return await _openai_compatible_completion(GROQ_API_KEY, "https://api.groq.com/openai/v1", GROQ_QWEN_MODEL, prompt, "groq_qwen")
     if provider == "gemini" and GEMINI_API_KEY:
-        return await _openai_compatible_completion(GEMINI_API_KEY, "https://generativelanguage.googleapis.com/v1beta/openai/", GEMINI_MODEL, prompt, "gemini")
+        # Use Gemini's native GenerateContent API rather than the compatibility
+        # layer so API-key authentication and model errors are reported directly.
+        url=f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+        payload={
+            "contents":[{"role":"user","parts":[{"text":prompt}]}],
+            "generationConfig":{"temperature":0.1,"responseMimeType":"application/json"}
+        }
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            r=await client.post(url, headers={"x-goog-api-key":GEMINI_API_KEY,"Content-Type":"application/json"}, json=payload)
+            if r.status_code >= 400:
+                # Raise a typed error with Google's response body so the status panel
+                # can distinguish invalid key, permission, quota and model errors.
+                try:
+                    detail=r.json()
+                except Exception:
+                    detail=r.text
+                exc=RuntimeError(f"Gemini HTTP {r.status_code}: {detail}")
+                setattr(exc,"status_code",r.status_code)
+                setattr(exc,"body",detail if isinstance(detail,dict) else {"message":str(detail)})
+                raise exc
+            data=r.json()
+        candidates=data.get("candidates") or []
+        parts=((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
+        text="".join(str(x.get("text", "")) for x in parts).strip()
+        if not text:
+            raise RuntimeError("gemini: empty response")
+        return text, "gemini"
     if provider == "openrouter" and OPENROUTER_API_KEY:
         return await _openai_compatible_completion(OPENROUTER_API_KEY, "https://openrouter.ai/api/v1", OPENROUTER_MODEL, prompt, "openrouter", {"HTTP-Referer": APP_BASE_URL, "X-OpenRouter-Title": APP_TITLE})
     if provider == "mistral" and MISTRAL_API_KEY:
@@ -213,13 +272,13 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
             AI_PROVIDER_COOLDOWN_UNTIL.pop(used, None)
             return text, used
         except Exception as exc:
-            msg=str(exc)
+            msg, http_status = _provider_error_details(exc)
             low=msg.lower()
-            limited = "429" in msg or "rate limit" in low or "rate_limit" in low or "quota" in low or "too many requests" in low
+            limited = http_status == 429 or "rate limit" in low or "rate_limit" in low or "quota" in low or "too many requests" in low
             if limited:
                 AI_PROVIDER_COOLDOWN_UNTIL[provider] = now_mono + AI_PROVIDER_COOLDOWN_SECONDS
-            AI_PROVIDER_STATUS[provider] = {"status":"LIMITED" if limited else "OFFLINE", "checked_at":datetime.now(timezone.utc).isoformat(), "error":msg[:220]}
-            errors.append(f"{provider}: {msg[:120]}")
+            AI_PROVIDER_STATUS[provider] = {"status":"LIMITED" if limited else "OFFLINE", "checked_at":datetime.now(timezone.utc).isoformat(), "error":msg[:360], "http_status":http_status}
+            errors.append(f"{provider}: {msg[:180]}")
             continue
     raise RuntimeError("All configured AI providers failed: " + " | ".join(errors))
 
@@ -3581,7 +3640,7 @@ async def ai_providers_status():
         else:
             reason="Hali real AI so‘rovi bilan tekshirilmagan."
         prof=AI_PROVIDER_PROFILE.get(p,{"quality":70,"speed":70,"capacity":60,"cost":60})
-        providers.append({"id":p,"configured":True,"status":status,"model":models[p],"reason":reason,"checked_at":st.get("checked_at"),"score":display_score(p),"quality":prof["quality"],"speed":prof["speed"],"capacity":prof["capacity"],"cost":prof["cost"]})
+        providers.append({"id":p,"configured":True,"status":status,"model":models[p],"reason":reason,"error":error,"http_status":st.get("http_status"),"checked_at":st.get("checked_at"),"score":display_score(p),"quality":prof["quality"],"speed":prof["speed"],"capacity":prof["capacity"],"cost":prof["cost"]})
     return {"order":[x["id"] for x in providers],"router":"score","providers":providers}
 
 @app.get("/api/v1/mt5/status")
