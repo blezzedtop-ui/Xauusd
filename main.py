@@ -44,6 +44,8 @@ CALENDAR_PROVIDER = os.getenv("CALENDAR_PROVIDER", "auto").strip().lower()
 FOREX_FACTORY_CALENDAR_URL = os.getenv("FOREX_FACTORY_CALENDAR_URL", "https://www.forexfactory.com/calendar?export=csv&week=this").strip()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
+HF_TOKEN = (os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACE_API_KEY", "").strip())
+HF_MODEL = os.getenv("HF_MODEL", "openai/gpt-oss-120b:fastest").strip() or "openai/gpt-oss-120b:fastest"
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip() or "openai/gpt-oss-120b"
 GROQ_QWEN_MODEL = os.getenv("GROQ_QWEN_MODEL", "qwen/qwen3.6-27b").strip() or "qwen/qwen3.6-27b"
@@ -65,7 +67,7 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash").strip() or "deeps
 if DEEPSEEK_MODEL == "deepseek-v4-flash":
     DEEPSEEK_MODEL = "deepseek-flash"
 AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto"
-AI_FALLBACK_ORDER = [x.strip().lower() for x in os.getenv("AI_FALLBACK_ORDER", "groq,deepseek,gemini,groq_qwen,openai,mistral,cerebras,cloudflare,openrouter").split(",") if x.strip()]
+AI_FALLBACK_ORDER = [x.strip().lower() for x in os.getenv("AI_FALLBACK_ORDER", "groq,deepseek,gemini,groq_qwen,openai,mistral,cerebras,cloudflare,huggingface,openrouter").split(",") if x.strip()]
 AI_ROUTER_MODE = os.getenv("AI_ROUTER_MODE", "score").strip().lower() or "score"
 # Provider profile: quality, speed, capacity/limits, cost-efficiency (0-100).
 # These are routing heuristics, not provider guarantees; live status is weighted dynamically.
@@ -79,6 +81,7 @@ AI_PROVIDER_PROFILE = {
     "cerebras": {"quality": 88, "speed": 100, "capacity": 82, "cost": 90},
     "cloudflare": {"quality": 73, "speed": 86, "capacity": 84, "cost": 95},
     "openrouter": {"quality": 76, "speed": 78, "capacity": 68, "cost": 100},
+    "huggingface": {"quality": 91, "speed": 86, "capacity": 90, "cost": 95},
 }
 ALLOW_DEMO = os.getenv("ALLOW_DEMO", "false").lower() == "true"
 DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "XAU/USD").strip() or "XAU/USD"
@@ -211,6 +214,8 @@ async def _provider_call(provider: str, prompt: str) -> tuple[str, str]:
         return await _cloudflare_completion(prompt)
     if provider == "deepseek" and DEEPSEEK_API_KEY:
         return await _openai_compatible_completion(DEEPSEEK_API_KEY, "https://api.deepseek.com", DEEPSEEK_MODEL, prompt, "deepseek")
+    if provider == "huggingface" and HF_TOKEN:
+        return await _openai_compatible_completion(HF_TOKEN, "https://router.huggingface.co/v1", HF_MODEL, prompt, "huggingface")
     if provider == "openai" and OPENAI_API_KEY:
         from openai import AsyncOpenAI
         client = AsyncOpenAI(api_key=OPENAI_API_KEY, timeout=REQUEST_TIMEOUT, max_retries=0)
@@ -237,6 +242,7 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
         "cloudflare": bool(CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN),
         "deepseek": bool(DEEPSEEK_API_KEY),
         "openai": bool(OPENAI_API_KEY),
+        "huggingface": bool(HF_TOKEN),
     }
     raw_order = [AI_PROVIDER] if AI_PROVIDER not in {"auto", ""} else AI_FALLBACK_ORDER
     # Never call or mark a provider that has no credentials configured.
@@ -3622,8 +3628,9 @@ async def ai_providers_status():
         "cloudflare": bool(CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN),
         "deepseek": bool(DEEPSEEK_API_KEY),
         "openai": bool(OPENAI_API_KEY),
+        "huggingface": bool(HF_TOKEN),
     }
-    models={"groq":GROQ_MODEL,"gemini":GEMINI_MODEL,"openrouter":OPENROUTER_MODEL,"groq_qwen":GROQ_QWEN_MODEL,"mistral":MISTRAL_MODEL,"cerebras":CEREBRAS_MODEL,"cloudflare":CLOUDFLARE_MODEL,"deepseek":DEEPSEEK_MODEL,"openai":OPENAI_MODEL}
+    models={"groq":GROQ_MODEL,"gemini":GEMINI_MODEL,"openrouter":OPENROUTER_MODEL,"groq_qwen":GROQ_QWEN_MODEL,"mistral":MISTRAL_MODEL,"cerebras":CEREBRAS_MODEL,"cloudflare":CLOUDFLARE_MODEL,"deepseek":DEEPSEEK_MODEL,"openai":OPENAI_MODEL,"huggingface":HF_MODEL}
     providers=[]
     now_mono = asyncio.get_running_loop().time()
     def display_score(p: str) -> float:

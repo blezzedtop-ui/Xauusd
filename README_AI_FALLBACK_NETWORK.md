@@ -29,3 +29,6 @@ Railway variables for Cloudflare:
 Railway variables for DeepSeek:
 - DEEPSEEK_API_KEY
 - DEEPSEEK_MODEL (optional)
+
+
+Hugging Face is enabled when HF_TOKEN (or HUGGINGFACE_API_KEY) is set. Default model: openai/gpt-oss-120b:fastest via https://router.huggingface.co/v1.
