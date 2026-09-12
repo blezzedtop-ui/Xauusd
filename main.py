@@ -10,7 +10,6 @@ import asyncio
 import smtplib
 import random
 import string
-import xml.etree.ElementTree as ET
 from email.message import EmailMessage
 import csv
 import io
@@ -22,7 +21,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -35,11 +34,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, rela
 load_dotenv()
 
 APP_TITLE = os.getenv("APP_TITLE", "Trading SaaS Analytics Platform")
-# Live market-news ticker cache. Headlines are fetched server-side and translated
-# to Uzbek with a public translation endpoint plus lexical fallback.
-NEWS_CACHE: dict[str, Any] = {"ts": 0.0, "items": []}
-NEWS_CACHE_TTL = int(os.getenv("NEWS_CACHE_TTL", "45"))
-NEWS_MAX_ITEMS = int(os.getenv("NEWS_MAX_ITEMS", "12"))
 MARKET_PROVIDER = os.getenv("MARKET_PROVIDER", "auto").lower()
 REALMARKET_API_KEY = os.getenv("REALMARKET_API_KEY", "").strip()
 REALMARKET_API_BASE = os.getenv("REALMARKET_API_BASE", "https://api.realmarketapi.com").strip().rstrip("/")
@@ -322,7 +316,7 @@ TRADINGVIEW_TIMEOUT = float(os.getenv("TRADINGVIEW_TIMEOUT", "10"))
 MT5_BRIDGE_TOKEN = os.getenv("MT5_BRIDGE_TOKEN", "change-this-mt5-bridge-token").strip()
 MT5_AUTO_TRADING = os.getenv("MT5_AUTO_TRADING", "false").lower() == "true"
 MT5_LOT_SIZE = float(os.getenv("MT5_DEFAULT_LOT", "0.01"))
-MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "candles": {}, "markets": {}}
+MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "symbol": None, "candles": {}, "markets": {}}
 MT5_ORDER_QUEUE: list[dict[str, Any]] = []
 MT5_ORDER_ATTEMPTS: dict[str, int] = {}
 TRADINGVIEW_CACHE_TTL = float(os.getenv("TRADINGVIEW_CACHE_TTL", "2.0"))
@@ -366,6 +360,11 @@ class SessionToken(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
+    user_agent: Mapped[str | None] = mapped_column(Text, nullable=True)
+    device_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_revoked: Mapped[bool] = mapped_column(default=False, index=True)
 
 
 class Subscription(Base):
@@ -462,6 +461,18 @@ def ensure_schema() -> None:
                 conn.exec_driver_sql("ALTER TABLE signal_history ADD COLUMN source VARCHAR(40) DEFAULT 'Signals'")
             if "candle_time" not in sig_cols:
                 conn.exec_driver_sql("ALTER TABLE signal_history ADD COLUMN candle_time VARCHAR(40)")
+            sess_cols = {c["name"] for c in inspector.get_columns("sessions")}
+            if "created_at" not in sess_cols:
+                conn.exec_driver_sql("ALTER TABLE sessions ADD COLUMN created_at TIMESTAMP")
+            if "last_seen_at" not in sess_cols:
+                conn.exec_driver_sql("ALTER TABLE sessions ADD COLUMN last_seen_at TIMESTAMP")
+            if "user_agent" not in sess_cols:
+                conn.exec_driver_sql("ALTER TABLE sessions ADD COLUMN user_agent TEXT")
+            if "device_model" not in sess_cols:
+                conn.exec_driver_sql("ALTER TABLE sessions ADD COLUMN device_model VARCHAR(255)")
+            if "is_revoked" not in sess_cols:
+                conn.exec_driver_sql("ALTER TABLE sessions ADD COLUMN is_revoked BOOLEAN DEFAULT FALSE")
+            conn.exec_driver_sql("UPDATE sessions SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP), last_seen_at = COALESCE(last_seen_at, CURRENT_TIMESTAMP), is_revoked = COALESCE(is_revoked, FALSE)")
     except Exception as exc:
         print(f"DB schema migration warning: {type(exc).__name__}: {exc}")
 
@@ -497,108 +508,6 @@ def initialize_database() -> None:
 
 
 app = FastAPI(title=APP_TITLE, version="19.0.0")
-MARKET_NEWS_QUERIES = [
-    ("GOLD", "gold OR XAUUSD price OR bullion market"),
-    ("NEFT", "oil OR crude OR Brent OR WTI price"),
-    ("USD", "US dollar OR USD index OR DXY"),
-    ("FED", "Federal Reserve OR Fed rates OR inflation CPI PPI NFP"),
-]
-
-UZ_FALLBACK = {
-    "gold": "oltin", "bullion": "oltin", "oil": "neft", "crude": "xom neft", "price": "narxi",
-    "prices": "narxlari", "dollar": "dollar", "fed": "Fed", "rates": "stavkalar",
-    "rate": "stavka", "inflation": "inflyatsiya", "rises": "oshdi", "rise": "o‘sdi",
-    "falls": "pasaydi", "fall": "pasayish", "higher": "yuqori", "lower": "pastroq",
-    "market": "bozor", "markets": "bozorlar", "investors": "investorlar", "investor": "investor",
-    "stocks": "aksiyalar", "economy": "iqtisodiyot", "economic": "iqtisodiy", "demand": "talab",
-    "supply": "taklif", "demand": "talab", "forecast": "prognoz", "data": "ma’lumotlar",
-    "report": "hisobot", "reports": "hisobotlar", "rate cut": "stavka pasayishi",
-    "rate hike": "stavka oshishi", "central bank": "markaziy bank", "treasury": "g‘aznachilik",
-    "yield": "daromadlilik", "yields": "daromadlilik", "war": "urush", "sanctions": "sanksiyalar",
-}
-
-def _news_category_score(title: str, preferred: str) -> str:
-    t = title.lower()
-    if preferred == "GOLD" or any(k in t for k in ["gold", "xau", "bullion"]): return "GOLD"
-    if preferred == "NEFT" or any(k in t for k in ["oil", "brent", "wti", "crude"]): return "NEFT"
-    if preferred == "USD" or any(k in t for k in ["dollar", "dxy", "usd"]): return "USD"
-    return "FED"
-
-async def _translate_uz(text: str) -> str:
-    """Translate short news headlines to Uzbek. Falls back to a conservative lexical translation."""
-    text = (text or "").strip()
-    if not text:
-        return ""
-    try:
-        url = "https://translate.googleapis.com/translate_a/single"
-        params = {"client":"gtx", "sl":"auto", "tl":"uz", "dt":"t", "q":text}
-        async with httpx.AsyncClient(timeout=5.0, headers={"User-Agent":"Mozilla/5.0"}) as client:
-            r = await client.get(url, params=params)
-            r.raise_for_status()
-            data = r.json()
-            parts = data[0] if isinstance(data, list) else []
-            out = "".join(str(x[0]) for x in parts if isinstance(x, list) and x and x[0])
-            if out.strip():
-                return out.strip()
-    except Exception:
-        pass
-    out = text
-    for src, dst in sorted(UZ_FALLBACK.items(), key=lambda kv: len(kv[0]), reverse=True):
-        out = re.sub(rf"\b{re.escape(src)}\b", dst, out, flags=re.I)
-    return out
-
-async def _fetch_google_news_rss(query: str) -> list[dict[str, Any]]:
-    url = "https://news.google.com/rss/search"
-    params = {"q": query, "hl":"en-US", "gl":"US", "ceid":"US:en"}
-    try:
-        async with httpx.AsyncClient(timeout=8.0, headers={"User-Agent":"Mozilla/5.0"}) as client:
-            r = await client.get(url, params=params)
-            r.raise_for_status()
-        root = ET.fromstring(r.text)
-        out=[]
-        for item in root.findall("./channel/item")[:8]:
-            title=(item.findtext("title") or "").strip()
-            link=(item.findtext("link") or "").strip()
-            pub=(item.findtext("pubDate") or "").strip()
-            source_el=item.find("source")
-            source=(source_el.text or "").strip() if source_el is not None else "Google News"
-            if title:
-                out.append({"title":title,"link":link,"published":pub,"source":source})
-        return out
-    except Exception:
-        return []
-
-@app.get("/api/v1/market-news")
-async def get_market_news() -> dict[str, Any]:
-    now = asyncio.get_running_loop().time()
-    if NEWS_CACHE["items"] and now - float(NEWS_CACHE["ts"] or 0) < NEWS_CACHE_TTL:
-        return {"mode":"live-cache", "items":NEWS_CACHE["items"], "updated_at":datetime.now(timezone.utc).isoformat()}
-    buckets = await asyncio.gather(*[_fetch_google_news_rss(q) for _, q in MARKET_NEWS_QUERIES], return_exceptions=True)
-    candidates=[]
-    seen=set()
-    for (preferred,_), rows in zip(MARKET_NEWS_QUERIES,buckets):
-        if isinstance(rows, Exception):
-            continue
-        for row in rows:
-            title=row.get("title","").strip()
-            key=re.sub(r"\W+"," ",title.lower()).strip()
-            if not title or key in seen:
-                continue
-            seen.add(key)
-            row["category"]=_news_category_score(title, preferred)
-            candidates.append(row)
-    # Prefer a balanced rotation across GOLD/NEFT/USD/FED.
-    ordered=[]
-    for cat in ["GOLD","NEFT","USD","FED"]:
-        ordered.extend([x for x in candidates if x["category"]==cat][:3])
-    items=[]
-    for row in ordered[:NEWS_MAX_ITEMS]:
-        uz=await _translate_uz(row["title"])
-        items.append({**row, "title_uz":uz or row["title"]})
-    NEWS_CACHE.update({"ts":now,"items":items})
-    return {"mode":"live" if items else "empty", "items":items, "updated_at":datetime.now(timezone.utc).isoformat()}
-
-
 origins_raw = os.getenv("FRONTEND_ORIGINS", "*")
 origins = [x.strip() for x in origins_raw.split(",") if x.strip()] or ["*"]
 app.add_middleware(
@@ -690,28 +599,66 @@ def token_hash(token: str) -> str:
     return hashlib.sha256((SECRET_KEY + token).encode()).hexdigest()
 
 
-def create_session(user_id: int, session: Session) -> str:
+def describe_device(user_agent: str | None) -> str:
+    ua = (user_agent or "").strip()
+    low = ua.lower()
+    if not ua:
+        return "Noma’lum qurilma"
+    browser = "Brauzer"
+    if "edg/" in low or "edge/" in low:
+        browser = "Microsoft Edge"
+    elif "opr/" in low or "opera" in low:
+        browser = "Opera"
+    elif "chrome/" in low and "edg/" not in low:
+        browser = "Google Chrome"
+    elif "firefox/" in low:
+        browser = "Mozilla Firefox"
+    elif "safari/" in low and "chrome/" not in low:
+        browser = "Safari"
+    os_name = "Unknown OS"
+    if "windows" in low:
+        os_name = "Windows PC"
+    elif "android" in low:
+        os_name = "Android qurilma"
+    elif "iphone" in low or "ipad" in low or "ios" in low:
+        os_name = "iPhone/iPad"
+    elif "mac os x" in low or "macintosh" in low:
+        os_name = "Mac"
+    elif "linux" in low:
+        os_name = "Linux PC"
+    # Browsers generally do not expose the exact hardware model on desktop.
+    # We therefore report the most reliable device family + browser.
+    return f"{os_name} · {browser}"
+
+def create_session(user_id: int, session: Session, user_agent: str | None = None) -> str:
     raw = secrets.token_urlsafe(48)
+    now = datetime.now(timezone.utc)
     item = SessionToken(
         user_id=user_id,
         token_hash=token_hash(raw),
-        expires_at=datetime.now(timezone.utc) + timedelta(hours=SESSION_HOURS),
+        expires_at=now + timedelta(hours=SESSION_HOURS),
+        created_at=now,
+        last_seen_at=now,
+        user_agent=(user_agent or "")[:4000] or None,
+        device_model=describe_device(user_agent),
+        is_revoked=False,
     )
     session.add(item)
     session.commit()
     return raw
-
 
 def current_user(authorization: str | None, session: Session) -> User:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Authentication required")
     raw = authorization.split(" ", 1)[1].strip()
     row = session.scalar(select(SessionToken).where(SessionToken.token_hash == token_hash(raw)))
-    if not row:
+    if not row or getattr(row, "is_revoked", False):
         raise HTTPException(status_code=401, detail="Invalid or expired session")
     expiry = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at.tzinfo is None else row.expires_at
     if expiry < datetime.now(timezone.utc):
         raise HTTPException(status_code=401, detail="Invalid or expired session")
+    row.last_seen_at = datetime.now(timezone.utc)
+    session.commit()
     user = session.get(User, row.user_id)
     if not user:
         raise HTTPException(status_code=401, detail="User not found")
@@ -737,7 +684,7 @@ def generate_credentials() -> tuple[str, str]:
     return login, password
 
 @app.post("/api/auth/login")
-async def auth_login(body: AuthBody, session: Session = Depends(db)) -> dict[str, Any]:
+async def auth_login(body: AuthBody, request: Request, session: Session = Depends(db)) -> dict[str, Any]:
     """Stable username/password login endpoint used by the dashboard."""
     identity = body.username.strip()
     user = session.scalar(select(User).where(User.username == identity))
@@ -745,13 +692,13 @@ async def auth_login(body: AuthBody, session: Session = Depends(db)) -> dict[str
         user = session.scalar(select(User).where(User.email == identity.lower()))
     if user is None or not verify_password(body.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Login yoki parol noto‘g‘ri")
-    raw = create_session(user.id, session)
+    raw = create_session(user.id, session, request.headers.get("user-agent"))
     plan = user.subscription.plan if user.subscription else "free"
     return {"token": raw, "user": {"id": user.id, "username": user.username, "email": user.email, "plan": plan}}
 
 
 @app.post("/api/auth/register")
-async def auth_register(body: RegisterBody, session: Session = Depends(db)) -> dict[str, Any]:
+async def auth_register(body: RegisterBody, request: Request, session: Session = Depends(db)) -> dict[str, Any]:
     """Create a user without requiring SMTP; credentials are returned once so mobile users can enter them."""
     email = body.email.strip().lower()
     if not valid_email(email):
@@ -766,7 +713,7 @@ async def auth_register(body: RegisterBody, session: Session = Depends(db)) -> d
     session.flush()
     user.subscription = Subscription(plan="free", status="active")
     session.commit()
-    raw = create_session(user.id, session)
+    raw = create_session(user.id, session, request.headers.get("user-agent"))
     email_ok, email_message = send_credentials_email(email, login, password)
     return {
         "token": raw,
@@ -782,7 +729,8 @@ async def auth_logout(authorization: str | None = Header(default=None), session:
         raw = authorization.split(" ", 1)[1].strip()
         row = session.scalar(select(SessionToken).where(SessionToken.token_hash == token_hash(raw)))
         if row:
-            session.delete(row)
+            row.is_revoked = True
+            row.last_seen_at = datetime.now(timezone.utc)
             session.commit()
     return {"ok": True}
 
@@ -792,6 +740,49 @@ async def auth_me(authorization: str | None = Header(default=None), session: Ses
     user = current_user(authorization, session)
     plan = user.subscription.plan if user.subscription else "free"
     return {"user": {"id": user.id, "username": user.username, "email": user.email, "plan": plan}}
+
+@app.get("/api/auth/sessions")
+async def auth_sessions(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    user = current_user(authorization, session)
+    now = datetime.now(timezone.utc)
+    rows = list(session.scalars(select(SessionToken).where(SessionToken.user_id == user.id).order_by(SessionToken.last_seen_at.desc())))
+    items = []
+    for row in rows:
+        exp = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at and row.expires_at.tzinfo is None else row.expires_at
+        seen = row.last_seen_at.replace(tzinfo=timezone.utc) if row.last_seen_at and row.last_seen_at.tzinfo is None else row.last_seen_at
+        active = bool(seen and (now - seen).total_seconds() <= 30 * 60 and not row.is_revoked and exp and exp >= now)
+        if not active and row.is_revoked:
+            continue
+        items.append({
+            "id": row.id,
+            "device_model": row.device_model or "Noma’lum qurilma",
+            "user_agent": row.user_agent or "",
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
+            "expires_at": row.expires_at.isoformat() if row.expires_at else None,
+            "active": active,
+            "current": False,
+        })
+    raw = authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else ""
+    current_hash = token_hash(raw) if raw else ""
+    for item, row in zip(items, [r for r in rows if not r.is_revoked]):
+        if row.token_hash == current_hash:
+            item["current"] = True
+    return {"sessions": items}
+
+@app.post("/api/auth/sessions/revoke-others")
+async def revoke_other_sessions(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    user = current_user(authorization, session)
+    raw = authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else ""
+    current_hash = token_hash(raw) if raw else ""
+    rows = list(session.scalars(select(SessionToken).where(SessionToken.user_id == user.id)))
+    count = 0
+    for row in rows:
+        if row.token_hash != current_hash and not row.is_revoked:
+            row.is_revoked = True
+            count += 1
+    session.commit()
+    return {"ok": True, "revoked": count}
 
 
 def smtp_configured() -> bool:
@@ -1345,7 +1336,6 @@ def _tv_parse_frames(raw: str) -> list[dict[str,Any]]:
     return out
 
 async def _fetch_tradingview_candles_once(symbol: str, interval: str, limit: int = TRADINGVIEW_BARS) -> list[dict[str,Any]]:
-    tv_symbol = "OANDA:XAUUSD" if clean_symbol(symbol) in {"XAU/USD","XAUUSD"} else ("OANDA:EURUSD" if clean_symbol(symbol) in {"EUR/USD","EURUSD"} else (os.getenv("TRADINGVIEW_SYMBOL", "OANDA:XAUUSD").strip() or "OANDA:XAUUSD"))
     try: import websockets
     except Exception as exc: raise MarketDataError(f"TradingView WebSocket dependency unavailable: {exc}")
     tf=_tv_interval(interval); cs=_tv_session("cs"); qs=_tv_session("qs"); bars=[]
@@ -1356,8 +1346,8 @@ async def _fetch_tradingview_candles_once(symbol: str, interval: str, limit: int
             await send("chart_create_session",[cs,""])
             await send("quote_create_session",[qs])
             await send("quote_set_fields",[qs,"lp","ch","chp"])
-            await send("quote_add_symbols",[qs,tv_symbol])
-            resolve=json.dumps({"symbol":tv_symbol,"adjustment":"splits","session":"regular"},separators=(",",":"))
+            await send("quote_add_symbols",[qs,TRADINGVIEW_SYMBOL])
+            resolve=json.dumps({"symbol":TRADINGVIEW_SYMBOL,"adjustment":"splits","session":"regular"},separators=(",",":"))
             await send("resolve_symbol",[cs,"sds_sym_1","="+resolve])
             await send("create_series",[cs,"sds_1","s1","sds_sym_1",tf,int(limit),""])
             deadline=asyncio.get_running_loop().time()+TRADINGVIEW_TIMEOUT
@@ -3485,49 +3475,54 @@ MT5_CANDLE_MAX_AGE = int(os.getenv("MT5_CANDLE_MAX_AGE", "20"))
 MT5_HEARTBEAT_TIMEOUT = int(os.getenv("MT5_HEARTBEAT_TIMEOUT", "30"))
 MT5_TF_KEYS = {"1min":"1min","5min":"5min","15min":"15min","30min":"30min","1h":"1h","4h":"4h","1day":"1day"}
 
-def _mt5_market_key(symbol: str | None) -> str:
-    key = clean_symbol(symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL)
-    if key in {"EURUSD", "EUR/USD"}: return "EUR/USD"
-    if key in {"XAUUSD", "XAU/USD"}: return "XAU/USD"
-    return key
-
-def _mt5_market_state(symbol: str | None) -> dict[str, Any]:
-    mk = _mt5_market_key(symbol)
-    markets = MT5_BRIDGE_STATE.get("markets") or {}
-    if mk in markets:
-        return markets[mk]
-    # Backward-compatible fallback for older single-symbol state.
-    if _mt5_market_key(MT5_BRIDGE_STATE.get("symbol")) == mk and MT5_BRIDGE_STATE.get("last_seen"):
-        return MT5_BRIDGE_STATE
-    return {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "symbol": mk, "candles": {}}
-
-def _mt5_last_seen_age(state: dict[str, Any]) -> float | None:
-    raw = state.get("last_seen")
-    if not raw: return None
+def _mt5_last_seen_age() -> float | None:
+    raw = MT5_BRIDGE_STATE.get("last_seen")
+    if not raw:
+        return None
     try:
         ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
         return max(0.0, (datetime.now(timezone.utc) - ts).total_seconds())
     except Exception:
         return None
 
-def _mt5_state_fresh(symbol: str | None) -> bool:
-    st = _mt5_market_state(symbol)
-    if not st.get("connected"): return False
-    age = _mt5_last_seen_age(st)
+def _mt5_state_fresh() -> bool:
+    if not MT5_BRIDGE_STATE.get("connected"):
+        return False
+    age = _mt5_last_seen_age()
     return age is not None and age <= MT5_CANDLE_MAX_AGE
 
-def _mt5_is_connected_now(symbol: str | None) -> bool:
-    st = _mt5_market_state(symbol)
-    if not st.get("connected"): return False
-    age = _mt5_last_seen_age(st)
+def _mt5_is_connected_now() -> bool:
+    if not MT5_BRIDGE_STATE.get("connected"):
+        return False
+    age = _mt5_last_seen_age()
     return age is not None and age <= MT5_HEARTBEAT_TIMEOUT
 
-def get_mt5_candles(interval: str, limit: int = 320, symbol: str | None = None) -> list[dict[str, Any]]:
+def _mt5_market_key(symbol: str | None) -> str:
+    key = clean_symbol(symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL)
+    if key in {"XAUUSD", "XAU/USD"}: return "XAU/USD"
+    if key in {"EURUSD", "EUR/USD"}: return "EUR/USD"
+    return key
+
+def _mt5_market_state(symbol: str | None) -> dict[str, Any]:
     mk = _mt5_market_key(symbol)
-    if not _mt5_state_fresh(mk):
-        raise MarketDataError(f"Exness MT5 bridge {mk} ulanmagan yoki candle ma'lumoti eskirgan")
+    markets = MT5_BRIDGE_STATE.get("markets") or {}
+    if mk in markets and isinstance(markets[mk], dict):
+        return markets[mk]
+    return MT5_BRIDGE_STATE
+
+def get_mt5_candles(interval: str, limit: int = 320, symbol: str | None = None) -> list[dict[str, Any]]:
+    market = _mt5_market_state(symbol)
+    if not market.get("connected"):
+        raise MarketDataError(f"Exness MT5 bridge {clean_symbol(symbol or DEFAULT_SYMBOL)} uchun ulanmagan")
+    raw_seen = market.get("last_seen")
+    try:
+        age = max(0.0, (datetime.now(timezone.utc) - datetime.fromisoformat(str(raw_seen).replace("Z", "+00:00"))).total_seconds()) if raw_seen else None
+    except Exception:
+        age = None
+    if age is None or age > MT5_CANDLE_MAX_AGE:
+        raise MarketDataError(f"Exness MT5 {clean_symbol(symbol or DEFAULT_SYMBOL)} candle ma'lumoti eskirgan")
     key = MT5_TF_KEYS.get(validate_interval(interval), validate_interval(interval))
-    rows = (_mt5_market_state(mk).get("candles") or {}).get(key) or []
+    rows = (market.get("candles") or {}).get(key) or []
     out=[]
     for c in rows:
         try:
@@ -3561,8 +3556,7 @@ async def live_signals(symbol: str) -> dict[str, Any]:
     # Every request recomputes signals from the current live candle feed.
     # No demo/static signal data is used.
     result = await build_advanced_signals(clean_symbol(symbol), news_blocked=False)
-    tv_symbol = "OANDA:XAUUSD" if clean_symbol(symbol) in {"XAU/USD","XAUUSD"} else ("OANDA:EURUSD" if clean_symbol(symbol) in {"EUR/USD","EURUSD"} else TRADINGVIEW_SYMBOL)
-    return {**result, "mode": "live", "source": f"TradingView {tv_symbol} chart series"}
+    return {**result, "mode": "live", "source": f"TradingView {TRADINGVIEW_SYMBOL} chart series"}
 
 @app.post("/api/v1/signals/save-advanced")
 async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
@@ -3611,8 +3605,8 @@ class MT5LotBody(BaseModel):
     lot: float = 0.01
 
 class MT5StateBody(BaseModel):
-    symbol: str = ""
     connected: bool = False
+    symbol: str = ""
     login: str = ""
     server: str = ""
     balance: float | None = None
@@ -3826,13 +3820,16 @@ async def ai_providers_status():
 async def mt5_status(symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     key = _mt5_market_key(symbol)
     state = dict(_mt5_market_state(key))
-    age = _mt5_last_seen_age(state)
-    connected_now = _mt5_is_connected_now(key)
+    raw_seen = state.get("last_seen")
+    try:
+        age = max(0.0, (datetime.now(timezone.utc) - datetime.fromisoformat(str(raw_seen).replace("Z", "+00:00"))).total_seconds()) if raw_seen else None
+    except Exception:
+        age = None
+    connected_now = bool(state.get("connected")) and age is not None and age <= MT5_HEARTBEAT_TIMEOUT
     state["connected"] = connected_now
     state["heartbeat_age_sec"] = round(age, 1) if age is not None else None
     state["connection_state"] = "CONNECTED" if connected_now else ("STALE" if age is not None and age <= 60 else "DISCONNECTED")
-    queued = sum(1 for x in MT5_ORDER_QUEUE if _mt5_market_key(x.get("symbol")) == key)
-    return {"ok": True, "symbol": key, "auto_trading": MT5_AUTO_TRADING, "lot": MT5_LOT_SIZE, "state": state, "queue": queued, "demo_only": True, "heartbeat_timeout_sec": MT5_HEARTBEAT_TIMEOUT}
+    return {"ok": True, "symbol": key, "auto_trading": MT5_AUTO_TRADING, "lot": MT5_LOT_SIZE, "state": state, "queue": len(MT5_ORDER_QUEUE), "demo_only": True, "heartbeat_timeout_sec": MT5_HEARTBEAT_TIMEOUT}
 
 @app.post("/api/v1/mt5/connect")
 async def mt5_connect(body: MT5ConnectBody, authorization: str | None = Header(default=None)) -> dict[str, Any]:
@@ -3861,30 +3858,36 @@ async def mt5_auto_trading(enabled: bool = Query(...), authorization: str | None
     return {"ok": True, "auto_trading": MT5_AUTO_TRADING, "demo_only": True}
 
 @app.get("/api/v1/mt5/poll")
-async def mt5_poll(token: str = Query(...), symbol: str | None = Query(None)) -> dict[str, Any]:
+async def mt5_poll(token: str = Query(...)) -> dict[str, Any]:
     if not secrets.compare_digest(token, MT5_BRIDGE_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid MT5 bridge token")
+    MT5_BRIDGE_STATE["last_seen"] = datetime.now(timezone.utc).isoformat()
+    if not MT5_AUTO_TRADING or not MT5_ORDER_QUEUE:
+        return {"ok": True, "orders": []}
+    # Claim a small batch without deleting it. The EA reports success/failure; failed
+    # orders are re-queued up to three times so a transient MT5/WebRequest error does
+    # not silently lose a signal.
     orders = []
-    wanted = _mt5_market_key(symbol) if symbol else None
     for item in MT5_ORDER_QUEUE:
-        if item.get("claimed"): continue
-        if wanted and _mt5_market_key(item.get("symbol")) != wanted: continue
+        if item.get("claimed"):
+            continue
         item["claimed"] = True
         MT5_ORDER_ATTEMPTS[item["id"]] = MT5_ORDER_ATTEMPTS.get(item["id"], 0) + 1
         orders.append(item)
-        if len(orders) >= 10: break
+        if len(orders) >= 10:
+            break
     return {"ok": True, "orders": orders}
 
 @app.post("/api/v1/mt5/state")
 async def mt5_state(body: MT5StateBody, token: str = Query(...)) -> dict[str, Any]:
     if not secrets.compare_digest(token, MT5_BRIDGE_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid MT5 bridge token")
-    now = datetime.now(timezone.utc).isoformat()
-    mk = _mt5_market_key(body.symbol or DEFAULT_SYMBOL)
-    market_state = {"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": now, "last_error": body.error or "", "symbol": mk, "candles": body.candles or {}}
-    MT5_BRIDGE_STATE.setdefault("markets", {})[mk] = market_state
-    MT5_BRIDGE_STATE.update({"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": now, "last_error": body.error or "", "symbol": mk, "candles": body.candles or {}})
-    return {"ok": True, "symbol": mk}
+    now_iso = datetime.now(timezone.utc).isoformat()
+    key = _mt5_market_key(body.symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL)
+    snapshot = {"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": now_iso, "last_error": body.error or "", "symbol": key, "candles": body.candles or {}}
+    MT5_BRIDGE_STATE.update(snapshot)
+    MT5_BRIDGE_STATE.setdefault("markets", {})[key] = snapshot
+    return {"ok": True, "symbol": key}
 
 @app.post("/api/v1/mt5/report")
 async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, Any]:

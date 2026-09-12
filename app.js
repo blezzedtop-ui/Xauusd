@@ -1,4 +1,4 @@
-const symbol='XAU/USD';let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,lastRestQuoteAt=0,streamKey='';
+const IS_EUR_PAGE=/^\/eurusd(?:\/?$)/i.test(location.pathname);const symbol=IS_EUR_PAGE?'EUR/USD':'XAU/USD';const TV_SYMBOL=IS_EUR_PAGE?'OANDA:EURUSD':'OANDA:XAUUSD';let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,lastRestQuoteAt=0,streamKey='';
 const $=id=>document.getElementById(id);let trendLineInterval='5min';let trendLiveRefreshTimer=null;let trendOverlayChart=null,trendOverlaySeries=null,trendOverlayLayers=[];const setText=(id,v)=>{const el=$(id);if(el)el.textContent=v??'—';};const fmt=v=>v==null?'—':Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
 function showToast(m){$('toast').textContent=m;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),2300)}
 
@@ -28,7 +28,7 @@ function mountTradingView(id, tf=interval){
  script.type='text/javascript'; script.src='https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js'; script.async=true;
  const cfg={
    autosize:true,
-   symbol:'OANDA:XAUUSD',
+   symbol:TV_SYMBOL,
    interval:tvInterval(tf),
    timezone:'Etc/UTC',
    theme:'dark',
@@ -148,7 +148,7 @@ function mountTradingViewTechnical(containerId, tf){
   script.src='https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js';
   script.type='text/javascript'; script.async=true;
   const intervalMap={'1min':'1m','5min':'5m','15min':'15m','30min':'30m','1h':'1h','4h':'4h','1day':'1D'};
-  script.textContent=JSON.stringify({interval:intervalMap[tf]||'5m',width:'100%',height:500,symbol:'OANDA:XAUUSD',showIntervalTabs:true,displayMode:'single',colorTheme:'dark',isTransparent:true,locale:'en',largeChartUrl:''});
+  script.textContent=JSON.stringify({interval:intervalMap[tf]||'5m',width:'100%',height:500,symbol:TV_SYMBOL,showIntervalTabs:true,displayMode:'single',colorTheme:'dark',isTransparent:true,locale:'en',largeChartUrl:''});
   el.appendChild(script);
 }
 function mountTradingViewCalendar(){
@@ -427,7 +427,7 @@ async function loadTrendLines(tf=trendLineInterval){
     if($('trendChartTf')) $('trendChartTf').textContent=tfName(tf);
   }catch(e){$('trendLineStatus').textContent='Trend Line error: '+e.message;}
 }
-function openSection(id){const target=$(id);if(!target)return;document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',aiSignalsSection:'AI Signals',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',historySection:'Signal History',trendLineSection:'Auto Trend Line'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{})},50);}if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='aiSignalsSection')loadAISignals().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section')loadMT5Status().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
+function openSection(id){const target=$(id);if(!target)return;document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',aiSignalsSection:'AI Signals',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{})},50);}if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='aiSignalsSection')loadAISignals().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section')loadMT5Status().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
 
 document.addEventListener('click',e=>{const b=e.target.closest('[data-classic-interval]');if(b){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===b));classicInterval=b.dataset.classicInterval;loadClassicTrade(classicInterval)}});
 document.addEventListener('click',e=>{
@@ -521,9 +521,34 @@ function connectMarketStream(){
    marketWS.onerror=()=>{ try{marketWS.close()}catch{} };
  }catch(e){ marketWS=null; }
 }
-function setAuth(mode){authMode=mode;$('authTitle').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSubmit').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSwitch').textContent=mode==='login'?'Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish':'Hisobingiz bormi? Kirish';$('email').placeholder=mode==='login'?'Login yoki elektron pochta':'Elektron pochta';$('password').required=mode==='login';$('password').style.display=mode==='login'?'block':'none';$('password').value='';$('authMsg').textContent=mode==='register'?'Email kiriting — login va parol avtomatik yaratiladi.':''}
+function setAuth(mode){authMode=mode;$('authTitle').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSubmit').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSwitch').textContent=mode==='login'?'Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish':'Hisobingiz bormi? Kirish';$('email').placeholder=mode==='login'?'Login yoki elektron pochta':'Elektron pochta';$('email').autocomplete=mode==='login'?'username':'email';$('passwordLabel').style.display=mode==='login'?'block':'none';$('password').required=mode==='login';$('password').style.display=mode==='login'?'block':'none';$('password').value='';$('authMsg').textContent=mode==='register'?'Email kiriting — login va parol avtomatik yaratiladi.':''}
+function safeText(v){return String(v??'').replace(/[&<>\"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[m]||m));}
+async function loadActiveSessions(){
+  const grid=$('activeSessionsGrid'); if(!grid)return;
+  if(!token){ grid.innerHTML='<div class="mini">Aktiv seanslarni ko‘rish uchun avval tizimga kiring.</div>'; return; }
+  grid.innerHTML='<div class="mini">Seanslar tekshirilmoqda…</div>';
+  try{
+    const d=await api('/api/auth/sessions');
+    const rows=d.sessions||[];
+    if(!rows.length){ grid.innerHTML='<div class="mini">Aktiv seans topilmadi.</div>'; return; }
+    grid.innerHTML=rows.map(x=>{
+      const seen=x.last_seen_at?new Date(x.last_seen_at).toLocaleString(): '—';
+      const created=x.created_at?new Date(x.created_at).toLocaleString(): '—';
+      const status=x.active?'🟢 Faol':'🟡 Faol emas';
+      const current=x.current?' · Joriy qurilma':'';
+      return `<div class="advanced-card"><div class="advanced-head"><div><div class="mini">${status}${current}</div><div class="advanced-signal wait">${safeText(x.device_model||'Noma’lum qurilma')}</div></div><span class="pill">ID ${safeText(x.id)}</span></div><div class="mini">Oxirgi faollik: ${safeText(seen)}</div><div class="mini">Yaratilgan: ${safeText(created)}</div></div>`;
+    }).join('');
+  }catch(e){ grid.innerHTML=`<div class="mini">Seanslar xatosi: ${safeText(e.message||'server xatosi')}</div>`; }
+}
+async function revokeOtherSessions(){
+  if(!token) throw Error('Avval tizimga kiring.');
+  const d=await api('/api/auth/sessions/revoke-others',{method:'POST'});
+  await loadActiveSessions();
+  showToast(`Boshqa seanslar yopildi: ${d.revoked||0}`);
+}
+
 async function loadMT5Status(){
-  const d=await api('/api/v1/mt5/status?symbol='+encodeURIComponent(symbol)); const st=d.state||{};
+  const d=await api(`/api/v1/mt5/status?symbol=${encodeURIComponent(symbol)}`); const st=d.state||{};
   const connState=String(st.connection_state||'').toUpperCase();
   const connLabel=connState==='CONNECTED' || st.connected ? '🟢 CONNECTED' : (connState==='STALE' ? '🟡 STALE' : '🔴 DISCONNECTED');
   setText('mt5Status', connLabel);
@@ -545,14 +570,18 @@ function bindCriticalButtons(){
   const run=(id,fn)=>{const b=$(id);if(!b||b.dataset.directBound==='1')return;b.dataset.directBound='1';b.addEventListener('click',async e=>{e.preventDefault();e.stopPropagation();if(b.disabled)return;const old=b.innerHTML;b.disabled=true;b.innerHTML='⟳ Ishlanmoqda…';try{await fn();showToast(id==='authBtn'?'':'Yangilandi')}catch(err){console.error('DIRECT BUTTON',id,err);showToast((err?.message||'Server xatosi'))}finally{b.disabled=false;b.innerHTML=old}});};
   const auth=$('authBtn');
   if(auth&&auth.dataset.directBound!=='1'){auth.dataset.directBound='1';auth.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();if(String(auth.textContent||'').trim()==='Chiqish'){logoutUser();return;}setAuth('login');setText('authMsg','');$('authModal')?.classList.add('show');setTimeout(()=>$('email')?.focus(),50);});}
+  const openRegister=$('openRegisterDirect'); if(openRegister&&openRegister.dataset.bound!=='1'){openRegister.dataset.bound='1';openRegister.addEventListener('click',e=>{e.preventDefault();setAuth('register');$('email')?.focus();});}
   const authClose=$('authClose'); if(authClose&&authClose.dataset.bound!=='1'){authClose.dataset.bound='1';authClose.addEventListener('click',()=>{$('authModal')?.classList.remove('show');});}
   const authModal=$('authModal'); if(authModal&&authModal.dataset.bound!=='1'){authModal.dataset.bound='1';authModal.addEventListener('click',e=>{if(e.target===authModal)authModal.classList.remove('show');});}
-  const authSwitch=$('authSwitch'); if(authSwitch&&authSwitch.dataset.bound!=='1'){authSwitch.dataset.bound='1';authSwitch.addEventListener('click',()=>setAuth(authMode==='login'?'register':'login'));authSwitch.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setAuth(authMode==='login'?'register':'login');}});}
-  run('refreshSignalEngine',()=>loadSignalEngine()); run('refreshAIProviders',async()=>{await loadAIProviders();bindAIControls()}); run('refreshAdvanced',()=>loadAdvancedSignals()); run('refreshICT',()=>loadICTSignals()); run('refreshClassic',()=>loadClassicTrade(classicInterval)); run('refreshSNR',()=>loadSNR(snrInterval)); run('refreshStats',async()=>{await loadStats();await loadHistory()}); run('refreshSmartAnalysis',()=>loadSmartAnalysis()); run('refreshAISignals',()=>loadAISignals()); run('refreshCalendar',()=>loadCalendar()); run('refreshHistory',async()=>{await loadStats();await loadHistory()}); run('refreshTrendLines',()=>loadTrendLines(trendLineInterval)); run('connectMT5',()=>connectMT5()); run('saveMT5Lot',()=>saveMT5Lot()); run('mt5AutoOn',()=>setMT5Auto(true)); run('mt5AutoOff',()=>setMT5Auto(false)); run('refreshMT5',()=>loadMT5Status()); run('openFullHistory',()=>{openSection('historySection');});
+  const authSwitch=$('authSwitch'); if(authSwitch&&authSwitch.dataset.bound!=='1'){authSwitch.dataset.bound='1';authSwitch.addEventListener('click',e=>{e.preventDefault();setAuth(authMode==='login'?'register':'login');});authSwitch.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setAuth(authMode==='login'?'register':'login');}});}
+  run('refreshSignalEngine',()=>loadSignalEngine()); run('refreshAIProviders',async()=>{await loadAIProviders();bindAIControls()}); run('refreshAdvanced',()=>loadAdvancedSignals()); run('refreshICT',()=>loadICTSignals()); run('refreshClassic',()=>loadClassicTrade(classicInterval)); run('refreshSNR',()=>loadSNR(snrInterval)); run('refreshStats',async()=>{await loadStats();await loadHistory()}); run('refreshSmartAnalysis',()=>loadSmartAnalysis()); run('refreshAISignals',()=>loadAISignals()); run('refreshCalendar',()=>loadCalendar()); run('refreshHistory',async()=>{await loadStats();await loadHistory()}); run('refreshTrendLines',()=>loadTrendLines(trendLineInterval)); run('connectMT5',()=>connectMT5()); run('saveMT5Lot',()=>saveMT5Lot()); run('mt5AutoOn',()=>setMT5Auto(true)); run('mt5AutoOff',()=>setMT5Auto(false)); run('refreshMT5',()=>loadMT5Status()); run('refreshActiveSessions',()=>loadActiveSessions()); run('revokeOtherSessions',()=>revokeOtherSessions()); run('openFullHistory',()=>{openSection('historySection');});
 }
 function bindUIActions(){
   document.querySelectorAll('.tfbar').forEach(bar=>{if(bar.dataset.bound==='1')return;bar.dataset.bound='1';bar.addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b&&bar.contains(b))setTf(b.dataset.interval);const s=e.target.closest('[data-signal-interval]');if(s&&bar.contains(s)){document.querySelectorAll('[data-signal-interval]').forEach(x=>x.classList.toggle('active',x===s));signalInterval=s.dataset.signalInterval;loadSelectedSignal(signalInterval).catch(()=>{});}const c=e.target.closest('[data-classic-interval]');if(c&&bar.contains(c)){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===c));classicInterval=c.dataset.classicInterval;loadClassicTrade(classicInterval).catch(()=>{});}const n=e.target.closest('[data-snr-interval]');if(n&&bar.contains(n)){document.querySelectorAll('[data-snr-interval]').forEach(x=>x.classList.toggle('active',x===n));snrInterval=n.dataset.snrInterval;loadSNR(snrInterval).catch(()=>{});}})});
-  document.querySelectorAll('.nav button').forEach(b=>{if(b.dataset.bound==='1')return;b.dataset.bound='1';b.addEventListener('click',e=>{e.preventDefault();openSection(b.dataset.section);});});
+  document.querySelectorAll('.nav button[data-section]').forEach(b=>{if(b.dataset.bound==='1')return;b.dataset.bound='1';b.addEventListener('click',e=>{e.preventDefault();openSection(b.dataset.section);});});
+  const eurForm=$('eurUsdPageForm'); if(eurForm && eurForm.dataset.bound!=='1'){eurForm.dataset.bound='1'; eurForm.addEventListener('submit',e=>{ e.preventDefault(); window.location.assign(new URL('/eurusd', window.location.origin).href); }, {capture:true}); }
+  const eurBtn=$('eurUsdPageBtn'); if(eurBtn && eurBtn.dataset.bound!=='1'){eurBtn.dataset.bound='1';['click','pointerup','mousedown','touchend'].forEach(ev=>eurBtn.addEventListener(ev,e=>{e.preventDefault();e.stopPropagation();window.location.assign(new URL('/eurusd', window.location.origin).href);},{capture:true}));}
+  const xauBtn=$('xauUsdPageBtn'); if(xauBtn && xauBtn.dataset.bound!=='1'){xauBtn.dataset.bound='1';xauBtn.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();window.location.assign('/');});}
   if(document.body.dataset.actionsBound==='1')return;document.body.dataset.actionsBound='1';
   document.addEventListener('click',e=>{
     const b=e.target.closest?.('button');if(!b)return;const id=b.id;
@@ -564,9 +593,6 @@ function bindUIActions(){
 }
 document.addEventListener('click',e=>{const b=e.target.closest('[data-trend-interval]');if(b){e.preventDefault();document.querySelectorAll('[data-trend-interval]').forEach(x=>x.classList.toggle('active',x===b));trendLineInterval=b.dataset.trendInterval;loadTrendLines(trendLineInterval);}});
 if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',()=>{bindUIActions();bindCriticalButtons()},{once:true});}else{bindUIActions();bindCriticalButtons();}
-
-window.__forceOpenAuth=function(mode='login'){ try{ setAuth(mode); const m=document.getElementById('authModal'); if(m){m.classList.add('show');m.setAttribute('aria-hidden','false');} setTimeout(()=>document.getElementById('email')?.focus(),60);}catch(e){console.error('force auth',e)} };
-
 async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(()=>{});token='';localStorage.removeItem('trading_token');$('plan').textContent='Guest';$('authBtn').textContent='Kirish';loadStats();loadHistory();$('authModal').classList.remove('show');$('authMsg').textContent='';showToast('Tizimdan chiqildi')};$('authForm').onsubmit=async e=>{
  e.preventDefault();
  const identity=String($('email').value||'').trim();
@@ -651,4 +677,3 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
     try{mountTradingView('chart', interval)}catch(_){}
   }
 })();;
-loadMarketNews().catch(()=>{}); setInterval(()=>loadMarketNews().catch(()=>{}),30000);

@@ -12,29 +12,7 @@
 @media(max-width:900px){.app{display:block}.sidebar{position:sticky;top:0;height:auto;padding:10px;z-index:20;border-right:0;border-bottom:1px solid var(--line)}.brand{padding:4px 8px 10px;margin-bottom:8px}.nav{flex-direction:row;overflow-x:auto;gap:5px;padding-bottom:2px}.nav button{white-space:nowrap;padding:8px 10px;font-size:11px}.main{padding:10px}.dashboard{grid-template-columns:1fr}.chart{height:420px}.grid4{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}.topbar{align-items:flex-start}.price{font-size:27px}.tfbar{overflow-x:auto;flex-wrap:nowrap}.tf{white-space:nowrap}.sidebar-bottom{display:none}}
 @media(max-width:480px){.main{padding:8px}.card{padding:10px;border-radius:12px}.chart{height:360px}.metric{padding:8px}.metric b{font-size:16px}.section-head h2,.section-head h3{font-size:14px}.auto-signal{min-height:0}.tools{gap:4px}.auth-top{min-width:70px;padding:7px 9px}}
 .auth-top,.btn{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
-.btn{pointer-events:auto!important;position:relative!important;z-index:100!important}.buy,.badge-buy{color:#35d49a!important}.sell,.badge-sell{color:#ff5c70!important}.advanced-signal.buy,.signal-main.buy{color:#35d49a!important}.advanced-signal.sell,.signal-main.sell{color:#ff5c70!important}.history .buy{color:#35d49a!important}.history .sell{color:#ff5c70!important}.history-group td{background:#101923;color:#dbe8f7;border-top:2px solid var(--line);font-size:12px;padding-top:12px;padding-bottom:8px}.source-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.source-stat{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:11px}.source-stat .source-title{font-weight:800;font-size:12px}.source-stat .source-win{font-size:20px;font-weight:900;margin-top:5px}.source-stat .source-line{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}@media(max-width:1000px){.source-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.source-stats-grid{grid-template-columns:1fr}} /* Live market-news ticker */
-.market-news{position:relative;overflow:hidden;display:flex;align-items:center;gap:12px;height:48px;margin:0 0 14px;padding:0 14px;border-radius:14px;border:1px solid rgba(245,193,93,.28);background:linear-gradient(100deg,rgba(25,17,5,.78),rgba(10,11,13,.55));backdrop-filter:blur(18px);box-shadow:0 12px 34px rgba(0,0,0,.25),inset 0 1px 0 rgba(255,255,255,.04)}
-.market-news .live-dot{width:8px;height:8px;border-radius:50%;background:#45e19a;box-shadow:0 0 12px rgba(69,225,154,.75);flex:0 0 auto;animation:newsPulse 1.5s ease-in-out infinite}
-.market-news .news-label{display:flex;align-items:center;gap:7px;color:var(--gold);font-weight:900;font-size:10px;letter-spacing:.08em;white-space:nowrap}
-.market-news .news-cat{padding:4px 7px;border-radius:999px;border:1px solid rgba(245,193,93,.35);background:rgba(245,193,93,.08);font-size:9px;font-weight:900;color:var(--gold);white-space:nowrap}
-.market-news .news-text{min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:#f4f6f8}
-.market-news .news-text.enter{animation:newsIn .45s ease both}
-.market-news .news-meta{font-size:10px;color:var(--muted);white-space:nowrap}
-.market-news .news-open{border:1px solid rgba(245,193,93,.3);background:rgba(245,193,93,.08);color:var(--gold);border-radius:9px;padding:7px 9px;cursor:pointer;white-space:nowrap}
-.market-news .news-open:hover{background:rgba(245,193,93,.16)}
-@keyframes newsPulse{50%{transform:scale(1.25);opacity:.62}}
-@keyframes newsIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
-@media(max-width:700px){.market-news{height:44px;padding:0 10px;gap:8px}
-/* Instrument-specific liquid-glass 3D logos */
-.brand-logo{position:relative;width:58px;height:58px;border-radius:50%;display:grid;place-items:center;flex:0 0 auto;filter:drop-shadow(0 10px 24px rgba(0,0,0,.35))}
-.brand-logo:before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,rgba(255,220,120,.95),rgba(255,255,255,.18),rgba(232,167,43,.9),rgba(255,255,255,.12),rgba(255,220,120,.95));animation:logoSpin 9s linear infinite;box-shadow:0 0 28px rgba(245,193,93,.28),inset 0 1px 3px rgba(255,255,255,.6)}
-.brand-logo:after{content:"";position:absolute;inset:5px;border-radius:50%;background:radial-gradient(circle at 32% 26%,rgba(255,255,255,.55),rgba(255,255,255,.08) 18%,rgba(20,12,3,.88) 62%);border:1px solid rgba(255,255,255,.12);box-shadow:inset 0 -8px 18px rgba(0,0,0,.35)}
-.logo-core{position:relative;z-index:2;width:43px;height:43px;border-radius:50%;display:grid;place-items:center;text-align:center;color:#fff8d8;font-size:10px;font-weight:1000;letter-spacing:.06em;background:radial-gradient(circle at 30% 22%,#fff7c8 0,#f7d67a 8%,#b87b11 42%,#4e3005 100%);border:1px solid rgba(255,230,150,.85);box-shadow:inset 0 2px 3px rgba(255,255,255,.6),inset 0 -5px 10px rgba(0,0,0,.4),0 0 20px rgba(245,193,93,.26);animation:logoFloat 3.8s ease-in-out infinite}
-.logo-ring{position:absolute;inset:-7px;border-radius:50%;border:1px solid rgba(245,193,93,.45);border-left-color:transparent;border-right-color:rgba(255,255,255,.25);animation:logoSpin 5.5s linear infinite;z-index:1}
-.brand-logo.eur-logo:before{background:conic-gradient(from 0deg,rgba(120,205,255,.95),rgba(255,255,255,.16),rgba(73,150,255,.95),rgba(255,255,255,.12),rgba(120,205,255,.95));box-shadow:0 0 28px rgba(73,150,255,.28),inset 0 1px 3px rgba(255,255,255,.6)}
-.brand-logo.eur-logo .logo-core{color:#e8f6ff;background:radial-gradient(circle at 30% 22%,#f5fbff 0,#9edbff 10%,#2768c0 44%,#102b59 100%);border-color:rgba(140,210,255,.9);box-shadow:inset 0 2px 3px rgba(255,255,255,.6),inset 0 -5px 10px rgba(0,0,0,.45),0 0 20px rgba(73,150,255,.24)}
-@keyframes logoSpin{to{transform:rotate(360deg)}}@keyframes logoFloat{50%{transform:translateY(-3px) scale(1.03)}}
-</style>
+.btn{pointer-events:auto!important;position:relative!important;z-index:100!important}.buy,.badge-buy{color:#35d49a!important}.sell,.badge-sell{color:#ff5c70!important}.advanced-signal.buy,.signal-main.buy{color:#35d49a!important}.advanced-signal.sell,.signal-main.sell{color:#ff5c70!important}.history .buy{color:#35d49a!important}.history .sell{color:#ff5c70!important}.history-group td{background:#101923;color:#dbe8f7;border-top:2px solid var(--line);font-size:12px;padding-top:12px;padding-bottom:8px}.source-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.source-stat{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:11px}.source-stat .source-title{font-weight:800;font-size:12px}.source-stat .source-win{font-size:20px;font-weight:900;margin-top:5px}.source-stat .source-line{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}@media(max-width:1000px){.source-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.source-stats-grid{grid-template-columns:1fr}} </style>
 <style>.title-shimmer{background:linear-gradient(90deg,#eef3f8 0%,#9fc7ff 35%,#f5c15d 52%,#eef3f8 72%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:titleShimmer 7s linear infinite}@keyframes titleShimmer{to{background-position:-220% 0}}.gold-photo-bg{position:fixed;inset:0;z-index:0;pointer-events:none;background-image:url("assets/gold-trading-bg.png");background-size:cover;background-position:center;background-repeat:no-repeat;filter:saturate(.92) contrast(1.03);opacity:.34;transform:translateZ(0);will-change:transform}.gold-photo-bg:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(3,6,10,.34),rgba(3,7,13,.72) 72%,rgba(2,5,9,.86));}.main{position:relative;z-index:3}.sidebar,.topbar,.card,.toast,.modal{z-index:4}.gold-photo-bg+*{position:relative;z-index:2}@media (max-width:900px){.gold-photo-bg{opacity:.22;background-position:center top}}
 .advanced-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.advanced-card{border:1px solid var(--line);background:rgba(8,14,21,.86);border-radius:12px;padding:12px;box-shadow:0 12px 30px rgba(0,0,0,.16)}.advanced-card.buy{border-color:rgba(48,212,154,.35)}.advanced-card.sell{border-color:rgba(240,105,120,.35)}.advanced-card.wait{border-color:rgba(245,193,93,.25)}.advanced-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.advanced-signal{font-size:22px;font-weight:1000;letter-spacing:.06em}.component-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}.component{padding:7px 8px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.02)}.component small{display:block;color:var(--muted);font-size:9px;margin-bottom:3px}.component b{font-size:11px}.ai-reason{margin-top:5px;line-height:1.35;word-break:break-word;opacity:.98;display:block;min-height:18px}.ai-provider-card .ai-reason b{color:var(--gold)}.advanced-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px}.badge-buy{color:var(--green)}.badge-sell{color:var(--red)}.badge-wait{color:var(--gold)}@media(max-width:900px){.advanced-grid{grid-template-columns:1fr}}
 .btn{pointer-events:auto!important;position:relative!important;z-index:100!important}.buy,.badge-buy{color:#35d49a!important}.sell,.badge-sell{color:#ff5c70!important}.advanced-signal.buy,.signal-main.buy{color:#35d49a!important}.advanced-signal.sell,.signal-main.sell{color:#ff5c70!important}.history .buy{color:#35d49a!important}.history .sell{color:#ff5c70!important}.history-group td{background:#101923;color:#dbe8f7;border-top:2px solid var(--line);font-size:12px;padding-top:12px;padding-bottom:8px}.source-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.source-stat{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:11px}.source-stat .source-title{font-weight:800;font-size:12px}.source-stat .source-win{font-size:20px;font-weight:900;margin-top:5px}.source-stat .source-line{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}@media(max-width:1000px){.source-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.source-stats-grid{grid-template-columns:1fr}} </style><link rel="manifest" href="/manifest.webmanifest">
@@ -107,14 +85,33 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
 @keyframes goldWallpaper{from{background-position:48% 46%;transform:scale(1)}to{background-position:54% 52%;transform:scale(1.05)}}
 @keyframes goldOrb{from{transform:translate3d(0,0,0) rotate(0deg)}to{transform:translate3d(-80px,55px,0) rotate(18deg)}}
 @media(max-width:900px){.gold-3d-orb{width:150px;height:150px;right:-30px;top:18vh}.gold-photo-bg{opacity:.17!important}}
+.nav-external{display:block;position:relative;z-index:1000;pointer-events:auto!important;user-select:none;-webkit-user-select:none;width:100%;border:1px solid transparent;background:transparent;color:var(--gold);text-align:left;padding:11px 12px;border-radius:10px;cursor:pointer;font-weight:800}.nav-external:hover{background:#111923;color:#fff}.nav-external::after{content:" ↗";opacity:.65}.nav-external-form{display:block;margin:0;padding:0;width:100%}.nav-external-form .nav-external{width:100%;display:block;font:inherit}
 </style>
+
+/* Premium 3D liquid-glass instrument logo */
+.brand{position:relative;gap:9px;flex-wrap:wrap}
+.brand-logo{position:relative;flex:0 0 auto;width:54px;height:54px;border-radius:18px;display:grid;place-items:center;overflow:visible;background:linear-gradient(145deg,rgba(255,255,255,.13),rgba(245,193,93,.06) 45%,rgba(0,0,0,.18));border:1px solid rgba(245,193,93,.34);box-shadow:inset 0 1px 0 rgba(255,255,255,.24),0 10px 28px rgba(0,0,0,.26),0 0 26px rgba(245,193,93,.11);backdrop-filter:blur(18px) saturate(150%);-webkit-backdrop-filter:blur(18px) saturate(150%);transform:translateZ(0);animation:logoFloat 4.8s ease-in-out infinite}
+.logo-core{position:relative;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;font-size:10px;font-weight:900;letter-spacing:.06em;color:#fff7d6;background:radial-gradient(circle at 30% 24%,rgba(255,255,255,.82),rgba(255,241,174,.22) 17%,rgba(245,193,93,.30) 38%,rgba(111,67,7,.28) 70%,rgba(0,0,0,.28) 100%);border:1px solid rgba(255,244,190,.54);box-shadow:inset 4px 4px 9px rgba(255,255,255,.18),inset -7px -7px 13px rgba(0,0,0,.20),0 0 24px rgba(245,193,93,.24);transform:perspective(180px) rotateX(10deg) rotateY(-10deg);animation:logoPulse 2.7s ease-in-out infinite}
+.logo-ring{position:absolute;inset:4px;border-radius:50%;border:1px solid rgba(245,193,93,.36);box-shadow:0 0 12px rgba(245,193,93,.12);animation:logoSpin 7s linear infinite}
+.logo-ring:before,.logo-ring:after{content:"";position:absolute;border-radius:50%;border:1px solid rgba(255,255,255,.15);inset:6px}
+.logo-ring:after{inset:-2px 8px;transform:rotate(62deg)}
+.brand-xau .logo-core b{font-size:8px}
+.brand-eur .logo-core{font-size:21px;letter-spacing:0;color:#fff}
+.brand-eur .logo-core b{font-size:21px}
+.brand-eur .logo-core:after{content:"";position:absolute;inset:5px;border-radius:50%;border-top:2px solid rgba(255,255,255,.22);border-left:2px solid rgba(255,255,255,.10);transform:rotate(-28deg)}
+.brand-eur .logo-ring{border-color:rgba(109,187,255,.42);box-shadow:0 0 12px rgba(109,187,255,.14)}
+.brand-eur .brand-logo{border-color:rgba(109,187,255,.34);box-shadow:inset 0 1px 0 rgba(255,255,255,.24),0 10px 28px rgba(0,0,0,.26),0 0 26px rgba(67,139,255,.12)}
+@keyframes logoSpin{to{transform:rotate(360deg)}}
+@keyframes logoPulse{0%,100%{transform:perspective(180px) rotateX(10deg) rotateY(-10deg) scale(1)}50%{transform:perspective(180px) rotateX(-4deg) rotateY(7deg) scale(1.06)}}
+@keyframes logoFloat{0%,100%{transform:translateY(0) rotate(0deg)}50%{transform:translateY(-3px) rotate(.5deg)}}
+@media(max-width:900px){.brand-logo{width:46px;height:46px;border-radius:15px}.logo-core{width:32px;height:32px}.brand-eur .logo-core,.brand-eur .logo-core b{font-size:18px}}
 </head>
 <body>
 <div class="gold-3d-orb"></div>
 <div class="gold-photo-bg" aria-hidden="true"></div>
 <div class="app">
 <aside class="sidebar">
-  <div class="brand"><div class="brand-logo" aria-hidden="true"><div class="logo-ring"></div><div class="logo-core"><b>GOLD</b></div></div><b>GOLD</b><span>Shohruh Ravshanov</span></div>
+  <div class="brand brand-xau"><div class="brand-logo" aria-hidden="true"><div class="logo-ring"></div><div class="logo-core"><b>Au</b></div></div><b>GOLD</b><span>Shohruh Ravshanov</span></div>
   <div class="nav">
     <button class="active" data-section="overview">▣ Overview</button>
     <button data-section="chartSection">◩ Live Chart</button>
@@ -130,20 +127,14 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
     <button data-section="calendarSection">◷ Economic Calendar</button>
     <button data-section="sessionsSection">◉ Market Sessions</button>
     <button data-section="historySection">▤ Signal History</button>
+    <button data-section="activeSessionsSection">◉ Aktiv Seanslar</button>
     <button data-section="mt5Section">◉ MetaTrader 5</button>
+    <form id="eurUsdPageForm" class="nav-external-form" action="/eurusd" method="get"><button id="eurUsdPageBtn" class="nav-external" type="submit">💱 EURUSD</button></form>
   </div>
   <div class="sidebar-bottom"><div class="tiny">Pivot + Key Levels engine<br>Live data via backend API</div></div>
 </aside>
 <main class="main">
-  <div class="market-news" id="marketNews" aria-live="polite">
-    <div class="news-label"><span class="live-dot"></span> LIVE MARKET</div>
-    <div class="news-cat" id="newsCategory">GOLD</div>
-    <div class="news-text" id="newsText">Oltin, neft va dollar bozorlariga oid jonli yangiliklar yuklanmoqda…</div>
-    <div class="news-meta" id="newsMeta">—</div>
-    <button class="news-open" id="newsOpen" type="button" disabled>Yangilik</button>
-  </div>
-
-  <div class="topbar"><div><h1 id="pageTitle" class="title-shimmer">Market Overview</h1><p>Har bir bo‘lim alohida ishlaydi. Timeframe o‘zgarsa tanlangan modul qayta hisoblanadi.</p></div><div class="tools"><div class="health"><span class="dot"></span><span class="pill" id="mode">Checking…</span></div><span class="pill" id="plan">Guest</span><button class="btn primary auth-top" id="authBtn" type="button" onclick="window.__forceOpenAuth&&window.__forceOpenAuth('login')">Kirish</button></div></div>
+  <div class="topbar"><div><h1 id="pageTitle" class="title-shimmer">Market Overview</h1><p>Har bir bo‘lim alohida ishlaydi. Timeframe o‘zgarsa tanlangan modul qayta hisoblanadi.</p></div><div class="tools"><div class="health"><span class="dot"></span><span class="pill" id="mode">Checking…</span></div><span class="pill" id="plan">Guest</span><button class="btn primary auth-top" id="authBtn">Kirish</button></div></div>
 
   <section class="section active" id="overview">
     <div class="dashboard">
@@ -236,6 +227,7 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
 </section>
 
 <section class="section" id="calendarSection"><div class="card"><div class="section-head"><h2>Economic Calendar</h2><span class="pill">TradingView LIVE · Global</span></div><div id="tvCalendarWidget" style="min-height:700px;border:1px solid var(--line);border-radius:10px;overflow:hidden"></div><div class="mini" style="margin-top:8px">Global economic events, currencies and impact levels are provided directly by TradingView. No user API key is required.</div></div></section>
+  <section class="section" id="activeSessionsSection"><div class="card"><div class="section-head"><div><h2>Aktiv seanslar</h2><div class="mini">Hisobingizga kirgan qurilmalar va oxirgi faollik</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="refreshActiveSessions" type="button">↻ Yangilash</button><button class="btn danger" id="revokeOtherSessions" type="button">Boshqa seanslarni yopish</button></div></div><div class="grid2" id="activeSessionsGrid"><div class="mini">Seanslar yuklanmoqda…</div></div></div></section>
   <section class="section" id="sessionsSection"><div class="card"><div class="section-head"><h2>Market Sessions</h2><span class="pill" id="sessionClock2">—</span></div><div class="sessions" id="sessions2"></div></div></section>
   <section class="section" id="mt5Section"><div class="card"><div class="section-head"><div><h2>MetaTrader 5</h2><div class="mini">Exness DEMO · MT5 EA/Bridge orqali xavfsiz ulanish</div></div><div><span class="pill" id="mt5Status">🔴 DISCONNECTED</span> <button class="btn" id="refreshMT5" type="button">↻ Yangilash</button></div></div><div class="grid2"><div><label class="mini">MT5 Login / Account number</label><input class="input" id="mt5Login" inputmode="numeric" placeholder="12345678" autocomplete="off"><label class="mini">MT5 Server</label><input class="input" id="mt5Server" placeholder="Exness-MT5..." autocomplete="off"><label class="mini">Trading Password</label><input class="input" id="mt5Password" type="password" placeholder="Trading password" autocomplete="off"><div class="mini" style="margin:4px 0 10px;color:var(--muted)">Parol serverda saqlanmaydi. Haqiqiy broker ulanishi MT5 terminalidagi EA/Bridge orqali tasdiqlanadi.</div><button class="btn primary" id="connectMT5" type="button">CONNECT MT5 DEMO</button></div><div><div class="grid2"><div class="metric"><small>Balance</small><b id="mt5Balance">—</b></div><div class="metric"><small>Equity</small><b id="mt5Equity">—</b></div><div class="metric"><small>Free Margin</small><b id="mt5FreeMargin">—</b></div><div class="metric"><small>Open Positions</small><b id="mt5Positions">0</b></div><div class="metric"><small>Heartbeat</small><b id="mt5Heartbeat">—</b><div class="mini" id="mt5LastError">—</div></div></div><div class="signal-box" style="margin-top:10px"><div class="section-head"><h3>AUTO TRADING</h3><span class="pill" id="mt5AutoState">🔴 OFF</span></div><div class="mini" id="mt5AutoInfo">OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.</div><div style="margin-top:10px"><label class="mini">Lot hajmi</label><input class="input" id="mt5Lot" type="number" min="0.01" max="100" step="0.01" value="0.01" placeholder="0.01"><div class="mini">Masalan: 0.01, 0.02, 0.10. Yangi auto orderlar shu lot bilan yuboriladi.</div></div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="saveMT5Lot" type="button">💾 Lotni saqlash</button><button class="btn" id="mt5AutoOn" type="button">🟢 AUTO ON</button><button class="btn danger" id="mt5AutoOff" type="button">🔴 AUTO OFF</button></div></div></div></div><div class="mini" style="margin-top:12px">Faqat DEMO rejim. Order faqat ≥84.99% + Strong Zone + AI tasdiq + MTF moslik shartlari bajarilganda navbatga qo‘yiladi.</div></div></div>
 <section class="section" id="historySection">
@@ -269,12 +261,13 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
       <label class="mini" for="password" id="passwordLabel">Parol</label>
       <input class="input" id="password" type="password" autocomplete="current-password" placeholder="Parol">
       <button class="btn primary" id="authSubmit" type="submit" style="width:100%">Kirish</button>
-      <button class="link" id="authSwitch" type="button" style="background:none;border:0;padding:0;color:#8fb9ff;cursor:pointer">Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish</button>
+      <button class="btn" id="openRegisterDirect" type="button" style="width:100%;margin-top:8px">Ro‘yxatdan o‘tish</button>
+      <div class="link" id="authSwitch" role="button" tabindex="0">Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish</div>
       <div class="mini" id="authMsg" style="margin-top:10px"></div>
     </form>
   </div>
 </div>
 
 <script src="/config.js?v=20260908f"></script>
-<script src="/app.js?v=20260912-full-multi-1"></script>
+<script src="/app.js?v=20260912-auth-sessions-4"></script>
 </body></html>

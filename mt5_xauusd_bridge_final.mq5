@@ -62,6 +62,7 @@ void ReportState(){
    string symbol=ExecSymbol();
    string body="{";
    body += "\"connected\":true";
+   body += ",\"symbol\":\"" + JsonEscape(symbol) + "\"";
    body += ",\"login\":\"" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + "\"";
    body += ",\"server\":\"" + JsonEscape(AccountInfoString(ACCOUNT_SERVER)) + "\"";
    body += ",\"balance\":" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE),2);
@@ -134,9 +135,16 @@ void OnTimer(){
       double tp=ExtractFirstTP(out,pos);
       double vol=ExtractNumber(out,"volume",pos); if(vol<=0) vol=DefaultLot;
       string symbol=ExecSymbol();
-      if(StringLen(requested_symbol)>0 && StringFind(requested_symbol,"XAUUSD")>=0) symbol=ExecSymbol();
+      string req=StringUpper(requested_symbol);
+      string chart=StringUpper(symbol);
+      bool requested_matches_chart=(StringLen(req)==0) || ((StringFind(req,"XAUUSD")>=0 && StringFind(chart,"XAUUSD")>=0) || (StringFind(req,"EURUSD")>=0 && StringFind(chart,"EURUSD")>=0));
 
       bool ok=false;
+      if(!requested_matches_chart){
+         SendReport(order_id,dir,"ORDER_FAILED",symbol,"Queued symbol mismatch: requested="+requested_symbol+" chart="+symbol);
+         pos += MathMax(1,StringLen(order_id));
+         continue;
+      }
       if(!EnsureSymbol(symbol)){
          SendReport(order_id,dir,"ORDER_FAILED",symbol,"Symbol not available: "+symbol);
       } else {
