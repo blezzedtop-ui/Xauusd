@@ -765,32 +765,52 @@ async def auth_me(authorization: str | None = Header(default=None), session: Ses
 
 @app.get("/api/auth/sessions")
 async def auth_sessions(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    # Privacy rule: ordinary users can see only their own sessions; admins can
+    # see all users' active/non-revoked sessions. This is enforced server-side.
     user = current_user(authorization, session)
     now = datetime.now(timezone.utc)
-    rows = list(session.scalars(select(SessionToken).where(SessionToken.user_id == user.id).order_by(SessionToken.last_seen_at.desc())))
+    if is_admin_user(user):
+        rows = list(session.scalars(
+            select(SessionToken, User)
+            .join(User, SessionToken.user_id == User.id)
+            .order_by(SessionToken.last_seen_at.desc())
+        ).all())
+    else:
+        rows = [(row, user) for row in session.scalars(
+            select(SessionToken)
+            .where(SessionToken.user_id == user.id)
+            .order_by(SessionToken.last_seen_at.desc())
+        )]
+
     items = []
-    for row in rows:
+    raw = authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else ""
+    current_hash = token_hash(raw) if raw else ""
+    for row, owner in rows:
         exp = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at and row.expires_at.tzinfo is None else row.expires_at
         seen = row.last_seen_at.replace(tzinfo=timezone.utc) if row.last_seen_at and row.last_seen_at.tzinfo is None else row.last_seen_at
         active = bool(seen and (now - seen).total_seconds() <= 30 * 60 and not row.is_revoked and exp and exp >= now)
         if not active and row.is_revoked:
             continue
-        items.append({
+        item = {
             "id": row.id,
+            "user_id": owner.id,
+            "username": owner.username or "—",
+            "email": owner.email or "",
             "device_model": row.device_model or "Noma’lum qurilma",
             "user_agent": row.user_agent or "",
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
             "expires_at": row.expires_at.isoformat() if row.expires_at else None,
             "active": active,
-            "current": False,
-        })
-    raw = authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else ""
-    current_hash = token_hash(raw) if raw else ""
-    for item, row in zip(items, [r for r in rows if not r.is_revoked]):
-        if row.token_hash == current_hash:
-            item["current"] = True
-    return {"sessions": items}
+            "current": row.token_hash == current_hash,
+        }
+        # Do not leak another user's identity to ordinary users.
+        if not is_admin_user(user):
+            item.pop("user_id", None)
+            item.pop("username", None)
+            item.pop("email", None)
+        items.append(item)
+    return {"sessions": items, "scope": "all" if is_admin_user(user) else "self", "is_admin": is_admin_user(user)}
 
 @app.post("/api/auth/sessions/revoke-others")
 async def revoke_other_sessions(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
