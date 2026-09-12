@@ -532,11 +532,10 @@ ADVANCED_CACHE_TTL = float(os.getenv("ADVANCED_CACHE_TTL", "5"))
 MTF_CACHE_TTL = float(os.getenv("MTF_CACHE_TTL", "10"))
 LIVE_PRICE_CACHE_TTL = float(os.getenv("LIVE_PRICE_CACHE_TTL", "1.5"))
 AUTO_ENTRY_ENABLED = os.getenv("AUTO_ENTRY_ENABLED", "true").lower() == "true"
-AUTO_ENTRY_THRESHOLD = float(os.getenv("AUTO_ENTRY_THRESHOLD", "84"))
+AUTO_ENTRY_THRESHOLD = 84.99
 AUTO_ENTRY_DUPLICATE_MINUTES = int(os.getenv("AUTO_ENTRY_DUPLICATE_MINUTES", "5"))
 AUTO_ENTRY_MIN_ZONE = float(os.getenv("AUTO_ENTRY_MIN_ZONE", "88"))
 AUTO_ENTRY_MIN_AI_AGREEMENT = float(os.getenv("AUTO_ENTRY_MIN_AI_AGREEMENT", "75"))
-AUTO_ENTRY_MIN_RR = float(os.getenv("AUTO_ENTRY_MIN_RR", "1.50"))
 AUTO_ENTRY_REQUIRE_MTF = os.getenv("AUTO_ENTRY_REQUIRE_MTF", "true").lower() == "true"
 
 
@@ -3254,7 +3253,7 @@ async def advanced_signals(symbol: str, authorization: str | None = Header(defau
 
 @app.post("/api/v1/signals/auto-record")
 async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    """Auto-enter only ultra-conservative setups using closed candles, AI confirmation, strong zones, RR, and MTF alignment."""
+    """Auto-enter only ultra-conservative setups using confidence >=84.99%, strong zones, AI confirmation, and MTF alignment."""
     user = current_user(authorization, session)
     key = clean_symbol(symbol)
     # First close any previously opened auto trades using fresh TradingView candles.
@@ -3277,14 +3276,11 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
         ai_agreement = float(ai_check.get("agreement") or 0)
         ai_signal = str(ai_check.get("signal") or "WAIT").upper()
         risk_flags = ai_check.get("risk_flags") if isinstance(ai_check.get("risk_flags"), list) else []
-        rr = float(item.get("risk_reward") or 0)
         if direction not in ("BUY", "SELL") or confidence < AUTO_ENTRY_THRESHOLD or entry is None or sl is None or not tp:
             continue
         if zone_quality < AUTO_ENTRY_MIN_ZONE or item.get("quality_grade") not in {"A+","A"}:
             continue
         if ai_signal != direction or ai_agreement < AUTO_ENTRY_MIN_AI_AGREEMENT or ai_conf < AUTO_ENTRY_THRESHOLD or risk_flags:
-            continue
-        if rr < AUTO_ENTRY_MIN_RR:
             continue
         if AUTO_ENTRY_REQUIRE_MTF:
             tf_order=["1min","5min","15min","30min","1h","4h","1day"]
@@ -3356,17 +3352,30 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
 
 
 MT5_CANDLE_MAX_AGE = int(os.getenv("MT5_CANDLE_MAX_AGE", "20"))
+MT5_HEARTBEAT_TIMEOUT = int(os.getenv("MT5_HEARTBEAT_TIMEOUT", "30"))
 MT5_TF_KEYS = {"1min":"1min","5min":"5min","15min":"15min","30min":"30min","1h":"1h","4h":"4h","1day":"1day"}
+
+def _mt5_last_seen_age() -> float | None:
+    raw = MT5_BRIDGE_STATE.get("last_seen")
+    if not raw:
+        return None
+    try:
+        ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        return max(0.0, (datetime.now(timezone.utc) - ts).total_seconds())
+    except Exception:
+        return None
 
 def _mt5_state_fresh() -> bool:
     if not MT5_BRIDGE_STATE.get("connected"):
         return False
-    raw = MT5_BRIDGE_STATE.get("last_seen")
-    try:
-        ts = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-        return (datetime.now(timezone.utc) - ts).total_seconds() <= MT5_CANDLE_MAX_AGE
-    except Exception:
+    age = _mt5_last_seen_age()
+    return age is not None and age <= MT5_CANDLE_MAX_AGE
+
+def _mt5_is_connected_now() -> bool:
+    if not MT5_BRIDGE_STATE.get("connected"):
         return False
+    age = _mt5_last_seen_age()
+    return age is not None and age <= MT5_HEARTBEAT_TIMEOUT
 
 def get_mt5_candles(interval: str, limit: int = 320) -> list[dict[str, Any]]:
     if not _mt5_state_fresh():
@@ -3645,7 +3654,17 @@ async def ai_providers_status():
 
 @app.get("/api/v1/mt5/status")
 async def mt5_status(authorization: str | None = Header(default=None)) -> dict[str, Any]:
-    return {"ok": True, "auto_trading": MT5_AUTO_TRADING, "lot": MT5_LOT_SIZE, "state": MT5_BRIDGE_STATE, "queue": len(MT5_ORDER_QUEUE), "demo_only": True}
+    state = dict(MT5_BRIDGE_STATE)
+    age = _mt5_last_seen_age()
+    connected_now = _mt5_is_connected_now()
+    state["connected"] = connected_now
+    state["heartbeat_age_sec"] = round(age, 1) if age is not None else None
+    state["connection_state"] = "CONNECTED" if connected_now else ("STALE" if age is not None and age <= 60 else "DISCONNECTED")
+    if not connected_now and MT5_BRIDGE_STATE.get("connected"):
+        # Prevent an old heartbeat from being treated as a live terminal forever.
+        MT5_BRIDGE_STATE["connected"] = False
+        state["connected"] = False
+    return {"ok": True, "auto_trading": MT5_AUTO_TRADING, "lot": MT5_LOT_SIZE, "state": state, "queue": len(MT5_ORDER_QUEUE), "demo_only": True, "heartbeat_timeout_sec": MT5_HEARTBEAT_TIMEOUT}
 
 @app.post("/api/v1/mt5/connect")
 async def mt5_connect(body: MT5ConnectBody, authorization: str | None = Header(default=None)) -> dict[str, Any]:

@@ -77,7 +77,7 @@ async function loadAIProviders(){
     const d=await api('/api/v1/ai/providers');
     const names={groq:'Groq GPT-OSS 120B',gemini:'Google Gemini Flash',openrouter:'OpenRouter Free',groq_qwen:'Groq Qwen 3.6 27B',mistral:'Mistral',cerebras:'Cerebras',cloudflare:'Cloudflare Workers AI',deepseek:'DeepSeek V4.1 Flash',openai:'OpenAI'};
     const safe=(v)=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
-    el.innerHTML=(d.providers||[]).map((x,i)=>{const st=x.status||'READY';const cls=st==='ONLINE'?'buy':st==='OFFLINE'?'sell':st==='LIMITED'?'wait':'wait';const score=x.score!=null?`<span class="pill">${safe(x.score)} ball</span>`:'';const rank=`#${i+1}`;const code=x.http_status?` · HTTP ${safe(x.http_status)}`:'';return `<div class="component"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><small>${rank} · ${safe(names[x.id]||x.id)}</small><b class="${cls}">${safe(st)}${code}</b></div><div class="mini" style="display:flex;justify-content:space-between;gap:8px;align-items:center"><span>${safe(x.model||'')}</span>${score}</div><div class="mini ai-reason">${safe(x.reason||'')}</div><div class="mini">Kuch ${safe(x.quality??'—')} · Tezlik ${safe(x.speed??'—')} · Limit ${safe(x.capacity??'—')} · Tejamkorlik ${safe(x.cost??'—')}</div></div>`}).join('') || '<div class="mini">API key sozlangan AI tizimi topilmadi.</div>';
+    el.innerHTML=(d.providers||[]).map((x,i)=>{const st=x.status||'READY';const cls=st==='ONLINE'?'buy':st==='OFFLINE'?'sell':st==='LIMITED'?'wait':'wait';const score=x.score!=null?`<span class="pill">${safe(x.score)} ball</span>`:'';const rank=`#${i+1}`;const code=x.http_status?` · HTTP ${safe(x.http_status)}`:'';const reason=x.reason||({ONLINE:'AI so‘rovi muvaffaqiyatli bajarildi.',LIMITED:'Limit/quota yoki vaqtinchalik cheklov.',OFFLINE:'Provider javob bermadi yoki API xatosi.',READY:'Hali real AI so‘rovi bilan tekshirilmagan.'}[st]||'Noma’lum holat.');const checked=x.checked_at?` · ${new Date(x.checked_at).toLocaleTimeString()}`:'';return `<div class="component ai-provider-card"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><small>${rank} · ${safe(names[x.id]||x.id)}</small><b class="${cls}">${safe(st)}${code}</b></div><div class="mini" style="display:flex;justify-content:space-between;gap:8px;align-items:center"><span>${safe(x.model||'')}</span>${score}</div><div class="mini ai-reason"><b>Sabab:</b> ${safe(reason)}</div><div class="mini">Kuch ${safe(x.quality??'—')} · Tezlik ${safe(x.speed??'—')} · Limit ${safe(x.capacity??'—')} · Tejamkorlik ${safe(x.cost??'—')}${checked?`<span style="opacity:.65">${safe(checked)}</span>`:''}</div></div>`}).join('') || '<div class="mini">API key sozlangan AI tizimi topilmadi.</div>';
   }catch(e){el.innerHTML='<div class="mini">AI provider status unavailable.</div>'}
 }
 
@@ -314,7 +314,7 @@ async function loadAutoSignals(){
       const cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
       return `<div class="signal-box auto-signal"><div class="section-head"><b>${tfName(tf)}</b><span class="pill">${x.confidence||0}% · ${x.mode||'LIVE'}</span></div><div class="signal-main ${cls}">${sig}</div><div class="mini">Live price: ${fmt(x.current_price)} · Entry: ${fmt(x.entry)} · SL: ${fmt(x.stop_loss)} · TP: ${(x.take_profit||[]).map(fmt).join(' / ')||'—'}</div><div class="mini">${x.reason||'Live engine'}</div><div class="mini">${x.evaluated_at?new Date(x.evaluated_at).toLocaleTimeString():''}</div></div>`;
     }).join('');
-    $('autoSignalUpdated').textContent='AUTO ENTRY ≥ 84% · LIVE · '+new Date(d.generated_at).toLocaleTimeString();if(token) order.forEach(tf=>recordModuleSignal('Signals',d,d.timeframes?.[tf]||{},tf,d.timeframes?.[tf]?.candle_time||liveCandle?.time));
+    $('autoSignalUpdated').textContent='AUTO ENTRY ≥ 84.99% · LIVE · '+new Date(d.generated_at).toLocaleTimeString();if(token) order.forEach(tf=>recordModuleSignal('Signals',d,d.timeframes?.[tf]||{},tf,d.timeframes?.[tf]?.candle_time||liveCandle?.time));
     if(token){ try{ const saved=await api(`/api/v1/signals/auto-record?symbol=${encodeURIComponent(symbol)}`,{method:'POST'}); if(saved.count) { loadStats(); if($('historySection').classList.contains('active')) loadHistory(); } }catch(_){} }
   }catch(e){$('autoSignalsGrid').innerHTML=`<div class="card">Live Signals error: ${e.message}</div>`}
 }
@@ -521,9 +521,11 @@ function connectMarketStream(){
 function setAuth(mode){authMode=mode;$('authTitle').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSubmit').textContent=mode==='login'?'Kirish':'Ro‘yxatdan o‘tish';$('authSwitch').textContent=mode==='login'?'Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish':'Hisobingiz bormi? Kirish';$('email').placeholder=mode==='login'?'Login yoki elektron pochta':'Elektron pochta';$('password').required=mode==='login';$('password').style.display=mode==='login'?'block':'none';$('password').value='';$('authMsg').textContent=mode==='register'?'Email kiriting — login va parol avtomatik yaratiladi.':''}
 async function loadMT5Status(){
   const d=await api('/api/v1/mt5/status'); const st=d.state||{};
-  setText('mt5Status', st.connected?'🟢 CONNECTED':'🔴 DISCONNECTED');
+  const connState=String(st.connection_state||'').toUpperCase();
+  const connLabel=connState==='CONNECTED' || st.connected ? '🟢 CONNECTED' : (connState==='STALE' ? '🟡 STALE' : '🔴 DISCONNECTED');
+  setText('mt5Status', connLabel);
   setText('mt5Balance', st.balance==null?'—':fmt(st.balance)); setText('mt5Equity',st.equity==null?'—':fmt(st.equity)); setText('mt5FreeMargin',st.free_margin==null?'—':fmt(st.free_margin)); setText('mt5Positions',st.positions??0); setText('mt5Lot', d.lot==null?'0.01':String(d.lot));
-  const on=!!d.auto_trading; setText('mt5AutoState',on?'🟢 ON':'🔴 OFF'); setText('mt5AutoInfo',on?'Auto trading yoqilgan. Faqat ≥90% + Strong Zone + AI tasdiq + MTF moslik + RR≥1.50 setup navbatiga tushadi.':"OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.");
+  const on=!!d.auto_trading; setText('mt5AutoState',on?'🟢 ON':'🔴 OFF'); setText('mt5AutoInfo',on?'Auto trading yoqilgan. Faqat ≥84.99% + Strong Zone + AI tasdiq + MTF moslik setup navbatiga tushadi.':"OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.");
   
 }
 async function connectMT5(){
