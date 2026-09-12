@@ -697,3 +697,17 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
     try{mountTradingView('chart', interval)}catch(_){}
   }
 })();;
+
+/* SignalX V3 mobile sidebar drawer — navigation only, no trading logic changes. */
+(function(){
+  const openMenu=()=>{document.body.classList.add('sx-menu-open');const b=document.getElementById('sxMobileMenu');if(b)b.setAttribute('aria-expanded','true');};
+  const closeMenu=()=>{document.body.classList.remove('sx-menu-open');const b=document.getElementById('sxMobileMenu');if(b)b.setAttribute('aria-expanded','false');};
+  document.addEventListener('click',function(e){
+    const menu=e.target.closest('#sxMobileMenu');
+    if(menu){e.preventDefault();document.body.classList.contains('sx-menu-open')?closeMenu():openMenu();return;}
+    if(e.target.closest('#sxSidebarOverlay')){closeMenu();return;}
+    const nav=e.target.closest('.sidebar .nav button');
+    if(nav) setTimeout(closeMenu,60);
+  });
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMenu();});
+})();
