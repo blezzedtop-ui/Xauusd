@@ -12,3 +12,7 @@
 10. Test only on DEMO first.
 
 The website's MT5 Connect form records the intended demo account details; the actual authenticated trading connection is established by the running MT5 terminal + EA. The Railway backend does not store the trading password.
+
+
+## Multi-symbol bridge
+Use `mt5_xauusd_eurusd_bridge_final.mq5` for simultaneous XAUUSDm + EURUSDm state/candle reporting and Auto Trading. Attach it once; set ApiBase and BridgeToken, then ensure both symbols are available in Market Watch.

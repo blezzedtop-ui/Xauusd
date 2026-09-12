@@ -12,7 +12,29 @@
 @media(max-width:900px){.app{display:block}.sidebar{position:sticky;top:0;height:auto;padding:10px;z-index:20;border-right:0;border-bottom:1px solid var(--line)}.brand{padding:4px 8px 10px;margin-bottom:8px}.nav{flex-direction:row;overflow-x:auto;gap:5px;padding-bottom:2px}.nav button{white-space:nowrap;padding:8px 10px;font-size:11px}.main{padding:10px}.dashboard{grid-template-columns:1fr}.chart{height:420px}.grid4{grid-template-columns:repeat(2,1fr)}.grid2{grid-template-columns:1fr}.topbar{align-items:flex-start}.price{font-size:27px}.tfbar{overflow-x:auto;flex-wrap:nowrap}.tf{white-space:nowrap}.sidebar-bottom{display:none}}
 @media(max-width:480px){.main{padding:8px}.card{padding:10px;border-radius:12px}.chart{height:360px}.metric{padding:8px}.metric b{font-size:16px}.section-head h2,.section-head h3{font-size:14px}.auto-signal{min-height:0}.tools{gap:4px}.auth-top{min-width:70px;padding:7px 9px}}
 .auth-top,.btn{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
-.btn{pointer-events:auto!important;position:relative!important;z-index:100!important}.buy,.badge-buy{color:#35d49a!important}.sell,.badge-sell{color:#ff5c70!important}.advanced-signal.buy,.signal-main.buy{color:#35d49a!important}.advanced-signal.sell,.signal-main.sell{color:#ff5c70!important}.history .buy{color:#35d49a!important}.history .sell{color:#ff5c70!important}.history-group td{background:#101923;color:#dbe8f7;border-top:2px solid var(--line);font-size:12px;padding-top:12px;padding-bottom:8px}.source-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.source-stat{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:11px}.source-stat .source-title{font-weight:800;font-size:12px}.source-stat .source-win{font-size:20px;font-weight:900;margin-top:5px}.source-stat .source-line{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}@media(max-width:1000px){.source-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.source-stats-grid{grid-template-columns:1fr}} </style>
+.btn{pointer-events:auto!important;position:relative!important;z-index:100!important}.buy,.badge-buy{color:#35d49a!important}.sell,.badge-sell{color:#ff5c70!important}.advanced-signal.buy,.signal-main.buy{color:#35d49a!important}.advanced-signal.sell,.signal-main.sell{color:#ff5c70!important}.history .buy{color:#35d49a!important}.history .sell{color:#ff5c70!important}.history-group td{background:#101923;color:#dbe8f7;border-top:2px solid var(--line);font-size:12px;padding-top:12px;padding-bottom:8px}.source-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.source-stat{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:11px}.source-stat .source-title{font-weight:800;font-size:12px}.source-stat .source-win{font-size:20px;font-weight:900;margin-top:5px}.source-stat .source-line{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}@media(max-width:1000px){.source-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.source-stats-grid{grid-template-columns:1fr}} /* Live market-news ticker */
+.market-news{position:relative;overflow:hidden;display:flex;align-items:center;gap:12px;height:48px;margin:0 0 14px;padding:0 14px;border-radius:14px;border:1px solid rgba(245,193,93,.28);background:linear-gradient(100deg,rgba(25,17,5,.78),rgba(10,11,13,.55));backdrop-filter:blur(18px);box-shadow:0 12px 34px rgba(0,0,0,.25),inset 0 1px 0 rgba(255,255,255,.04)}
+.market-news .live-dot{width:8px;height:8px;border-radius:50%;background:#45e19a;box-shadow:0 0 12px rgba(69,225,154,.75);flex:0 0 auto;animation:newsPulse 1.5s ease-in-out infinite}
+.market-news .news-label{display:flex;align-items:center;gap:7px;color:var(--gold);font-weight:900;font-size:10px;letter-spacing:.08em;white-space:nowrap}
+.market-news .news-cat{padding:4px 7px;border-radius:999px;border:1px solid rgba(245,193,93,.35);background:rgba(245,193,93,.08);font-size:9px;font-weight:900;color:var(--gold);white-space:nowrap}
+.market-news .news-text{min-width:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:12px;color:#f4f6f8}
+.market-news .news-text.enter{animation:newsIn .45s ease both}
+.market-news .news-meta{font-size:10px;color:var(--muted);white-space:nowrap}
+.market-news .news-open{border:1px solid rgba(245,193,93,.3);background:rgba(245,193,93,.08);color:var(--gold);border-radius:9px;padding:7px 9px;cursor:pointer;white-space:nowrap}
+.market-news .news-open:hover{background:rgba(245,193,93,.16)}
+@keyframes newsPulse{50%{transform:scale(1.25);opacity:.62}}
+@keyframes newsIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
+@media(max-width:700px){.market-news{height:44px;padding:0 10px;gap:8px}
+/* Instrument-specific liquid-glass 3D logos */
+.brand-logo{position:relative;width:58px;height:58px;border-radius:50%;display:grid;place-items:center;flex:0 0 auto;filter:drop-shadow(0 10px 24px rgba(0,0,0,.35))}
+.brand-logo:before{content:"";position:absolute;inset:0;border-radius:50%;background:conic-gradient(from 0deg,rgba(255,220,120,.95),rgba(255,255,255,.18),rgba(232,167,43,.9),rgba(255,255,255,.12),rgba(255,220,120,.95));animation:logoSpin 9s linear infinite;box-shadow:0 0 28px rgba(245,193,93,.28),inset 0 1px 3px rgba(255,255,255,.6)}
+.brand-logo:after{content:"";position:absolute;inset:5px;border-radius:50%;background:radial-gradient(circle at 32% 26%,rgba(255,255,255,.55),rgba(255,255,255,.08) 18%,rgba(20,12,3,.88) 62%);border:1px solid rgba(255,255,255,.12);box-shadow:inset 0 -8px 18px rgba(0,0,0,.35)}
+.logo-core{position:relative;z-index:2;width:43px;height:43px;border-radius:50%;display:grid;place-items:center;text-align:center;color:#fff8d8;font-size:10px;font-weight:1000;letter-spacing:.06em;background:radial-gradient(circle at 30% 22%,#fff7c8 0,#f7d67a 8%,#b87b11 42%,#4e3005 100%);border:1px solid rgba(255,230,150,.85);box-shadow:inset 0 2px 3px rgba(255,255,255,.6),inset 0 -5px 10px rgba(0,0,0,.4),0 0 20px rgba(245,193,93,.26);animation:logoFloat 3.8s ease-in-out infinite}
+.logo-ring{position:absolute;inset:-7px;border-radius:50%;border:1px solid rgba(245,193,93,.45);border-left-color:transparent;border-right-color:rgba(255,255,255,.25);animation:logoSpin 5.5s linear infinite;z-index:1}
+.brand-logo.eur-logo:before{background:conic-gradient(from 0deg,rgba(120,205,255,.95),rgba(255,255,255,.16),rgba(73,150,255,.95),rgba(255,255,255,.12),rgba(120,205,255,.95));box-shadow:0 0 28px rgba(73,150,255,.28),inset 0 1px 3px rgba(255,255,255,.6)}
+.brand-logo.eur-logo .logo-core{color:#e8f6ff;background:radial-gradient(circle at 30% 22%,#f5fbff 0,#9edbff 10%,#2768c0 44%,#102b59 100%);border-color:rgba(140,210,255,.9);box-shadow:inset 0 2px 3px rgba(255,255,255,.6),inset 0 -5px 10px rgba(0,0,0,.45),0 0 20px rgba(73,150,255,.24)}
+@keyframes logoSpin{to{transform:rotate(360deg)}}@keyframes logoFloat{50%{transform:translateY(-3px) scale(1.03)}}
+</style>
 <style>.title-shimmer{background:linear-gradient(90deg,#eef3f8 0%,#9fc7ff 35%,#f5c15d 52%,#eef3f8 72%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:titleShimmer 7s linear infinite}@keyframes titleShimmer{to{background-position:-220% 0}}.gold-photo-bg{position:fixed;inset:0;z-index:0;pointer-events:none;background-image:url("assets/gold-trading-bg.png");background-size:cover;background-position:center;background-repeat:no-repeat;filter:saturate(.92) contrast(1.03);opacity:.34;transform:translateZ(0);will-change:transform}.gold-photo-bg:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(3,6,10,.34),rgba(3,7,13,.72) 72%,rgba(2,5,9,.86));}.main{position:relative;z-index:3}.sidebar,.topbar,.card,.toast,.modal{z-index:4}.gold-photo-bg+*{position:relative;z-index:2}@media (max-width:900px){.gold-photo-bg{opacity:.22;background-position:center top}}
 .advanced-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.advanced-card{border:1px solid var(--line);background:rgba(8,14,21,.86);border-radius:12px;padding:12px;box-shadow:0 12px 30px rgba(0,0,0,.16)}.advanced-card.buy{border-color:rgba(48,212,154,.35)}.advanced-card.sell{border-color:rgba(240,105,120,.35)}.advanced-card.wait{border-color:rgba(245,193,93,.25)}.advanced-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.advanced-signal{font-size:22px;font-weight:1000;letter-spacing:.06em}.component-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}.component{padding:7px 8px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.02)}.component small{display:block;color:var(--muted);font-size:9px;margin-bottom:3px}.component b{font-size:11px}.ai-reason{margin-top:5px;line-height:1.35;word-break:break-word;opacity:.98;display:block;min-height:18px}.ai-provider-card .ai-reason b{color:var(--gold)}.advanced-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px}.badge-buy{color:var(--green)}.badge-sell{color:var(--red)}.badge-wait{color:var(--gold)}@media(max-width:900px){.advanced-grid{grid-template-columns:1fr}}
 .btn{pointer-events:auto!important;position:relative!important;z-index:100!important}.buy,.badge-buy{color:#35d49a!important}.sell,.badge-sell{color:#ff5c70!important}.advanced-signal.buy,.signal-main.buy{color:#35d49a!important}.advanced-signal.sell,.signal-main.sell{color:#ff5c70!important}.history .buy{color:#35d49a!important}.history .sell{color:#ff5c70!important}.history-group td{background:#101923;color:#dbe8f7;border-top:2px solid var(--line);font-size:12px;padding-top:12px;padding-bottom:8px}.source-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.source-stat{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:11px}.source-stat .source-title{font-weight:800;font-size:12px}.source-stat .source-win{font-size:20px;font-weight:900;margin-top:5px}.source-stat .source-line{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}@media(max-width:1000px){.source-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.source-stats-grid{grid-template-columns:1fr}} </style><link rel="manifest" href="/manifest.webmanifest">
@@ -85,15 +107,14 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
 @keyframes goldWallpaper{from{background-position:48% 46%;transform:scale(1)}to{background-position:54% 52%;transform:scale(1.05)}}
 @keyframes goldOrb{from{transform:translate3d(0,0,0) rotate(0deg)}to{transform:translate3d(-80px,55px,0) rotate(18deg)}}
 @media(max-width:900px){.gold-3d-orb{width:150px;height:150px;right:-30px;top:18vh}.gold-photo-bg{opacity:.17!important}}
-.nav-external{display:block;width:100%;border:1px solid transparent;background:transparent;color:var(--gold);text-align:left;padding:11px 12px;border-radius:10px;cursor:pointer;font-weight:800}.nav-external:hover{background:#111923;color:#fff}.nav-external::after{content:" ↗";opacity:.65}
 </style>
 </head>
 <body>
-<div class="gold-3d-orb"></div>
+<div class="gold-3d-orb eur-bg-orb"></div>
 <div class="gold-photo-bg" aria-hidden="true"></div>
 <div class="app">
 <aside class="sidebar">
-  <div class="brand"><div class="brand-logo" aria-hidden="true"><div class="logo-ring"></div><div class="logo-core"><b>EURUSD</b></div></div><b>EURUSD</b><span>EURUSD Trading</span></div>
+  <div class="brand"><div class="brand-logo eur-logo" aria-hidden="true"><div class="logo-ring"></div><div class="logo-core"><b>$</b></div></div><b>EURUSD</b><span>EURUSD Trading</span></div>
   <div class="nav">
     <button class="active" data-section="overview">▣ Overview</button>
     <button data-section="chartSection">◩ Live Chart</button>
@@ -110,12 +131,20 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
     <button data-section="sessionsSection">◉ Market Sessions</button>
     <button data-section="historySection">▤ Signal History</button>
     <button data-section="mt5Section">◉ MetaTrader 5</button>
-    <button type="button" id="xauUsdPageBtn" class="nav-external">🥇 XAUUSD</button>
+    <form class="nav-external-form" action="/" method="get"><button class="nav-external" type="submit">🥇 GOLD / EURUSD</button></form>
   </div>
   <div class="sidebar-bottom"><div class="tiny">Pivot + Key Levels engine<br>Live data via backend API</div></div>
 </aside>
 <main class="main">
-  <div class="topbar"><div><h1 id="pageTitle" class="title-shimmer">EURUSD Market Overview</h1><p>Har bir bo‘lim alohida ishlaydi. Timeframe o‘zgarsa tanlangan modul qayta hisoblanadi.</p></div><div class="tools"><div class="health"><span class="dot"></span><span class="pill" id="mode">Checking…</span></div><span class="pill" id="plan">Guest</span><button class="btn primary auth-top" id="authBtn">Kirish</button></div></div>
+  <div class="market-news" id="marketNews" aria-live="polite">
+    <div class="news-label"><span class="live-dot"></span> LIVE MARKET</div>
+    <div class="news-cat" id="newsCategory">FOREX</div>
+    <div class="news-text" id="newsText">Oltin, neft va dollar bozorlariga oid jonli yangiliklar yuklanmoqda…</div>
+    <div class="news-meta" id="newsMeta">—</div>
+    <button class="news-open" id="newsOpen" type="button" disabled>Yangilik</button>
+  </div>
+
+  <div class="topbar"><div><h1 id="pageTitle" class="title-shimmer">Market Overview</h1><p>Har bir bo‘lim alohida ishlaydi. Timeframe o‘zgarsa tanlangan modul qayta hisoblanadi.</p></div><div class="tools"><div class="health"><span class="dot"></span><span class="pill" id="mode">Checking…</span></div><span class="pill" id="plan">Guest</span><button class="btn primary auth-top" id="authBtn" type="button" onclick="window.__forceOpenAuth&&window.__forceOpenAuth('login')">Kirish</button></div></div>
 
   <section class="section active" id="overview">
     <div class="dashboard">
@@ -232,7 +261,7 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
 <div class="modal" id="authModal" aria-hidden="true">
   <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">
     <div class="section-head">
-      <div><h2 id="authTitle">Kirish</h2><div class="mini">GOLD Trading SaaS hisobingiz</div></div>
+      <div><h2 id="authTitle">Kirish</h2><div class="mini">EURUSD Trading SaaS hisobingiz</div></div>
       <button class="btn" id="authClose" type="button">✕</button>
     </div>
     <form id="authForm">
@@ -241,12 +270,12 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
       <label class="mini" for="password" id="passwordLabel">Parol</label>
       <input class="input" id="password" type="password" autocomplete="current-password" placeholder="Parol">
       <button class="btn primary" id="authSubmit" type="submit" style="width:100%">Kirish</button>
-      <div class="link" id="authSwitch" role="button" tabindex="0">Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish</div>
+      <button class="link" id="authSwitch" type="button" style="background:none;border:0;padding:0;color:#8fb9ff;cursor:pointer">Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish</button>
       <div class="mini" id="authMsg" style="margin-top:10px"></div>
     </form>
   </div>
 </div>
 
 <script src="/config.js?v=20260908f"></script>
-<script src="/app.js?v=20260912-eurusd-nav-fix-2"></script>
+<script src="/app.js?v=20260912-full-multi-1"></script>
 </body></html>
