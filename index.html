@@ -656,35 +656,6 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 }
 </style>
 
-
-<style id="signalx-sidebar-icon-visibility-fix-20260913">
-/* ICON VISIBILITY FIX — desktop + mobile; no layout/design changes */
-.sidebar .nav > button > .sx-nav-icon,
-.sidebar .nav > .nav-external-form button > .sx-nav-icon,
-.sidebar .nav > .nav-external > .sx-nav-icon{
-  display:inline-flex!important; visibility:visible!important; opacity:1!important;
-  position:relative!important; z-index:20!important;
-  color:#dff9ff!important;
-}
-.sidebar .nav > button > .sx-nav-icon svg,
-.sidebar .nav > .nav-external-form button > .sx-nav-icon svg,
-.sidebar .nav > .nav-external > .sx-nav-icon svg{
-  display:block!important; visibility:visible!important; opacity:1!important;
-  width:18px!important; height:18px!important; min-width:18px!important; min-height:18px!important;
-  overflow:visible!important; fill:none!important; stroke:#dff9ff!important;
-  color:#dff9ff!important;
-}
-.sidebar .nav > button > .sx-nav-icon svg *,
-.sidebar .nav > .nav-external-form button > .sx-nav-icon svg *,
-.sidebar .nav > .nav-external > .sx-nav-icon svg *{
-  stroke:#dff9ff!important; fill:none!important; vector-effect:non-scaling-stroke!important;
-}
-@media(max-width:1100px){
-  .sidebar .nav > button > .sx-nav-icon,
-  .sidebar .nav > .nav-external-form button > .sx-nav-icon,
-  .sidebar .nav > .nav-external > .sx-nav-icon{z-index:30!important;}
-}
-</style>
 </head>
 <body>
 <div class="gold-3d-orb"></div>
@@ -1014,14 +985,207 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 @media (prefers-reduced-motion:reduce){.sidebar,.sx-sidebar-overlay{transition:none!important;}}
 </style>
 
-<style id="signalx-phone-sidebar-click-fix-20260913">
-/* PHONE SIDEBAR STACKING FIX — overlay must stay behind the drawer */
-@media (max-width:1100px){
-  .sx-sidebar-overlay{z-index:10000!important;}
-  .app{position:relative!important;z-index:10001!important;}
-  .sidebar{z-index:10002!important;pointer-events:auto!important;}
-  .sidebar .nav,.sidebar .nav button,.sidebar .nav-external,.sidebar .nav-external-form{pointer-events:auto!important;}
+<style id="signalx-final-mobile-readability-click-fix-20260913">
+/* FINAL SAFE PATCH: visual/readability/click behavior only. Existing structure, auth roles and data logic stay intact. */
+
+/* Crisp UI typography: remove the heavy glow/stroke that makes prices and headings look blurred. */
+.app .section-head h2,
+.app .section-head h3,
+.app .card h2,
+.app .card h3,
+.app .metric small,
+.app .metric b,
+.app .mini,
+.app .tiny,
+.app .levels .row,
+.app .symbol,
+.app .topbar h1,
+.app .topbar p,
+.app .history-note,
+.app .countdown,
+.app .advanced-card .advanced-head .mini,
+.app .advanced-card .component small,
+.app .advanced-card .component b{
+  -webkit-text-stroke:0!important;
+  text-shadow:0 0 4px rgba(75,205,255,.16)!important;
+  filter:none!important;
 }
+.app .section-head h2,
+.app .section-head h3,
+.app .card h2,
+.app .card h3{
+  background:transparent!important;
+  -webkit-background-clip:border-box!important;
+  background-clip:border-box!important;
+  color:#f4f9ff!important;
+}
+.app .metric b{color:#f7fbff!important}
+.app .metric small{color:#c9d8ea!important}
+.app .piv,.app .wait{ -webkit-text-stroke:0!important; text-shadow:0 0 5px rgba(255,213,79,.30)!important; }
+.app .buy{ -webkit-text-stroke:0!important; text-shadow:0 0 5px rgba(40,242,164,.30)!important; }
+.app .sell{ -webkit-text-stroke:0!important; text-shadow:0 0 5px rgba(255,78,112,.30)!important; }
+
+/* No decorative glass layer is allowed to sit over text or controls. */
+.app .topbar,
+.app .card,
+.app .metric,
+.app .signal-box,
+.app .session,
+.app .advanced-card,
+.app .calendar-item{
+  isolation:isolate!important;
+}
+.app .topbar>* ,
+.app .card>* ,
+.app .metric>* ,
+.app .signal-box>* ,
+.app .session>* ,
+.app .advanced-card>* ,
+.app .calendar-item>*{
+  position:relative;
+  z-index:2;
+}
+.app .topbar .tools,
+.app .topbar .tools>* ,
+.app .topbar .sx-mobile-menu,
+.app .btn,
+.app .tf,
+.app .pill{
+  position:relative!important;
+  z-index:20!important;
+  pointer-events:auto!important;
+}
+
+/* Keep sidebar icons visible above every liquid/glass layer on desktop and mobile. */
+.sidebar .nav>button,
+.sidebar .nav>.nav-external-form button,
+.sidebar .nav>.nav-external{
+  isolation:isolate!important;
+  position:relative!important;
+}
+.sidebar .sx-nav-icon{
+  position:relative!important;
+  z-index:20!important;
+  display:inline-flex!important;
+  visibility:visible!important;
+  opacity:1!important;
+  color:#e9fbff!important;
+  filter:drop-shadow(0 0 5px rgba(68,214,255,.42))!important;
+}
+.sidebar .sx-nav-icon svg{
+  display:block!important;
+  visibility:visible!important;
+  opacity:1!important;
+  width:18px!important;
+  height:18px!important;
+  stroke:currentColor!important;
+  fill:none!important;
+  overflow:visible!important;
+}
+.sidebar .sx-nav-icon svg circle[fill="currentColor"],
+.sidebar .sx-nav-icon svg path[fill="currentColor"]{fill:currentColor!important}
+.sidebar .sx-nav-divider,.sidebar .sx-nav-label{position:relative!important;z-index:20!important}
+
+/* Phone: do not clip content that is wider than the screen. It can be swiped left/right. */
+@media(max-width:1100px){
+  html,body{overflow-x:hidden!important;overscroll-behavior-x:auto!important;}
+  .main{
+    overflow-x:auto!important;
+    overflow-y:visible!important;
+    -webkit-overflow-scrolling:touch!important;
+    scrollbar-width:none!important;
+  }
+  .main::-webkit-scrollbar{display:none!important}
+  .section{width:100%;min-width:0;overflow-x:auto!important;overflow-y:visible!important;-webkit-overflow-scrolling:touch!important;}
+  .section>.card,
+  .section>.advanced-card,
+  .section>.signal-box{
+    overflow-x:auto!important;
+    overflow-y:visible!important;
+    -webkit-overflow-scrolling:touch!important;
+  }
+  .section-head{min-width:0}
+  .tools{touch-action:pan-x!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch!important;}
+  .tfbar{touch-action:pan-x!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch!important;}
+  .history{min-width:850px!important}
+}
+
+/* iPhone-sized screens: keep cards readable without changing the page hierarchy. */
+@media(max-width:600px){
+  .main{overflow-x:auto!important;}
+  .section>.card,.section>.advanced-card,.section>.signal-box{max-width:none!important;}
+  .app .section-head h2,.app .section-head h3{font-size:14px!important;}
+  .app .metric b{font-size:15px!important;}
+}
+
+/* Prevent any transparent fixed layer from stealing taps from the top bar when the drawer is closed. */
+body:not(.sx-menu-open) .sx-sidebar-overlay{pointer-events:none!important;opacity:0!important;}
+body:not(.sx-menu-open) .sidebar{pointer-events:auto!important;}
 </style>
+
+<script id="signalx-final-button-guard-20260913">
+(function(){
+  function bind(){
+    const $=id=>document.getElementById(id);
+    const actions={
+      refreshSignalEngine:()=>typeof loadSignalEngine==='function'&&loadSignalEngine(),
+      refreshAIProviders:()=>typeof loadAIProviders==='function'&&loadAIProviders(),
+      refreshAdvanced:()=>typeof loadAdvancedSignals==='function'&&loadAdvancedSignals(),
+      refreshICT:()=>typeof loadICTSignals==='function'&&loadICTSignals(),
+      refreshClassic:()=>typeof loadClassicTrade==='function'&&loadClassicTrade(window.classicInterval||'5min'),
+      refreshSNR:()=>typeof loadSNR==='function'&&loadSNR(window.snrInterval||'5min'),
+      refreshStats:async()=>{if(typeof loadStats==='function')await loadStats();if(typeof loadHistory==='function')await loadHistory();},
+      refreshSmartAnalysis:()=>typeof loadSmartAnalysis==='function'&&loadSmartAnalysis(),
+      refreshAISignals:()=>typeof loadAISignals==='function'&&loadAISignals(),
+      getAIAnalysis:()=>typeof loadAISignals==='function'&&loadAISignals(),
+      refreshCalendar:()=>typeof loadCalendar==='function'&&loadCalendar(),
+      refreshHistory:async()=>{if(typeof loadStats==='function')await loadStats();if(typeof loadHistory==='function')await loadHistory();},
+      refreshTrendLines:()=>typeof loadTrendLines==='function'&&loadTrendLines(window.trendLineInterval||'5min'),
+      refreshMT5:()=>typeof loadMT5Status==='function'&&loadMT5Status(),
+      refreshActiveSessions:()=>typeof loadActiveSessions==='function'&&loadActiveSessions()
+    };
+    Object.keys(actions).forEach(id=>{
+      const b=$(id); if(!b||b.dataset.sxFinalGuard==='1')return;
+      b.dataset.sxFinalGuard='1';
+      b.addEventListener('click',async function(e){
+        e.preventDefault();e.stopImmediatePropagation();
+        if(b.disabled)return;
+        const old=b.innerHTML;b.disabled=true;
+        try{b.innerHTML='⟳ Ishlanmoqda…';await actions[id]();if(typeof showToast==='function')showToast('Yangilandi');}
+        catch(err){console.error('SignalX button',id,err);if(typeof showToast==='function')showToast(err?.message||'Server xatosi');}
+        finally{b.disabled=false;b.innerHTML=old;}
+      },true);
+    });
+
+    const auth=$('authBtn');
+    if(auth&&auth.dataset.sxFinalGuard!=='auth'){
+      auth.dataset.sxFinalGuard='auth';
+      auth.addEventListener('click',function(e){
+        e.preventDefault();e.stopImmediatePropagation();
+        if(String(auth.textContent||'').trim()==='Chiqish'){
+          if(typeof logoutUser==='function')logoutUser();return;
+        }
+        if(typeof setAuth==='function')setAuth('login');
+        $('authMsg')?.replaceChildren();
+        $('authModal')?.classList.add('show');
+        setTimeout(()=>$('email')?.focus(),50);
+      },true);
+    }
+
+    const reg=$('openRegisterDirect');
+    if(reg&&reg.dataset.sxFinalGuard!=='register'){
+      reg.dataset.sxFinalGuard='register';
+      reg.addEventListener('click',function(e){
+        e.preventDefault();e.stopImmediatePropagation();
+        if(typeof setAuth==='function')setAuth('register');
+        $('authModal')?.classList.add('show');
+        setTimeout(()=>$('email')?.focus(),50);
+      },true);
+    }
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
+  window.addEventListener('load',bind,{once:true});
+})();
+</script>
 
 </body></html>
