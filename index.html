@@ -453,6 +453,27 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 </style>
 <!-- SIGNALX LIQUID GLASS PATCH -->
 <link rel="stylesheet" href="signalx-master-clean.css?v=20260913-ai335-final-01">
+
+<style id="signalx-ai-signals-final-inline">
+/* FINAL AI SIGNALS CARD — force compact reference layout */
+.overview-right{display:flex!important;flex-direction:column!important;align-items:flex-start!important;gap:12px!important;min-width:335px!important;}
+.overview-right .overview-ai-card{width:335px!important;max-width:335px!important;height:329px!important;min-height:329px!important;max-height:329px!important;box-sizing:border-box!important;overflow:hidden!important;padding:10px!important;position:relative!important;flex:0 0 329px!important;}
+.overview-right .overview-ai-card .ai-card-head{height:42px!important;min-height:42px!important;margin:0 0 6px!important;display:flex!important;align-items:center!important;justify-content:space-between!important;position:relative!important;z-index:20!important;}
+.overview-right .overview-ai-card .ai-signal-layout{display:block!important;position:relative!important;width:100%!important;height:260px!important;min-height:260px!important;max-height:260px!important;overflow:hidden!important;border-radius:10px!important;}
+.overview-right .overview-ai-card .ai-signal-visual{display:block!important;position:absolute!important;inset:0!important;width:100%!important;height:100%!important;min-height:0!important;max-height:none!important;z-index:1!important;overflow:hidden!important;}
+.overview-right .overview-ai-card .ai-signal-visual img{display:block!important;position:absolute!important;inset:0!important;width:100%!important;height:100%!important;max-width:none!important;max-height:none!important;object-fit:cover!important;object-position:center!important;}
+.overview-right .overview-ai-card .ai-signal-info{display:block!important;position:relative!important;width:100%!important;height:100%!important;min-height:0!important;z-index:5!important;padding:9px!important;box-sizing:border-box!important;overflow:hidden!important;}
+.overview-right .overview-ai-card .ai-symbol-row{width:64%!important;min-height:29px!important;}
+.overview-right .overview-ai-card .ai-price-grid{display:grid!important;grid-template-columns:1fr!important;width:62%!important;gap:3px!important;margin-top:7px!important;}
+.overview-right .overview-ai-card .ai-price-grid>div{display:flex!important;justify-content:space-between!important;align-items:baseline!important;}
+.overview-right .overview-ai-card .ai-confidence-row{width:62%!important;margin-top:7px!important;}
+.overview-right .overview-ai-card .ai-confidence-track{width:62%!important;height:7px!important;margin-top:4px!important;}
+.overview-right .overview-ai-card .ai-extra-row,.overview-right .overview-ai-card .ai-sig-reason{display:none!important;}
+.overview-right .overview-ai-card .ai-analysis-btn{display:block!important;position:absolute!important;left:9px!important;right:9px!important;bottom:8px!important;width:auto!important;height:38px!important;margin:0!important;z-index:10!important;}
+.overview-right .overview-ai-card .ai-visual-glow{z-index:2!important;}
+@media(max-width:900px){.overview-right{min-width:335px!important}.overview-right .overview-ai-card{width:335px!important;max-width:335px!important;height:329px!important;min-height:329px!important;max-height:329px!important;}}
+@media(max-width:600px){.overview-right{min-width:0!important;width:100%!important;align-items:stretch!important}.overview-right .overview-ai-card{width:335px!important;max-width:100%!important;height:329px!important;min-height:329px!important;max-height:329px!important;align-self:center!important}.overview-right .overview-ai-card .ai-card-title .mini{font-size:8px!important}.overview-right .overview-ai-card .ai-price-grid,.overview-right .overview-ai-card .ai-confidence-row{width:64%!important;}}
+</style>
 </head>
 <body>
 <div class="gold-3d-orb"></div>
