@@ -837,4 +837,15 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 
 <script src="config.js?v=20260908f"></script>
 <script src="app.js?v=20260912-eurusd-nav-fix-2"></script>
+
+<style id="signalx-phone-sidebar-click-fix-20260913">
+/* PHONE SIDEBAR STACKING FIX — overlay must stay behind the drawer */
+@media (max-width:1100px){
+  .sx-sidebar-overlay{z-index:10000!important;}
+  .app{position:relative!important;z-index:10001!important;}
+  .sidebar{z-index:10002!important;pointer-events:auto!important;}
+  .sidebar .nav,.sidebar .nav button,.sidebar .nav-external,.sidebar .nav-external-form{pointer-events:auto!important;}
+}
+</style>
+
 </body></html>
