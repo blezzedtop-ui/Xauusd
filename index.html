@@ -564,6 +564,33 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
  .overview-right .overview-ai-card .ai-card-title .mini{max-width:155px!important;font-size:8px!important;}
 }
 </style>
+
+<style id="signalx-layout-structural-fix-20260913">
+/* STRUCTURAL FIX: overview is a true two-column grid. */
+.overview-dashboard{display:grid!important;grid-template-columns:minmax(0,1fr) 335px!important;gap:14px!important;align-items:start!important;width:100%!important;}
+.overview-left{grid-column:1!important;min-width:0!important;display:flex!important;flex-direction:column!important;gap:12px!important;}
+.overview-right{grid-column:2!important;grid-row:1!important;width:335px!important;min-width:335px!important;max-width:335px!important;display:flex!important;flex-direction:column!important;gap:12px!important;align-items:stretch!important;}
+.overview-left>.overview-tv-card{width:100%!important;margin:0!important;}
+.overview-left>.card:not(.overview-tv-card){width:100%!important;margin:0!important;}
+.overview-right>.overview-ai-card,.overview-right>.card:nth-child(2),.overview-right>.card:nth-child(3){width:335px!important;box-sizing:border-box!important;margin:0!important;}
+.overview-right>.overview-ai-card{height:329px!important;min-height:329px!important;max-height:329px!important;}
+.overview-right>.card:nth-child(2){height:329px!important;min-height:329px!important;max-height:329px!important;}
+.overview-right>.card:nth-child(3){height:auto!important;min-height:0!important;max-height:none!important;}
+/* Keep the banner above content without overlapping the navigation/cards. */
+.main{padding-top:7px!important;}
+.signalx-visual-hero{position:relative!important;z-index:1!important;margin-top:-3px!important;margin-bottom:12px!important;min-height:205px!important;max-height:205px!important;overflow:hidden!important;}
+@media(max-width:1100px){
+ .overview-dashboard{grid-template-columns:1fr!important;}
+ .overview-left,.overview-right{grid-column:1!important;grid-row:auto!important;width:100%!important;min-width:0!important;max-width:none!important;}
+ .overview-right{align-items:center!important;}
+ .signalx-visual-hero{min-height:170px!important;max-height:170px!important;}
+}
+@media(max-width:600px){
+ .signalx-visual-hero{min-height:150px!important;max-height:150px!important;margin-bottom:10px!important;}
+ .overview-right>.overview-ai-card,.overview-right>.card:nth-child(2),.overview-right>.card:nth-child(3){width:335px!important;max-width:calc(100vw - 20px)!important;min-width:0!important;}
+ .overview-right>.overview-ai-card,.overview-right>.card:nth-child(2){height:329px!important;min-height:329px!important;max-height:329px!important;}
+}
+</style>
 </head>
 <body>
 <div class="gold-3d-orb"></div>
@@ -615,6 +642,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
           <div class="history-note"><span id="historyInfo">Tarix yuklanmoqda…</span><span>XAUUSD real market history</span></div><div class="tfbar" id="timeframes"><button class="tf" data-interval="1min">1M</button><button class="tf active" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div>
           <div class="chart" id="chart"></div></div>
           <div class="card"><div class="section-head"><div><h3>Performance</h3><div class="mini">Signal history statistics</div></div><button class="btn" id="refreshStats">↻</button></div><div class="grid2"><div class="metric"><small>Total</small><b id="totalSignals">0</b></div><div class="metric"><small>Completed</small><b id="completedSignals">0</b></div><div class="metric"><small>Wins</small><b id="wins">0</b></div><div class="metric"><small>Losses</small><b id="losses">0</b></div></div><div class="metric" style="margin-top:8px"><small>Winrate (TP HIT / TP HIT + SL HIT)</small><b id="winrate">0%</b></div></div>
+      </div>
       <aside class="overview-right">
         <div class="card admin-only overview-ai-card"><div class="section-head ai-card-head"><div class="ai-card-title"><span class="ai-mini-badge">AI</span><div><h3>AI Signals</h3><div class="mini">AI + quantitative signal · selected timeframe</div></div></div><div class="ai-head-actions"><span class="pill ai-live-pill"><i></i> Live</span><button class="btn" id="refreshAISignals" type="button">↻</button></div></div><div class="ai-signal-layout"><div class="ai-signal-info"><div class="ai-symbol-row"><span class="ai-symbol-dot">●</span><b class="ai-symbol-name" id="aiSigSymbol">XAUUSD</b><span class="signal-main wait ai-signal-badge" id="aiSigSignal">WAIT</span></div><div class="ai-price-grid"><div><small>Entry</small><b id="aiSigEntry">—</b></div><div><small>TP1</small><b id="aiSigTP1">—</b></div><div><small>TP2</small><b id="aiSigTP2">—</b></div><div><small>SL</small><b id="aiSigSL">—</b></div></div><div class="ai-confidence-row"><span>Confidence</span><b id="aiSigConfidence">—</b></div><div class="ai-confidence-track"><span id="aiSigConfidenceBar"></span></div><div class="ai-extra-row"><span>Risk / Reward <b id="aiSigRR">—</b></span><span>Mode <b id="aiSigMode">WAIT</b></span></div><div class="mini ai-sig-reason" id="aiSigReason">AI signal hisoblanmoqda…</div><button class="btn primary ai-analysis-btn" id="getAIAnalysis" type="button">✦ &nbsp; Get AI Analysis <span>✦</span></button></div><div class="ai-signal-visual"><img src="assets/ai/ai-signals-banner.png" alt="AI Signals" loading="eager"><div class="ai-visual-glow"></div></div></div></div>
         <div class="card"><div class="section-head"><h3>Market Sessions</h3><span class="pill" id="sessionClock">—</span></div><div class="sessions" id="sessions"></div></div>
