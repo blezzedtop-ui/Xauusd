@@ -656,6 +656,48 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 }
 </style>
 
+
+<style id="signalx-sidebar-3d-hud-final">
+/* SIGNALX PRO — exact neon HUD sidebar pass */
+.app .sidebar{background:#020916!important;border-right:1px solid rgba(0,183,255,.30)!important;box-shadow:10px 0 48px rgba(0,0,0,.58),inset -1px 0 0 rgba(0,140,255,.12)!important;}
+.app .sidebar .nav{gap:5px!important;padding:2px 0!important;}
+.app .sidebar .nav>button,.app .sidebar .nav>.nav-external{position:relative!important;isolation:isolate!important;overflow:hidden!important;min-height:44px!important;height:44px!important;padding:7px 12px!important;border-radius:12px!important;border:1px solid rgba(0,140,255,.42)!important;background:linear-gradient(180deg,#071a30 0%,#061426 52%,#041020 100%)!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.055),inset 0 -8px 18px rgba(0,74,140,.08),0 5px 14px rgba(0,0,0,.38),0 0 12px rgba(0,140,255,.06)!important;transform:translateZ(0);transition:transform .24s ease,border-color .24s ease,box-shadow .24s ease,background .24s ease!important;}
+.app .sidebar .nav>button::before,.app .sidebar .nav>.nav-external::before{content:"";position:absolute;inset:2px;border-radius:10px;pointer-events:none;z-index:0;background:linear-gradient(135deg,rgba(0,183,255,.06),transparent 30%,transparent 70%,rgba(0,140,255,.04));box-shadow:inset 0 0 18px rgba(0,183,255,.035);}
+.app .sidebar .nav>button::after,.app .sidebar .nav>.nav-external::after{content:"";position:absolute;top:-80%;bottom:-80%;left:-42%;width:28%;z-index:1;pointer-events:none;background:linear-gradient(90deg,transparent,rgba(102,229,255,.08),rgba(255,255,255,.16),rgba(102,229,255,.08),transparent);transform:skewX(-18deg) translateX(-220%);animation:sxNavSweep 6.5s ease-in-out infinite;}
+@keyframes sxNavSweep{0%,62%{transform:skewX(-18deg) translateX(-220%);opacity:0}68%{opacity:.8}82%{transform:skewX(-18deg) translateX(620%);opacity:.18}100%{transform:skewX(-18deg) translateX(760%);opacity:0}}
+.app .sidebar .nav>button>*,.app .sidebar .nav>.nav-external>*{position:relative!important;z-index:3!important;}
+.app .sidebar .sx-nav-icon{width:27px!important;height:27px!important;min-width:27px!important;border-radius:8px!important;background:linear-gradient(145deg,rgba(9,43,76,.95),rgba(4,17,34,.96))!important;border:1px solid rgba(0,183,255,.56)!important;color:#fff!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.13),0 0 11px rgba(0,183,255,.14)!important;filter:drop-shadow(0 0 4px rgba(0,183,255,.38))!important;transition:transform .24s ease,filter .24s ease,box-shadow .24s ease!important;}
+.app .sidebar .sx-nav-divider{height:23px!important;width:2px!important;min-width:2px!important;background:linear-gradient(180deg,transparent,#00b7ff,transparent)!important;box-shadow:0 0 8px rgba(0,183,255,.45)!important;opacity:.82!important;}
+.app .sidebar .sx-nav-label{font-size:13px!important;font-weight:700!important;letter-spacing:.012em!important;color:#fff!important;text-shadow:0 0 2px rgba(255,255,255,.9),0 0 8px rgba(0,183,255,.42),0 0 16px rgba(0,140,255,.15)!important;white-space:nowrap!important;overflow:hidden!important;text-overflow:ellipsis!important;}
+.app .sidebar .nav>button:hover,.app .sidebar .nav>.nav-external:hover{transform:perspective(900px) translate3d(2px,-1px,8px) scale(1.012)!important;border-color:rgba(0,207,255,.92)!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.13),inset 0 0 25px rgba(0,183,255,.10),0 9px 22px rgba(0,0,0,.48),0 0 28px rgba(0,156,255,.20)!important;}
+.app .sidebar .nav>button:hover .sx-nav-icon,.app .sidebar .nav>.nav-external:hover .sx-nav-icon{transform:scale(1.07);filter:drop-shadow(0 0 8px rgba(0,207,255,.76))!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.18),0 0 18px rgba(0,183,255,.28)!important;}
+.app .sidebar .nav>button.active,.app .sidebar .nav>.nav-external.active{transform:perspective(900px) translate3d(2px,-1px,7px)!important;border-color:#00b7ff!important;background:linear-gradient(180deg,#0a223d 0%,#06182d 55%,#051325 100%)!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.18),inset 0 0 28px rgba(0,183,255,.15),0 8px 24px rgba(0,0,0,.46),0 0 28px rgba(0,156,255,.25),0 0 52px rgba(0,119,255,.10)!important;animation:sxActivePulse 3.2s ease-in-out infinite;}
+@keyframes sxActivePulse{0%,100%{box-shadow:inset 0 1px 0 rgba(255,255,255,.18),inset 0 0 25px rgba(0,183,255,.12),0 0 22px rgba(0,156,255,.20)}50%{box-shadow:inset 0 1px 0 rgba(255,255,255,.21),inset 0 0 32px rgba(0,183,255,.18),0 0 34px rgba(0,156,255,.28)}}
+.app .sidebar .nav>button.active .sx-nav-icon,.app .sidebar .nav>.nav-external.active .sx-nav-icon{border-color:#72eaff!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.24),0 0 20px rgba(0,200,255,.42)!important;filter:drop-shadow(0 0 9px rgba(0,210,255,.86))!important;}
+/* Section-specific HUD signatures */
+.app .sidebar .nav>button[data-section="overview"]::before{background:radial-gradient(circle at 18% 50%,rgba(0,183,255,.12),transparent 25%),linear-gradient(135deg,rgba(0,183,255,.06),transparent 35%)}
+.app .sidebar .nav>button[data-section="chartSection"]::before{background:linear-gradient(155deg,transparent 40%,rgba(0,207,255,.08) 41%,transparent 43%,transparent 55%,rgba(0,183,255,.05) 56%,transparent 58%)}
+.app .sidebar .nav>button[data-section="analysisSection"]::before{background:repeating-linear-gradient(0deg,transparent 0 9px,rgba(0,183,255,.035) 10px 11px),linear-gradient(155deg,transparent 48%,rgba(0,183,255,.07) 49%,transparent 51%)}
+.app .sidebar .nav>button[data-section="smartAnalysisSection"]::before{background:radial-gradient(circle at 25% 50%,rgba(0,207,255,.10) 0 2px,transparent 3px),radial-gradient(circle at 31% 40%,rgba(0,183,255,.08) 0 2px,transparent 3px),linear-gradient(135deg,transparent 45%,rgba(0,183,255,.07) 46%,transparent 47%)}
+.app .sidebar .nav>button[data-section="aiFallbackSection"]::before{background:radial-gradient(circle at 20% 50%,rgba(0,183,255,.10) 0 2px,transparent 3px),linear-gradient(25deg,transparent 47%,rgba(0,183,255,.06) 48%,transparent 49%),linear-gradient(155deg,transparent 55%,rgba(0,183,255,.05) 56%,transparent 57%)}
+.app .sidebar .nav>button[data-section="classicSection"]::before{background:repeating-linear-gradient(0deg,transparent 0 13px,rgba(0,183,255,.035) 14px 15px)}
+.app .sidebar .nav>button[data-section="snrSection"]::before{background:linear-gradient(180deg,transparent 28%,rgba(0,207,255,.09) 29% 30%,transparent 31% 68%,rgba(0,183,255,.09) 69% 70%,transparent 71%)}
+.app .sidebar .nav>button[data-section="trendLineSection"]::before{background:linear-gradient(160deg,transparent 45%,rgba(0,207,255,.10) 46% 47%,transparent 48%)}
+.app .sidebar .nav>button[data-section="signalSection"]::before{background:linear-gradient(90deg,transparent 10%,rgba(0,207,255,.07) 11% 12%,transparent 13% 42%,rgba(0,183,255,.05) 43% 44%,transparent 45%)}
+.app .sidebar .nav>button[data-section="ictSection"]::before{background:linear-gradient(180deg,transparent 34%,rgba(0,183,255,.07) 35% 36%,transparent 37% 61%,rgba(0,183,255,.07) 62% 63%,transparent 64%),linear-gradient(155deg,transparent 49%,rgba(0,207,255,.08) 50%,transparent 51%)}
+.app .sidebar .nav>button[data-section="signalsSection"]::before{background:radial-gradient(circle at 22% 50%,rgba(0,207,255,.10) 0 2px,transparent 3px),linear-gradient(90deg,rgba(0,183,255,.05),transparent 25%,rgba(0,207,255,.05) 50%,transparent 75%)}
+.app .sidebar .nav>button[data-section="mtfSection"]::before{background:linear-gradient(180deg,transparent 25%,rgba(0,183,255,.07) 26% 27%,transparent 28% 49%,rgba(0,207,255,.07) 50% 51%,transparent 52% 73%,rgba(0,183,255,.06) 74% 75%,transparent 76%)}
+.app .sidebar .nav>button[data-section="calendarSection"]::before{background:repeating-linear-gradient(90deg,transparent 0 22px,rgba(0,183,255,.035) 23px 24px),repeating-linear-gradient(0deg,transparent 0 9px,rgba(0,183,255,.025) 10px 11px)}
+.app .sidebar .nav>button[data-section="sessionsSection"]::before{background:conic-gradient(from 180deg at 20% 50%,rgba(0,183,255,.08),transparent 16%,rgba(0,183,255,.03) 35%,transparent 52%)}
+.app .sidebar .nav>button[data-section="historySection"]::before{background:linear-gradient(90deg,rgba(0,183,255,.08),transparent 18%,rgba(0,183,255,.04) 42%,transparent 65%)}
+.app .sidebar .nav>button[data-section="activeSessionsSection"]::before{background:radial-gradient(circle at 22% 50%,rgba(0,207,255,.15),transparent 12%),radial-gradient(circle at 22% 50%,rgba(0,207,255,.07),transparent 25%)}
+.app .sidebar .nav>button[data-section="mt5Section"]::before{background:repeating-linear-gradient(90deg,transparent 0 17px,rgba(0,183,255,.035) 18px 19px),linear-gradient(180deg,transparent 60%,rgba(0,183,255,.06) 61%,transparent 62%)}
+.app .sidebar .nav>.nav-external#xauUsdPageBtn::before{background:linear-gradient(155deg,transparent 45%,rgba(0,183,255,.10) 46%,transparent 48%)}
+.app .sidebar .nav>.nav-external#eurUsdPageBtn::before{background:linear-gradient(90deg,transparent 35%,rgba(0,183,255,.07) 36%,transparent 38%)}
+.app .sidebar .nav>.nav-external#xauUsdPageBtn.active{animation:sxActivePulse 3.2s ease-in-out infinite}
+@media(max-width:900px){.app .sidebar .nav>button,.app .sidebar .nav>.nav-external{min-height:43px!important;height:43px!important}.app .sidebar .sx-nav-label{font-size:13px!important}}
+@media(prefers-reduced-motion:reduce){.app .sidebar .nav>button,.app .sidebar .nav>.nav-external{animation:none!important}.app .sidebar .nav>button::after,.app .sidebar .nav>.nav-external::after{animation:none!important}}
+</style>
 </head>
 <body>
 <div class="gold-3d-orb"></div>
@@ -668,7 +710,6 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
     <button data-section="chartSection"><span class="sx-nav-icon" data-icon="chart"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Live Chart</span></button>
     <button data-section="analysisSection"><span class="sx-nav-icon" data-icon="analysis"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Technical Analysis</span></button>
     <button class="admin-only" data-section="smartAnalysisSection"><span class="sx-nav-icon" data-icon="brain"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">AI Smart Analysis</span></button>
-    <button class="admin-only" data-section="signalEngineSection"><span class="sx-nav-icon" data-icon="bolt"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal Engine</span></button>
     <button class="admin-only" data-section="aiFallbackSection"><span class="sx-nav-icon" data-icon="network"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">AI Fallback Network</span></button>
     <button data-section="classicSection"><span class="sx-nav-icon" data-icon="trade"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Classic Trade</span></button>
     <button data-section="snrSection"><span class="sx-nav-icon" data-icon="diamond"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">SNR</span></button>
@@ -682,6 +723,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
     <button data-section="historySection"><span class="sx-nav-icon" data-icon="history"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal History</span></button>
     <button data-section="activeSessionsSection"><span class="sx-nav-icon" data-icon="status"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Aktiv Seanslar</span></button>
     <button class="admin-only" data-section="mt5Section"><span class="sx-nav-icon" data-icon="terminal"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">MetaTrader 5</span></button>
+    <button type="button" id="xauUsdPageBtn" class="nav-external"><span class="sx-nav-icon" data-icon="gold"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">XAUUSD</span></button>
     <button type="button" id="eurUsdPageBtn" class="nav-external"><span class="sx-nav-icon" data-icon="euro"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">EURUSD</span></button>
   <div class="sx-pro-card sx-pro-card-sidebar">
   <div><span class="sx-pro-kicker">SIGNALX PRO</span><b>AI + AUTO TRADING</b><small>Advanced signals and premium tools</small></div>
