@@ -711,3 +711,15 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
   });
   document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMenu();});
 })();
+
+/* V3 layout repair: reliable mobile sidebar drawer */
+(function(){
+  const menu=document.getElementById('sxMobileMenu');
+  const side=document.querySelector('.sidebar');
+  const overlay=document.getElementById('sxSidebarOverlay');
+  if(!menu||!side) return;
+  function setOpen(open){side.classList.toggle('sx-open',open); if(overlay) overlay.classList.toggle('sx-show',open); menu.setAttribute('aria-expanded',String(open));}
+  menu.addEventListener('click',()=>setOpen(!side.classList.contains('sx-open')));
+  if(overlay) overlay.addEventListener('click',()=>setOpen(false));
+  side.querySelectorAll('.nav button').forEach(b=>b.addEventListener('click',()=>{if(window.innerWidth<=900)setOpen(false);}));
+})();
