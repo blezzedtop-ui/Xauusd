@@ -2,7 +2,7 @@
 <html lang="uz">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>XAUUSD — Trading Terminal</title>
+<title>GOLD — Trading SaaS</title>
 <style>
 :root{--bg:#070a0f;--panel:#0d1219;--panel2:#101720;--line:#1c2632;--text:#eef3f8;--muted:#8d9aaa;--accent:#65a3ff;--green:#30d49a;--red:#ff6471;--gold:#f5c15d;--purple:#a98cff;--shadow:0 16px 40px rgba(0,0,0,.24)}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:radial-gradient(circle at top right,#0c1622 0,#070a0f 42%,#05070b 100%);color:var(--text);font:14px Inter,Segoe UI,Arial,sans-serif}button,input{font:inherit}.app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;border-right:1px solid var(--line);background:rgba(8,12,18,.92);backdrop-filter:blur(10px);padding:18px 14px;display:flex;flex-direction:column}.brand{padding:6px 10px 18px;border-bottom:1px solid var(--line);margin-bottom:14px}.brand b{font-size:18px;letter-spacing:.3px}.brand span{display:block;color:var(--muted);font-size:11px;margin-top:5px}.nav{display:flex;flex-direction:column;gap:6px}.nav button{border:1px solid transparent;background:transparent;color:var(--muted);text-align:left;padding:11px 12px;border-radius:10px;cursor:pointer;transition:.18s}.nav button:hover{background:#111923;color:var(--text)}.nav button.active{background:#132134;border-color:#203450;color:#fff}.sidebar-bottom{margin-top:auto}.tiny{font-size:11px;color:var(--muted);line-height:1.5}.main{padding:18px 20px 28px;max-width:1700px;width:100%;margin:auto}.topbar{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:16px}.topbar h1{font-size:19px;margin:0}.topbar p{margin:5px 0 0;color:var(--muted);font-size:12px}.tools{display:flex;gap:8px;align-items:center;justify-content:flex-end}.auth-top{min-width:110px;font-weight:800}.btn{position:relative;z-index:20;pointer-events:auto;background:#111923;border:1px solid var(--line);color:var(--text);padding:9px 12px;border-radius:9px;cursor:pointer}.btn:hover{background:#17222f}.btn.primary{background:#2462ae;border-color:#2d73ca}.btn.danger{color:#ffadb3}.pill{padding:6px 10px;border:1px solid var(--line);background:#0e151d;border-radius:999px;font-size:11px;color:var(--muted)}.dashboard{display:grid;grid-template-columns:minmax(0,1.72fr) minmax(330px,.85fr);gap:14px}.card{background:linear-gradient(180deg,rgba(14,20,28,.95),rgba(11,16,22,.95));border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:var(--shadow)}.card+.card{margin-top:14px}.section{display:none}.section.active{display:block}.hero{display:flex;justify-content:space-between;gap:20px;align-items:flex-end}.symbol{font-size:22px;font-weight:700}.sub{font-size:12px;color:var(--muted);margin-top:5px}.price{font-size:32px;font-weight:800}.change{font-size:12px;margin-top:5px}.up{color:var(--green)}.down{color:var(--red)}.tfbar{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0}.tf{border:1px solid var(--line);background:#0e151d;color:var(--muted);border-radius:8px;padding:8px 11px;cursor:pointer}.tf.active{background:#142742;border-color:#2c5c93;color:#fff}.chart{height:560px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#090d12}.history-note{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:8px 0 0;font-size:11px;color:var(--muted)}.history-note b{color:var(--gold)}.countdown-box{margin-top:9px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}.countdown-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}.countdown{color:var(--gold);font-weight:800;font-size:16px;font-variant-numeric:tabular-nums;text-shadow:0 0 14px rgba(245,193,93,.18)}.close-time{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}.section-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}.section-head h2,.section-head h3{margin:0;font-size:15px}.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.metric{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:10px}.metric small{color:var(--muted);font-size:11px}.metric b{font-size:18px;display:block;margin-top:6px}.signal-box{border:1px solid var(--line);background:#0a1016;border-radius:10px;padding:12px}.signal-main{font-size:21px;font-weight:800}.buy{color:var(--green)}.sell{color:var(--red)}.wait{color:var(--gold)}.mini{font-size:12px;line-height:1.65}.levels .row,.list-row{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)}.levels .row:last-child,.list-row:last-child{border-bottom:0}.res{color:var(--red)}.sup{color:var(--green)}.piv{color:var(--gold)}.sessions{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.session{border:1px solid var(--line);border-radius:10px;padding:10px}.session.open{border-color:#216b55;background:#0b1714}.status{font-size:11px;font-weight:800}.calendar-item{border:1px solid var(--line);border-left:3px solid var(--red);padding:9px;border-radius:8px;margin:7px 0;background:#0b1118}.tag{font-size:10px;font-weight:800}.history{width:100%;border-collapse:collapse}.history th,.history td{text-align:left;padding:9px 7px;border-bottom:1px solid var(--line);font-size:11px;white-space:nowrap}.setup-badge{display:inline-block;padding:3px 6px;border:1px solid var(--line);border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.02em}.setup-badge.strong{border-color:#2f8f6f;background:rgba(47,143,111,.12);color:var(--green)}.outcome-tp{color:var(--green);font-weight:800}.outcome-sl{color:var(--red);font-weight:800}.outcome-open{color:var(--gold);font-weight:800}.outcome-amb{color:var(--purple);font-weight:800}.scroll{overflow:auto}.toast{position:fixed;right:18px;bottom:18px;background:#121b25;border:1px solid var(--line);padding:11px 14px;border-radius:10px;box-shadow:var(--shadow);display:none;z-index:20}.toast.show{display:block}.modal{position:fixed;inset:0;background:rgba(2,5,9,.86);display:none;align-items:center;justify-content:center;padding:16px;z-index:30}.modal.show{display:flex}.auth-required{backdrop-filter:blur(18px)}.auth-required .modal-card{animation:authIn .28s ease-out}@keyframes authIn{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}.modal-card{width:min(410px,100%);background:#0d131b;border:1px solid var(--line);border-radius:14px;padding:18px}.input{width:100%;background:#090e14;color:#fff;border:1px solid var(--line);padding:11px;border-radius:9px;margin:0 0 9px}.link{font-size:12px;color:#8fb9ff;cursor:pointer;margin-top:10px}.health{display:flex;gap:7px;align-items:center}.dot{width:8px;height:8px;border-radius:50%;background:var(--green)}
@@ -15,7 +15,7 @@
 .btn{pointer-events:auto!important;position:relative!important;z-index:100!important}.buy,.badge-buy{color:#35d49a!important}.sell,.badge-sell{color:#ff5c70!important}.advanced-signal.buy,.signal-main.buy{color:#35d49a!important}.advanced-signal.sell,.signal-main.sell{color:#ff5c70!important}.history .buy{color:#35d49a!important}.history .sell{color:#ff5c70!important}.history-group td{background:#101923;color:#dbe8f7;border-top:2px solid var(--line);font-size:12px;padding-top:12px;padding-bottom:8px}.source-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.source-stat{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:11px}.source-stat .source-title{font-weight:800;font-size:12px}.source-stat .source-win{font-size:20px;font-weight:900;margin-top:5px}.source-stat .source-line{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}@media(max-width:1000px){.source-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.source-stats-grid{grid-template-columns:1fr}} </style>
 <style>.title-shimmer{background:linear-gradient(90deg,#eef3f8 0%,#9fc7ff 35%,#f5c15d 52%,#eef3f8 72%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:titleShimmer 7s linear infinite}@keyframes titleShimmer{to{background-position:-220% 0}}.gold-photo-bg{position:fixed;inset:0;z-index:0;pointer-events:none;background-image:url("assets/gold-trading-bg.png");background-size:cover;background-position:center;background-repeat:no-repeat;filter:saturate(.92) contrast(1.03);opacity:.34;transform:translateZ(0);will-change:transform}.gold-photo-bg:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(3,6,10,.34),rgba(3,7,13,.72) 72%,rgba(2,5,9,.86));}.main{position:relative;z-index:3}.sidebar,.topbar,.card,.toast,.modal{z-index:4}.gold-photo-bg+*{position:relative;z-index:2}@media (max-width:900px){.gold-photo-bg{opacity:.22;background-position:center top}}
 .advanced-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.advanced-card{border:1px solid var(--line);background:rgba(8,14,21,.86);border-radius:12px;padding:12px;box-shadow:0 12px 30px rgba(0,0,0,.16)}.advanced-card.buy{border-color:rgba(48,212,154,.35)}.advanced-card.sell{border-color:rgba(240,105,120,.35)}.advanced-card.wait{border-color:rgba(245,193,93,.25)}.advanced-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.advanced-signal{font-size:22px;font-weight:1000;letter-spacing:.06em}.component-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}.component{padding:7px 8px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.02)}.component small{display:block;color:var(--muted);font-size:9px;margin-bottom:3px}.component b{font-size:11px}.ai-reason{margin-top:5px;line-height:1.35;word-break:break-word;opacity:.98;display:block;min-height:18px}.ai-provider-card .ai-reason b{color:var(--gold)}.advanced-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px}.badge-buy{color:var(--green)}.badge-sell{color:var(--red)}.badge-wait{color:var(--gold)}@media(max-width:900px){.advanced-grid{grid-template-columns:1fr}}
-.btn{pointer-events:auto!important;position:relative!important;z-index:100!important}.buy,.badge-buy{color:#35d49a!important}.sell,.badge-sell{color:#ff5c70!important}.advanced-signal.buy,.signal-main.buy{color:#35d49a!important}.advanced-signal.sell,.signal-main.sell{color:#ff5c70!important}.history .buy{color:#35d49a!important}.history .sell{color:#ff5c70!important}.history-group td{background:#101923;color:#dbe8f7;border-top:2px solid var(--line);font-size:12px;padding-top:12px;padding-bottom:8px}.source-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.source-stat{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:11px}.source-stat .source-title{font-weight:800;font-size:12px}.source-stat .source-win{font-size:20px;font-weight:900;margin-top:5px}.source-stat .source-line{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}@media(max-width:1000px){.source-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.source-stats-grid{grid-template-columns:1fr}} </style><link rel="manifest" href="manifest.webmanifest">
+.btn{pointer-events:auto!important;position:relative!important;z-index:100!important}.buy,.badge-buy{color:#35d49a!important}.sell,.badge-sell{color:#ff5c70!important}.advanced-signal.buy,.signal-main.buy{color:#35d49a!important}.advanced-signal.sell,.signal-main.sell{color:#ff5c70!important}.history .buy{color:#35d49a!important}.history .sell{color:#ff5c70!important}.history-group td{background:#101923;color:#dbe8f7;border-top:2px solid var(--line);font-size:12px;padding-top:12px;padding-bottom:8px}.source-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.source-stat{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:11px}.source-stat .source-title{font-weight:800;font-size:12px}.source-stat .source-win{font-size:20px;font-weight:900;margin-top:5px}.source-stat .source-line{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}@media(max-width:1000px){.source-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.source-stats-grid{grid-template-columns:1fr}} </style><link rel="manifest" href="/manifest.webmanifest">
 <meta name="theme-color" content="#0b1220">
 <script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
 
@@ -85,7 +85,7 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
 @keyframes goldWallpaper{from{background-position:48% 46%;transform:scale(1)}to{background-position:54% 52%;transform:scale(1.05)}}
 @keyframes goldOrb{from{transform:translate3d(0,0,0) rotate(0deg)}to{transform:translate3d(-80px,55px,0) rotate(18deg)}}
 @media(max-width:900px){.gold-3d-orb{width:150px;height:150px;right:-30px;top:18vh}.gold-photo-bg{opacity:.17!important}}
-.nav-external{display:block;width:100%;border:1px solid transparent;background:transparent;color:var(--gold);text-align:left;padding:11px 12px;border-radius:10px;cursor:pointer;font-weight:800}.nav-external:hover{background:#111923;color:#fff}.nav-external::after{content:" ↗";opacity:.65}
+.nav-external{display:block;position:relative;z-index:1000;pointer-events:auto!important;user-select:none;-webkit-user-select:none;width:100%;border:1px solid transparent;background:transparent;color:var(--gold);text-align:left;padding:11px 12px;border-radius:10px;cursor:pointer;font-weight:800}.nav-external:hover{background:#111923;color:#fff}.nav-external::after{content:" ↗";opacity:.65}.nav-external-form{display:block;margin:0;padding:0;width:100%}.nav-external-form .nav-external{width:100%;display:block;font:inherit}
 </style>
 
 <style>
@@ -106,481 +106,60 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
 @keyframes logoPulse{0%,100%{transform:perspective(180px) rotateX(10deg) rotateY(-10deg) scale(1)}50%{transform:perspective(180px) rotateX(-4deg) rotateY(7deg) scale(1.06)}}
 @keyframes logoFloat{0%,100%{transform:translateY(0) rotate(0deg)}50%{transform:translateY(-3px) rotate(.5deg)}}
 @media(max-width:900px){.brand-logo{width:46px;height:46px;border-radius:15px}.logo-core{width:32px;height:32px}.brand-eur .logo-core,.brand-eur .logo-core b{font-size:18px}}
-.admin-only{display:none!important}
-body.is-admin .admin-only{display:block!important}
-body.is-admin .section.admin-only{display:none!important}
-body.is-admin .section.admin-only.active{display:block!important}
-button.admin-only{display:none!important}
-body.is-admin button.admin-only{display:inline-flex!important}
-.nav form.admin-only{display:none!important}
-body.is-admin .nav form.admin-only{display:block!important}
 </style>
-
-<style id="signalx-mobile-performance">
-/* SignalX Mobile Premium UI — visual-only responsive layer. TradingView/MT5 chart internals untouched. */
-@media (max-width: 600px){
-  html,body{width:100%;max-width:100%;overflow-x:hidden;overscroll-behavior-x:none;-webkit-text-size-adjust:100%;}
-  body:before{animation:none!important;}
-  .gold-photo-bg{opacity:.10!important;animation:none!important;will-change:auto!important;background-attachment:scroll!important;}
-  .sidebar{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:rgba(8,10,14,.94)!important;box-shadow:0 8px 24px rgba(0,0,0,.25)!important;}
-  .sidebar,.topbar,.card,.advanced-card,.metric,.signal-box,.session,.calendar-item,.modal-card,.toast{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
-  .nav button:before,.btn:before,.tf:before{animation:none!important;}
-  .nav button,.btn,.tf,.pill{touch-action:manipulation;-webkit-tap-highlight-color:transparent;}
-  .nav button:active,.btn:active,.tf:active{transform:scale(.96)!important;box-shadow:0 0 18px rgba(0,150,255,.22)!important;}
-  .main{width:100%;max-width:100%;overflow:hidden;}
-  .topbar{width:100%;overflow:hidden;}
-  .tools{max-width:100%;overflow-x:auto;overflow-y:hidden;flex-wrap:nowrap!important;justify-content:flex-start!important;scrollbar-width:none;-webkit-overflow-scrolling:touch;}
-  .tools::-webkit-scrollbar{display:none;}
-  .tools>*{flex:0 0 auto;}
-  .dashboard{width:100%;min-width:0;}
-  .card,.advanced-card,.metric,.signal-box,.session,.calendar-item{min-width:0;overflow:hidden;}
-  .hero{min-width:0;}
-  .hero>*,.section-head>*{min-width:0;max-width:100%;}
-  .price{font-size:clamp(23px,7vw,29px);line-height:1.05;white-space:nowrap;}
-  .symbol{font-size:clamp(18px,5vw,22px);}
-  .sub,.mini,.tiny{overflow-wrap:anywhere;}
-  .grid4{grid-template-columns:repeat(2,minmax(0,1fr));}
-  .grid2{grid-template-columns:1fr;}
-  .source-stats-grid{grid-template-columns:1fr;}
-  .advanced-grid{grid-template-columns:1fr;}
-  .sessions{grid-template-columns:1fr;}
-  .history{min-width:650px;}
-  .scroll{-webkit-overflow-scrolling:touch;}
-  /* Keep chart containers responsive; chart libraries themselves are not modified. */
-  .chart{width:100%;max-width:100%;height:clamp(320px,62vh,390px);}
-  .tfbar{max-width:100%;}
-  .section-head{min-width:0;}
-  .section-head h2,.section-head h3{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-  .modal{padding:10px;}
-  .modal-card{width:min(430px,calc(100vw - 20px));max-height:calc(100dvh - 20px);overflow:auto;}
-  .toast{left:8px!important;right:8px!important;bottom:8px!important;}
-}
-@media (max-width:390px){
-  .main{padding:7px!important;}
-  .sidebar{padding:7px 8px!important;}
-  .brand{padding-bottom:7px!important;}
-  .nav button{padding:7px 9px!important;font-size:10px!important;}
-  .topbar h1{font-size:15px!important;}
-  .topbar p{font-size:10px!important;}
-  .btn,.tf{padding:7px 9px!important;font-size:10px!important;}
-  .card{padding:9px!important;border-radius:11px!important;}
-  .chart{height:330px!important;}
-}
-@media (prefers-reduced-motion: reduce){
-  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important;}
-}
-</style>
-
-
-<style id="signalx-premium-responsive-final">
-/* SignalX Premium Responsive Shell — UI-only. TradingView/MT5 chart internals untouched. */
-:root{--sx-blue:#1aa8ff;--sx-cyan:#45e7ff;--sx-purple:#9b5cff;--sx-pink:#d84dff;--sx-glass:rgba(8,18,34,.58);--sx-border:rgba(62,176,255,.28);--sx-glow:rgba(0,156,255,.22)}
-html,body{background:radial-gradient(circle at 15% 0%,rgba(0,126,255,.12),transparent 28%),radial-gradient(circle at 88% 12%,rgba(157,72,255,.11),transparent 30%),#030812;}
-body:before{background:radial-gradient(circle at 20% 20%,rgba(0,153,255,.12),transparent 28%),radial-gradient(circle at 80% 70%,rgba(171,74,255,.10),transparent 30%),linear-gradient(135deg,rgba(2,7,17,.86),rgba(5,13,28,.55),rgba(2,4,12,.94))!important;animation:sxAmbient 18s ease-in-out infinite alternate!important}
-.app{grid-template-columns:230px minmax(0,1fr);gap:0}
-.sidebar{background:linear-gradient(180deg,rgba(4,15,31,.78),rgba(3,8,18,.74))!important;border-right:1px solid rgba(45,153,255,.26)!important;box-shadow:12px 0 50px rgba(0,0,0,.35),inset -1px 0 rgba(68,193,255,.08)!important;backdrop-filter:blur(22px) saturate(145%)!important;-webkit-backdrop-filter:blur(22px) saturate(145%)!important}
-.brand{border-bottom-color:rgba(45,153,255,.20)!important}
-.brand-copy{display:flex;flex-direction:column;min-width:0}
-.brand-copy b{font-size:25px!important;line-height:1;background:linear-gradient(90deg,#fff,#57caff 45%,#a86cff);-webkit-background-clip:text;background-clip:text;color:transparent;text-shadow:0 0 24px rgba(65,180,255,.28)}
-.brand-copy span{font-size:9px!important;letter-spacing:.20em!important;color:#5bcfff!important;margin-top:6px!important}
-.brand-logo{border-color:rgba(50,186,255,.46)!important;background:linear-gradient(145deg,rgba(255,255,255,.14),rgba(20,140,255,.08) 48%,rgba(97,50,255,.10))!important;box-shadow:inset 0 1px 0 rgba(255,255,255,.25),0 10px 30px rgba(0,0,0,.32),0 0 28px rgba(27,173,255,.22),0 0 52px rgba(136,67,255,.10)!important}
-.logo-core{background:radial-gradient(circle at 30% 24%,rgba(255,255,255,.9),rgba(80,214,255,.24) 18%,rgba(35,145,255,.28) 42%,rgba(94,50,220,.20) 72%,rgba(0,0,0,.28) 100%)!important;border-color:rgba(143,232,255,.62)!important;box-shadow:inset 4px 4px 9px rgba(255,255,255,.18),inset -7px -7px 13px rgba(0,0,0,.20),0 0 28px rgba(38,183,255,.34)!important}
-.logo-ring{border-color:rgba(72,198,255,.46)!important;box-shadow:0 0 14px rgba(30,170,255,.20)!important}
-.nav button,.btn,.tf,.pill{background:linear-gradient(145deg,rgba(19,117,194,.14),rgba(124,74,255,.07),rgba(255,255,255,.025))!important;border-color:rgba(57,171,255,.25)!important;box-shadow:0 8px 24px rgba(0,0,0,.22),inset 0 1px 0 rgba(255,255,255,.07),0 0 0 rgba(0,160,255,0)!important}
-.nav button:before,.btn:before,.tf:before{background:linear-gradient(105deg,transparent 35%,rgba(106,223,255,.18) 48%,rgba(190,113,255,.16) 53%,transparent 61%)!important}
-.nav button:hover,.btn:hover,.tf:hover{border-color:rgba(76,200,255,.62)!important;box-shadow:0 10px 30px rgba(0,0,0,.30),0 0 22px rgba(24,169,255,.15),0 0 14px rgba(157,79,255,.10)!important}
-.nav button.active,.tf.active,.btn.primary{background:linear-gradient(135deg,#075b9c,#168bd8 45%,#7446d9 100%)!important;border-color:rgba(103,223,255,.72)!important;color:#fff!important;box-shadow:0 10px 34px rgba(0,145,255,.25),0 0 22px rgba(95,75,255,.16),inset 0 1px 0 rgba(255,255,255,.30)!important}
-.card,.advanced-card,.metric,.signal-box,.session,.calendar-item,.modal-card,.toast{background:linear-gradient(145deg,rgba(8,24,44,.68),rgba(6,12,24,.56),rgba(29,11,49,.40))!important;border-color:rgba(53,166,255,.24)!important;box-shadow:0 18px 52px rgba(0,0,0,.35),inset 0 1px 0 rgba(255,255,255,.055),0 0 28px rgba(0,119,255,.045)!important;backdrop-filter:blur(18px) saturate(140%)!important;-webkit-backdrop-filter:blur(18px) saturate(140%)!important}
-.card:hover,.advanced-card:hover,.metric:hover,.signal-box:hover{border-color:rgba(73,190,255,.44)!important;box-shadow:0 24px 68px rgba(0,0,0,.42),0 0 32px rgba(14,157,255,.10),0 0 22px rgba(145,69,255,.07)!important}
-.section-head h2,.section-head h3,.symbol,.topbar h1,.price{ text-shadow:0 0 22px rgba(38,181,255,.20),0 0 34px rgba(145,70,255,.08)}
-.title-shimmer{background:linear-gradient(90deg,#fff 0%,#69d8ff 34%,#a56dff 52%,#fff 72%)!important;background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent}
-.price{font-variant-numeric:tabular-nums}
-.dot{background:#36dfff!important;box-shadow:0 0 14px rgba(54,223,255,.8)!important}
-.chart{box-shadow:inset 0 0 0 1px rgba(43,157,255,.08),0 10px 34px rgba(0,0,0,.28)!important}
-.nav-external{color:#71d8ff!important}
-.nav-external:hover{background:rgba(20,125,210,.13)!important}
-.auth-top{min-width:112px}
-@keyframes sxAmbient{from{transform:scale(1) translate3d(0,0,0)}to{transform:scale(1.035) translate3d(-.5%,.5%,0)}}
-/* Desktop: full terminal feel */
-@media(min-width:1101px){
- .main{padding:16px 18px 26px;max-width:1800px}
- .topbar{margin-bottom:14px}
- .dashboard{grid-template-columns:minmax(0,1.78fr) minmax(340px,.82fr);gap:14px}
- .card{border-radius:15px}
- .chart{height:590px}
- .nav button{padding:11px 12px;border-radius:11px}
-}
-/* Tablet */
-@media(max-width:1100px){.app{grid-template-columns:1fr}.sidebar{position:sticky;top:0;height:auto;padding:9px 10px;z-index:50}.nav{flex-direction:row;overflow-x:auto;gap:6px;scrollbar-width:none}.nav::-webkit-scrollbar{display:none}.nav button{flex:0 0 auto;white-space:nowrap}.sidebar-bottom{display:none}.dashboard{grid-template-columns:1fr}.chart{height:470px}}
-/* Phone: lightweight shell, but desktop layout returns automatically above 1100px */
-@media(max-width:600px){
- html,body{width:100%;max-width:100%;overflow-x:hidden;overscroll-behavior-x:none;-webkit-text-size-adjust:100%}
- body:before{animation:none!important}
- .gold-photo-bg{opacity:.08!important;animation:none!important;will-change:auto!important;background-attachment:scroll!important}
- .gold-3d-orb{display:none!important}
- .sidebar{background:rgba(3,9,19,.96)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;box-shadow:0 8px 24px rgba(0,0,0,.30)!important}
- .sidebar,.topbar,.card,.advanced-card,.metric,.signal-box,.session,.calendar-item,.modal-card,.toast{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
- .brand{padding:3px 5px 8px!important;margin-bottom:7px!important}
- .brand-logo{width:42px!important;height:42px!important;border-radius:14px!important}
- .logo-core{width:29px!important;height:29px!important}
- .brand-copy b{font-size:19px!important}.brand-copy span{font-size:8px!important;letter-spacing:.14em!important}
- .nav button:before,.btn:before,.tf:before{animation:none!important}
- .nav button,.btn,.tf,.pill{touch-action:manipulation;-webkit-tap-highlight-color:transparent}
- .nav button:active,.btn:active,.tf:active{transform:scale(.965)!important;box-shadow:0 0 20px rgba(0,174,255,.24)!important}
- .main{width:100%;max-width:100%;overflow:hidden;padding:8px!important}
- .topbar{width:100%;overflow:hidden;gap:7px!important;margin-bottom:9px!important}
- .topbar h1{font-size:16px!important}.topbar p{font-size:10px!important}
- .tools{max-width:100%;overflow-x:auto;overflow-y:hidden;flex-wrap:nowrap!important;justify-content:flex-start!important;scrollbar-width:none;-webkit-overflow-scrolling:touch}.tools::-webkit-scrollbar{display:none}.tools>*{flex:0 0 auto}
- .dashboard{width:100%;min-width:0;gap:9px}.card,.advanced-card,.metric,.signal-box,.session,.calendar-item{min-width:0;overflow:hidden;border-radius:12px!important;padding:10px!important}
- .hero{min-width:0;gap:10px}.hero>*{min-width:0}.price{font-size:clamp(22px,7vw,28px)!important;white-space:nowrap}.symbol{font-size:19px!important}.sub,.mini,.tiny{overflow-wrap:anywhere}
- .grid4{grid-template-columns:repeat(2,minmax(0,1fr))}.grid2{grid-template-columns:1fr}.source-stats-grid{grid-template-columns:1fr}.advanced-grid{grid-template-columns:1fr}.sessions{grid-template-columns:1fr}
- .tfbar{max-width:100%;flex-wrap:nowrap!important;overflow-x:auto;scrollbar-width:none;-webkit-overflow-scrolling:touch}.tfbar::-webkit-scrollbar{display:none}.tf{flex:0 0 auto;padding:7px 9px!important;font-size:10px!important}
- /* Container only; TradingView and MT5 chart internals are unchanged. */
- .chart{width:100%;max-width:100%;height:clamp(320px,60vh,390px)!important}
- .history{min-width:650px}.scroll{-webkit-overflow-scrolling:touch}
- .section-head h2,.section-head h3{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px!important}
- .modal{padding:10px!important}.modal-card{width:min(430px,calc(100vw - 20px));max-height:calc(100dvh - 20px);overflow:auto}
- .toast{left:8px!important;right:8px!important;bottom:8px!important}
-}
-@media(max-width:390px){.main{padding:6px!important}.nav button{padding:7px 8px!important;font-size:10px!important}.btn,.tf{padding:7px 8px!important;font-size:10px!important}.card{padding:8px!important}.chart{height:325px!important}.brand-copy b{font-size:18px!important}}
-@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
-</style>
-<link rel="stylesheet" href="signalx-premium-theme.css?v=20260913-v6-sync"><style id="signalx-v3-final-shell">
-/* SIGNALX V3 FINAL SHELL: desktop left sidebar + mobile drawer */
-.sx-mobile-menu{display:none}
-.sx-sidebar-overlay{display:none}
-@media(min-width:1101px){
-  .app{display:grid!important;grid-template-columns:238px minmax(0,1fr)!important;align-items:stretch!important}
-  .sidebar{position:sticky!important;left:auto!important;top:0!important;height:100vh!important;width:238px!important;max-height:100vh!important;overflow-y:auto!important;overflow-x:hidden!important;z-index:100!important}
-  .nav{flex-direction:column!important;overflow:visible!important}
-  .nav button,.nav-external-form,.nav-external{width:100%!important;flex:0 0 auto!important}
-  .main{min-width:0!important}
-}
-@media(max-width:1100px){
-  .sx-mobile-menu{display:inline-flex!important;align-items:center;justify-content:center;width:42px;height:42px;flex:0 0 42px;border:1px solid rgba(64,190,255,.45);border-radius:12px;background:linear-gradient(145deg,rgba(17,111,190,.28),rgba(117,70,220,.18));color:#fff;box-shadow:0 0 22px rgba(0,160,255,.16);cursor:pointer;position:relative;z-index:300}
-  .topbar{display:flex!important;flex-direction:row!important;align-items:center!important;gap:10px!important}
-  .sx-title-wrap{min-width:0;flex:1}
-  .sx-title-wrap h1{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .sidebar{position:fixed!important;left:0!important;top:0!important;width:min(292px,86vw)!important;height:100dvh!important;max-height:100dvh!important;transform:translateX(-105%)!important;transition:transform .25s ease!important;z-index:1001!important;overflow-y:auto!important;overflow-x:hidden!important;border-right:1px solid rgba(65,191,255,.38)!important;border-bottom:0!important;padding:14px 12px!important}
-  body.sx-menu-open .sidebar{transform:translateX(0)!important}
-  .nav{display:flex!important;flex-direction:column!important;overflow:visible!important;gap:6px!important}
-  .nav button,.nav-external-form,.nav-external{width:100%!important;flex:0 0 auto!important}
-  .sidebar-bottom{display:block!important;margin-top:auto!important}
-  .sx-sidebar-overlay{display:block;position:fixed;inset:0;background:rgba(1,5,12,.72);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);opacity:0;pointer-events:none;transition:opacity .25s ease;z-index:1000}
-  body.sx-menu-open .sx-sidebar-overlay{opacity:1;pointer-events:auto}
-  .main{width:100%!important;min-width:0!important}
-}
-@media(max-width:600px){
-  .sx-mobile-menu{width:40px;height:40px;flex-basis:40px}
-  .topbar{padding-top:2px!important}
-}
-@media(prefers-reduced-motion:reduce){.sidebar{transition:none!important}.sx-sidebar-overlay{transition:none!important}}
-</style>
-
-<style id="signalx-user-background-layout">
-/* USER-SUPPLIED V3 BACKGROUNDS — exact assets, layered into real UI */
-:root{
-  --sx-blue:#19bfff;--sx-cyan:#5eeaff;--sx-purple:#9b4dff;--sx-pink:#dc45ff;
-  --sx-panel:rgba(3,10,28,.76);--sx-line:rgba(58,175,255,.34);
-}
-html,body{background:#020611!important;}
-body{position:relative;min-height:100vh;overflow-x:hidden;}
-/* 1 — overall site background */
-.gold-photo-bg{display:block!important;position:fixed!important;inset:0!important;z-index:0!important;
-  background-image:url('assets/custom/site-background.jpg')!important;
-  background-size:cover!important;background-position:center center!important;background-repeat:no-repeat!important;
-  opacity:.96!important;filter:none!important;mix-blend-mode:normal!important;transform:none!important;animation:none!important;}
-.gold-photo-bg:after{content:"";position:absolute;inset:0!important;
-  background:linear-gradient(180deg,rgba(1,6,18,.18),rgba(1,6,18,.40) 48%,rgba(1,4,14,.78) 100%)!important;}
-.gold-3d-orb{display:none!important;}
-body:before{content:""!important;position:fixed!important;inset:0!important;z-index:1!important;pointer-events:none!important;
-  background:radial-gradient(circle at 20% 25%,rgba(0,174,255,.10),transparent 27%),radial-gradient(circle at 80% 75%,rgba(142,64,255,.10),transparent 30%)!important;animation:none!important;}
-.app{position:relative!important;z-index:3!important;}
-.main{position:relative!important;z-index:4!important;}
-/* 2 — sidebar background */
-.sidebar{position:sticky!important;top:0!important;z-index:100!important;
-  background-image:linear-gradient(180deg,rgba(1,7,23,.30),rgba(1,5,17,.62)),url('assets/custom/sidebar-background.jpg')!important;
-  background-size:cover!important;background-position:center top!important;background-repeat:no-repeat!important;
-  border-right:1px solid rgba(54,174,255,.42)!important;
-  box-shadow:10px 0 42px rgba(0,0,0,.45),inset -1px 0 rgba(80,210,255,.14)!important;
-  backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
-.sidebar:before{content:"";position:absolute;inset:0;pointer-events:none;z-index:0;
-  background:linear-gradient(180deg,rgba(2,11,32,.18),rgba(1,5,18,.30));}
-.sidebar>*{position:relative;z-index:1;}
-/* 3 — each sidebar item uses supplied neon frame */
-.nav button,.nav-external,.nav-external-form{position:relative!important;overflow:hidden!important;
-  background-image:linear-gradient(90deg,rgba(2,9,28,.60),rgba(5,14,38,.72)),url('assets/custom/sidebar-item-frame.jpg')!important;
-  background-size:100% 100%!important;background-position:center!important;background-repeat:no-repeat!important;
-  border:0!important;color:#cfe4ff!important;min-height:48px!important;
-  box-shadow:inset 0 0 18px rgba(20,110,255,.10),0 0 14px rgba(0,105,255,.08)!important;}
-.nav button:before,.btn:before,.tf:before{display:none!important;}
-.nav button:hover,.nav-external:hover{color:#fff!important;transform:translateX(2px)!important;
-  box-shadow:inset 0 0 24px rgba(0,180,255,.16),0 0 24px rgba(0,125,255,.18)!important;}
-.nav button.active,.nav-external.active{background-image:linear-gradient(90deg,rgba(0,137,255,.28),rgba(125,50,255,.22)),url('assets/custom/sidebar-item-frame.jpg')!important;
-  color:#fff!important;box-shadow:inset 0 0 30px rgba(28,188,255,.20),0 0 30px rgba(0,148,255,.28),0 0 52px rgba(133,60,255,.12)!important;}
-/* PRO card stays readable over supplied sidebar background */
-.sx-pro-card{background:linear-gradient(145deg,rgba(3,24,60,.78),rgba(31,6,67,.72))!important;border-color:rgba(69,194,255,.42)!important;box-shadow:0 0 32px rgba(0,134,255,.16),inset 0 1px 0 rgba(255,255,255,.10)!important;}
-/* 4 — supplied hero/banner background in the exact hero area */
-.signalx-visual-hero{position:relative!important;overflow:hidden!important;isolation:isolate!important;
-  min-height:220px!important;border:1px solid rgba(55,188,255,.55)!important;border-radius:16px!important;
-  background-image:url('assets/custom/hero-banner.jpg')!important;background-size:cover!important;
-  background-position:center center!important;background-repeat:no-repeat!important;
-  box-shadow:0 0 22px rgba(0,140,255,.25),0 0 60px rgba(83,47,255,.12),inset 0 0 34px rgba(0,113,255,.16)!important;}
-.signalx-visual-hero:after{content:"";position:absolute;inset:0;z-index:1;pointer-events:none;
-  background:linear-gradient(90deg,rgba(0,6,18,.10),rgba(0,8,24,.04) 45%,rgba(0,4,16,.16));}
-.signalx-visual-hero .v3-hero-bull,.signalx-visual-hero .v3-hero-bear,
-.signalx-visual-hero .sx-hero-orbit,.signalx-visual-hero .sx-hero-tag{display:none!important;}
-.sx-hero-copy{position:absolute!important;z-index:3!important;left:50%!important;top:50%!important;transform:translate(-50%,-50%)!important;
-  width:min(52%,680px)!important;max-width:680px!important;text-align:center!important;display:flex!important;flex-direction:column!important;align-items:center!important;gap:8px!important;}
-.sx-hero-copy>span{font-size:clamp(9px,1vw,13px)!important;letter-spacing:.18em!important;color:#9bdfff!important;text-shadow:0 0 14px rgba(50,190,255,.65)!important;}
-.sx-hero-copy>strong{font-size:clamp(26px,3.3vw,50px)!important;line-height:.96!important;font-style:italic!important;letter-spacing:.02em!important;color:#fff!important;text-shadow:0 0 20px rgba(37,174,255,.8),0 0 44px rgba(104,50,255,.42)!important;}
-.sx-hero-copy>em{font-size:clamp(10px,1.1vw,15px)!important;color:#d5eaff!important;font-style:normal!important;text-shadow:0 0 12px rgba(0,0,0,.9)!important;}
-/* 5 — use the same supplied hero artwork as the visual anchor, never as a screenshot page background */
-.dashboard .card,.advanced-card,.metric,.signal-box,.session,.calendar-item{background-color:rgba(3,10,28,.72)!important;
-  border-color:rgba(46,155,255,.28)!important;box-shadow:0 14px 38px rgba(0,0,0,.34),inset 0 1px 0 rgba(120,210,255,.07)!important;}
-.topbar{background:rgba(2,8,22,.68)!important;border:1px solid rgba(46,155,255,.24)!important;border-radius:14px!important;padding:9px 12px!important;
-  box-shadow:0 12px 36px rgba(0,0,0,.30),inset 0 1px 0 rgba(110,215,255,.08)!important;}
-.title-shimmer{background:linear-gradient(90deg,#f7fbff,#69d8ff,#c47aff,#fff)!important;-webkit-background-clip:text!important;background-clip:text!important;color:transparent!important;}
-/* Desktop proportions */
-@media(min-width:1101px){
- .app{grid-template-columns:250px minmax(0,1fr)!important;}
- .sidebar{width:250px!important;}
- .main{padding:14px 18px 28px!important;max-width:1700px!important;}
- .signalx-visual-hero{min-height:230px!important;}
-}
-/* Mobile: background stays visible, sidebar is the drawer, hero artwork remains intact */
-@media(max-width:1100px){
- .sidebar{position:fixed!important;width:min(292px,86vw)!important;height:100dvh!important;background-position:center top!important;}
- .signalx-visual-hero{min-height:175px!important;border-radius:14px!important;background-size:cover!important;background-position:center center!important;}
- .sx-hero-copy{width:58%!important;left:55%!important;}
- .sx-hero-copy>strong{font-size:clamp(21px,6vw,34px)!important;}
- .sx-hero-copy>em{font-size:10px!important;}
- .sx-hero-copy>span{font-size:8px!important;letter-spacing:.12em!important;}
-}
-@media(max-width:600px){
- .gold-photo-bg{opacity:1!important;}
- .gold-photo-bg:after{background:linear-gradient(180deg,rgba(1,6,18,.25),rgba(1,6,18,.50) 52%,rgba(1,4,14,.82))!important;}
- .topbar{background:rgba(2,8,22,.80)!important;padding:8px!important;}
- .signalx-visual-hero{min-height:155px!important;background-position:center center!important;}
- .sx-hero-copy{width:57%!important;left:58%!important;}
- .sx-hero-copy>strong{font-size:clamp(19px,6.3vw,28px)!important;}
- .sx-hero-copy>em{font-size:9px!important;line-height:1.25!important;}
- .nav button,.nav-external{min-height:46px!important;}
-}
-@media(max-width:390px){
- .signalx-visual-hero{min-height:145px!important;}
- .sx-hero-copy{width:59%!important;}
- .sx-hero-copy>strong{font-size:19px!important;}
- .sx-hero-copy>em{font-size:8px!important;}
-}
-</style>
-
-<style id="signalx-liquid-glass-patch">
-/* SIGNALX LIQUID GLASS + STATUS TYPOGRAPHY PATCH 2026-09-13
-   TradingView live chart internals intentionally untouched. */
-:root{
-  --sx-white:#f7fbff;
-  --sx-blue-neon:#37cfff;
-  --sx-blue-soft:rgba(55,207,255,.55);
-  --sx-green-neon:#27f3a8;
-  --sx-red-neon:#ff4c6d;
-  --sx-yellow-neon:#ffd34d;
-}
-
-/* Tight sidebar spacing */
-.sidebar .nav{gap:2px!important}
-.sidebar .nav button,.sidebar .nav-external-form button{
-  min-height:35px!important;
-  padding:7px 10px!important;
-  margin:0!important;
-  line-height:1.15!important;
-}
-.sidebar .brand{margin-bottom:7px!important;padding-bottom:11px!important}
-.sidebar-bottom{padding-top:8px!important}
-.sidebar .sx-pro-card{margin-top:8px!important;margin-bottom:8px!important}
-
-/* White text + electric-blue edge/glow for normal labels/headings */
-.section-head h2,.section-head h3,
-.symbol,.topbar h1,
-.metric b,.metric small,
-.card h2,.card h3,
-.nav button,.nav-external-form button,
-.sx-title-wrap h1,
-.history-note b,
-.countdown,.outcome-open,
-.pill:not(.buy):not(.sell):not(.wait):not(.badge-buy):not(.badge-sell):not(.badge-wait){
-  color:var(--sx-white)!important;
-  text-shadow:
-    0 0 2px rgba(255,255,255,.88),
-    0 0 8px rgba(55,207,255,.44),
-    0 0 18px rgba(55,207,255,.20)!important;
-  -webkit-text-stroke:.22px rgba(55,207,255,.62);
-}
-.section-head h2,.section-head h3{letter-spacing:.01em}
-
-/* BUY / SELL / WAIT statuses: dedicated neon edge colors */
-.buy,.badge-buy,.advanced-signal.buy,.signal-main.buy{
-  color:var(--sx-green-neon)!important;
-  text-shadow:
-    0 0 2px rgba(255,255,255,.55),
-    0 0 8px rgba(39,243,168,.75),
-    0 0 20px rgba(39,243,168,.38)!important;
-  -webkit-text-stroke:.3px rgba(39,243,168,.92);
-}
-.sell,.badge-sell,.advanced-signal.sell,.signal-main.sell{
-  color:var(--sx-red-neon)!important;
-  text-shadow:
-    0 0 2px rgba(255,255,255,.45),
-    0 0 8px rgba(255,76,109,.78),
-    0 0 20px rgba(255,76,109,.38)!important;
-  -webkit-text-stroke:.3px rgba(255,76,109,.92);
-}
-.wait,.badge-wait,.advanced-signal.wait,.signal-main.wait{
-  color:var(--sx-yellow-neon)!important;
-  text-shadow:
-    0 0 2px rgba(255,255,255,.44),
-    0 0 8px rgba(255,211,77,.78),
-    0 0 20px rgba(255,211,77,.38)!important;
-  -webkit-text-stroke:.3px rgba(255,211,77,.90);
-}
-
-/* Status borders / pills */
-.signal-box:has(.signal-main.buy),
-.advanced-card:has(.advanced-signal.buy){border-color:rgba(39,243,168,.52)!important;box-shadow:0 0 24px rgba(39,243,168,.11),inset 0 0 22px rgba(39,243,168,.045)!important}
-.signal-box:has(.signal-main.sell),
-.advanced-card:has(.advanced-signal.sell){border-color:rgba(255,76,109,.52)!important;box-shadow:0 0 24px rgba(255,76,109,.11),inset 0 0 22px rgba(255,76,109,.045)!important}
-.signal-box:has(.signal-main.wait),
-.advanced-card:has(.advanced-signal.wait){border-color:rgba(255,211,77,.48)!important;box-shadow:0 0 24px rgba(255,211,77,.09),inset 0 0 22px rgba(255,211,77,.035)!important}
-
-/* Liquid-glass panels: moving reflective sheen without touching TradingView chart internals */
-.card,.metric,.signal-box,.session,.calendar-item,.advanced-card,.source-stat,.topbar{
-  position:relative!important;
-  overflow:hidden!important;
-  isolation:isolate!important;
-  background:
-    linear-gradient(135deg,rgba(255,255,255,.075),rgba(255,255,255,.018) 34%,rgba(16,33,65,.16) 68%,rgba(104,63,220,.09)),
-    linear-gradient(145deg,rgba(7,20,43,.74),rgba(5,10,25,.72))!important;
-  border-color:rgba(76,174,255,.30)!important;
-  backdrop-filter:blur(22px) saturate(125%)!important;
-  -webkit-backdrop-filter:blur(22px) saturate(125%)!important;
-  box-shadow:
-    0 14px 42px rgba(0,0,0,.28),
-    inset 0 1px 0 rgba(255,255,255,.09),
-    inset 0 -1px 0 rgba(29,129,255,.08),
-    0 0 26px rgba(43,151,255,.06)!important;
-}
-.card::before,.metric::before,.signal-box::before,.session::before,.calendar-item::before,.advanced-card::before,.source-stat::before,.topbar::before{
-  content:"";position:absolute;inset:-35%;pointer-events:none;z-index:-1;
-  background:linear-gradient(115deg,transparent 38%,rgba(92,211,255,.09) 48%,rgba(255,255,255,.10) 51%,rgba(154,84,255,.08) 54%,transparent 64%);
-  transform:translateX(-65%) rotate(4deg);
-  animation:sxGlassShine 8s ease-in-out infinite;
-}
-.card::after,.metric::after,.signal-box::after,.session::after,.calendar-item::after,.advanced-card::after,.source-stat::after,.topbar::after{
-  content:"";position:absolute;inset:1px;pointer-events:none;z-index:-1;border-radius:inherit;
-  background:radial-gradient(circle at 18% 8%,rgba(101,218,255,.07),transparent 27%),radial-gradient(circle at 85% 90%,rgba(147,76,255,.06),transparent 25%);
-}
-@keyframes sxGlassShine{0%,20%{transform:translateX(-65%) rotate(4deg);opacity:0}32%{opacity:1}58%{transform:translateX(65%) rotate(4deg);opacity:.72}70%,100%{transform:translateX(85%) rotate(4deg);opacity:0}}
-
-/* Sidebar items get the same liquid-glass motion while remaining compact */
-.sidebar .nav button,.sidebar .nav-external-form button{
-  position:relative!important;
-  overflow:hidden!important;
-  background:
-    linear-gradient(110deg,rgba(8,27,58,.74),rgba(21,11,55,.52)),
-    url('assets/user-bg/section-frame.jpg') center/100% 100% no-repeat!important;
-  border:1px solid rgba(70,162,255,.34)!important;
-  box-shadow:inset 0 1px 0 rgba(255,255,255,.055),0 0 14px rgba(31,143,255,.055)!important;
-  backdrop-filter:blur(14px) saturate(130%)!important;
-}
-.sidebar .nav button::after,.sidebar .nav-external-form button::after{
-  content:"";position:absolute;inset:-60% -30%;pointer-events:none;
-  background:linear-gradient(115deg,transparent 43%,rgba(255,255,255,.12) 49%,rgba(70,209,255,.10) 52%,transparent 60%);
-  transform:translateX(-45%) skewX(-14deg);
-  animation:sxSideShine 7s ease-in-out infinite;
-}
-@keyframes sxSideShine{0%,25%{transform:translateX(-55%) skewX(-14deg);opacity:0}40%{opacity:.9}65%{transform:translateX(55%) skewX(-14deg);opacity:.35}80%,100%{transform:translateX(70%) skewX(-14deg);opacity:0}}
-.sidebar .nav button:hover,.sidebar .nav button.active,.sidebar .nav-external-form button:hover{
-  border-color:rgba(55,207,255,.76)!important;
-  box-shadow:0 0 24px rgba(39,180,255,.19),inset 0 0 20px rgba(89,75,255,.08)!important;
-}
-
-/* Keep status badges visually distinct */
-.setup-badge.strong,.badge-buy{border-color:rgba(39,243,168,.62)!important;box-shadow:0 0 14px rgba(39,243,168,.16)!important}
-.badge-sell{border-color:rgba(255,76,109,.62)!important;box-shadow:0 0 14px rgba(255,76,109,.16)!important}
-.badge-wait{border-color:rgba(255,211,77,.62)!important;box-shadow:0 0 14px rgba(255,211,77,.14)!important}
-
-@media(max-width:900px){
-  .sidebar .nav{gap:3px!important}
-  .sidebar .nav button,.sidebar .nav-external-form button{min-height:37px!important;padding:8px 10px!important}
-  .card,.metric,.signal-box,.session,.calendar-item,.advanced-card,.source-stat,.topbar{backdrop-filter:blur(18px) saturate(118%)!important;-webkit-backdrop-filter:blur(18px) saturate(118%)!important}
-}
-@media(prefers-reduced-motion:reduce){
-  .card::before,.metric::before,.signal-box::before,.session::before,.calendar-item::before,.advanced-card::before,.source-stat::before,.topbar::before,
-  .sidebar .nav button::after,.sidebar .nav-external-form button::after{animation:none!important}
-}
-
-</style>
-<!-- SIGNALX LIQUID GLASS PATCH -->
 </head>
 <body>
 <div class="gold-3d-orb"></div>
 <div class="gold-photo-bg" aria-hidden="true"></div>
-<div class="sx-sidebar-overlay" id="sxSidebarOverlay"></div><div class="app">
+<div class="app">
 <aside class="sidebar">
-  <div class="brand brand-eur"><div class="brand-logo sx-logo-mark"><img alt="SignalX" decoding="async" height="34" src="assets/logo/signalx-icon.svg" width="34"/></div><div class="brand-copy"><b>SignalX</b><span>XAUUSD TRADING</span></div></div>
+  <div class="brand brand-xau"><div class="brand-logo" aria-hidden="true"><div class="logo-ring"></div><div class="logo-core"><b>Au</b></div></div><b>GOLD</b><span>Shohruh Ravshanov</span></div>
   <div class="nav">
     <button class="active" data-section="overview">▣ Overview</button>
     <button data-section="chartSection">◩ Live Chart</button>
     <button data-section="analysisSection">◈ Technical Analysis</button>
-    <button class="admin-only" data-section="smartAnalysisSection">🧠 AI Smart Analysis</button>
+    <button data-section="smartAnalysisSection">🧠 AI Smart Analysis</button>
     <button data-section="classicSection">▣ Classic Trade</button>
     <button data-section="snrSection">◈ SNR</button>
     <button data-section="trendLineSection">📈 Trend Line</button>
-    <button class="admin-only" data-section="signalSection">⚡ Signal Lab</button>
+    <button data-section="signalSection">⚡ Signal Lab</button>
     <button data-section="ictSection">🎯 ICT Signals</button>
-    <button class="admin-only" data-section="signalsSection">🚨 Signals</button>
+    <button data-section="signalsSection">🚨 Signals</button>
     <button data-section="mtfSection">◫ Multi-Timeframe</button>
     <button data-section="calendarSection">◷ Economic Calendar</button>
     <button data-section="sessionsSection">◉ Market Sessions</button>
     <button data-section="historySection">▤ Signal History</button>
     <button data-section="activeSessionsSection">◉ Aktiv Seanslar</button>
-    <button class="admin-only" data-section="mt5Section">◉ MetaTrader 5</button>
-    <button type="button" id="eurUsdPageBtn" class="nav-external">💱 EURUSD</button>
-  <div class="sx-pro-card sx-pro-card-sidebar">
-  <div><span class="sx-pro-kicker">SIGNALX PRO</span><b>AI + AUTO TRADING</b><small>Advanced signals and premium tools</small></div>
-  <a class="sx-pro-btn" href="https://t.me/Shohrux_Ravshanov" id="telegramGoPro" target="_blank" rel="noopener">✈ GO PRO</a>
-</div>
-</div>
+    <button data-section="mt5Section">◉ MetaTrader 5</button>
+    <form id="eurUsdPageForm" class="nav-external-form" action="/eurusd" method="get"><button id="eurUsdPageBtn" class="nav-external" type="submit">💱 EURUSD</button></form>
+  </div>
+  <div class="sidebar-bottom"><div class="tiny">Pivot + Key Levels engine<br>Live data via backend API</div></div>
+</aside>
 <main class="main">
-  <div class="topbar"><button type="button" class="sx-mobile-menu" id="sxMobileMenu" aria-label="Menu" aria-expanded="false">☰</button><div><h1 id="pageTitle" class="title-shimmer">XAUUSD Market Overview</h1><p>Har bir bo‘lim alohida ishlaydi. Timeframe o‘zgarsa tanlangan modul qayta hisoblanadi.</p></div><div class="tools"><div class="health"><span class="dot"></span><span class="pill" id="mode">Checking…</span></div><span class="pill" id="plan">Guest</span><button class="btn primary auth-top" id="authBtn">Kirish</button></div></div>
+  <div class="topbar"><div><h1 id="pageTitle" class="title-shimmer">Market Overview</h1><p>Har bir bo‘lim alohida ishlaydi. Timeframe o‘zgarsa tanlangan modul qayta hisoblanadi.</p></div><div class="tools"><div class="health"><span class="dot"></span><span class="pill" id="mode">Checking…</span></div><span class="pill" id="plan">Guest</span><button class="btn primary auth-top" id="authBtn">Kirish</button></div></div>
 
   <section class="section active" id="overview">
-    <div class="signalx-visual-hero" aria-hidden="true">
-      <div class="sx-hero-copy"><span>WELCOME TO</span><strong>SignalX</strong><em>AI POWERED TRADING TERMINAL</em></div>
-      <div class="sx-hero-orbit"><i></i><b></b><span></span></div>
-      <div class="sx-hero-tag">TRADE SMARTER<br><small>DISCIPLINE TODAY • PROFIT TOMORROW</small></div>
-    </div>
     <div class="dashboard">
       <div>
         <div class="card"><div class="hero"><div><div class="symbol">XAU/USD</div><div class="sub" id="tfLabel">5 MIN</div><div class="countdown-box"><div class="countdown-label">Candle closes</div><div class="countdown" id="countdown">—</div><div class="close-time" id="closeTime">Close time: —</div></div></div><div><div class="price" id="price">—</div><div class="change" id="change">—</div></div></div>
-          <div class="history-note"><span id="historyInfo">Tarix yuklanmoqda…</span><span>XAUUSD real market history</span></div><div class="tfbar" id="timeframes"><button class="tf" data-interval="1min">1M</button><button class="tf active" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div>
+          <div class="history-note"><span id="historyInfo">Tarix yuklanmoqda…</span><span>Real market history</span></div><div class="tfbar" id="timeframes"><button class="tf" data-interval="1min">1M</button><button class="tf active" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div>
           <div class="chart" id="chart"></div></div>
-        <div class="card admin-only"><div class="section-head"><div><h3>Signal Engine</h3><div class="mini">Har bir timeframe uchun alohida signal</div></div><div><span class="pill" id="bias">—</span> <button class="btn" id="refreshSignalEngine" type="button">↻ Yangilash</button></div></div><div class="signal-box"><div class="signal-main wait" id="signalMain">WAIT</div><div class="mini" id="signalReason">—</div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Entry</small><b id="entry">—</b></div><div class="metric"><small>SL</small><b id="sl">—</b></div><div class="metric"><small>TP1</small><b id="tp1">—</b></div><div class="metric"><small>TP2</small><b id="tp2">—</b></div></div></div><div id="signalEngineGrid" class="advanced-grid" style="margin-top:12px"></div><div style="margin-top:10px"><button class="btn primary" id="saveSignal" type="button">Signalni saqlash</button></div></div>
+        <div class="card"><div class="section-head"><div><h3>Signal Engine</h3><div class="mini">Har bir timeframe uchun alohida signal</div></div><div><span class="pill" id="bias">—</span> <button class="btn" id="refreshSignalEngine" type="button">↻ Yangilash</button></div></div><div class="signal-box"><div class="signal-main wait" id="signalMain">WAIT</div><div class="mini" id="signalReason">—</div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Entry</small><b id="entry">—</b></div><div class="metric"><small>SL</small><b id="sl">—</b></div><div class="metric"><small>TP1</small><b id="tp1">—</b></div><div class="metric"><small>TP2</small><b id="tp2">—</b></div></div></div><div id="signalEngineGrid" class="advanced-grid" style="margin-top:12px"></div><div style="margin-top:10px"><button class="btn primary" id="saveSignal" type="button">Signalni saqlash</button></div></div>
       </div>
       <aside>
         <div class="card"><div class="section-head"><h3>Pivot / Key Levels</h3><span class="pill" id="pivotFilter">5 MIN</span></div><div class="tfbar pivot-tfbar" id="pivotTfBar"><button class="tf" data-pivot-interval="1min">1M</button><button class="tf active" data-pivot-interval="5min">5M</button><button class="tf" data-pivot-interval="15min">15M</button><button class="tf" data-pivot-interval="30min">30M</button><button class="tf" data-pivot-interval="1h">1H</button><button class="tf" data-pivot-interval="4h">4H</button><button class="tf" data-pivot-interval="1day">1D</button></div><div class="levels" id="levels"></div><div class="mini" id="pivotSource" style="margin-top:8px">Selected timeframe Pivot</div></div>
         <div class="card"><div class="section-head"><h3>Performance</h3><button class="btn" id="refreshStats">↻</button></div><div class="grid2"><div class="metric"><small>Total</small><b id="totalSignals">0</b></div><div class="metric"><small>Completed</small><b id="completedSignals">0</b></div><div class="metric"><small>Wins</small><b id="wins">0</b></div><div class="metric"><small>Losses</small><b id="losses">0</b></div></div><div class="metric" style="margin-top:8px"><small>Winrate (TP HIT / TP HIT + SL HIT)</small><b id="winrate">0%</b></div></div>
-        <div class="card admin-only"><div class="section-head"><div><h3>AI Fallback Network</h3><div class="mini">AI faqat signal tasdig‘ida chaqiriladi · oddiy refresh AI request yubormaydi</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" id="aiAutoMode" type="button">AUTO</button><button class="btn" id="aiAllOn" type="button">ALL ON</button><button class="btn" id="aiAllOff" type="button">ALL OFF</button><button class="btn" id="refreshAIProviders" type="button">↻</button></div></div><div id="aiProvidersGrid" class="component-grid" style="margin-top:10px"></div></div>
+        <div class="card"><div class="section-head"><div><h3>AI Fallback Network</h3><div class="mini">AI faqat signal tasdig‘ida chaqiriladi · oddiy refresh AI request yubormaydi</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" id="aiAutoMode" type="button">AUTO</button><button class="btn" id="aiAllOn" type="button">ALL ON</button><button class="btn" id="aiAllOff" type="button">ALL OFF</button><button class="btn" id="refreshAIProviders" type="button">↻</button></div></div><div id="aiProvidersGrid" class="component-grid" style="margin-top:10px"></div></div>
         <div class="card"><div class="section-head"><h3>Market Sessions</h3><span class="pill" id="sessionClock">—</span></div><div class="sessions" id="sessions"></div></div>
       </aside>
     </div>
   </section>
 
   <section class="section" id="chartSection"><div class="card"><div class="section-head"><h2>Live Chart</h2><span class="pill" id="chartStatus">—</span></div><div class="tfbar"><button class="tf" data-interval="1min">1M</button><button class="tf" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div><div class="chart" id="chart2"></div></div></section>
-  <section class="section admin-only" id="signalSection"><div class="card"><div class="section-head"><div><h2>Signal Lab</h2><div class="mini">ICT + SNR + SNR Malaysia + Order Block + FVG + Liquidity + Trend Lines + BOS/CHOCH + Internal Structure</div></div><button class="btn primary" id="refreshAdvanced">↻ Barcha timeframe signal</button></div><div class="tfbar"><button class="tf" data-signal-interval="1min">1M</button><button class="tf active" data-signal-interval="5min">5M</button><button class="tf" data-signal-interval="15min">15M</button><button class="tf" data-signal-interval="30min">30M</button><button class="tf" data-signal-interval="1h">1H</button><button class="tf" data-signal-interval="4h">4H</button><button class="tf" data-signal-interval="1day">1D</button></div><div class="mini" id="advancedStatus">Tanlangan timeframe signali va barcha timeframe signal kartalari alohida hisoblanadi.</div><div class="advanced-grid" id="advancedGrid" style="margin-top:12px"></div></div></section>
+  <section class="section" id="signalSection"><div class="card"><div class="section-head"><div><h2>Signal Lab</h2><div class="mini">ICT + SNR + SNR Malaysia + Order Block + FVG + Liquidity + Trend Lines + BOS/CHOCH + Internal Structure</div></div><button class="btn primary" id="refreshAdvanced">↻ Barcha timeframe signal</button></div><div class="tfbar"><button class="tf" data-signal-interval="1min">1M</button><button class="tf active" data-signal-interval="5min">5M</button><button class="tf" data-signal-interval="15min">15M</button><button class="tf" data-signal-interval="30min">30M</button><button class="tf" data-signal-interval="1h">1H</button><button class="tf" data-signal-interval="4h">4H</button><button class="tf" data-signal-interval="1day">1D</button></div><div class="mini" id="advancedStatus">Tanlangan timeframe signali va barcha timeframe signal kartalari alohida hisoblanadi.</div><div class="advanced-grid" id="advancedGrid" style="margin-top:12px"></div></div></section>
 <section class="section" id="analysisSection"><div class="card"><div class="section-head"><h2>Technical Analysis</h2><span class="pill" id="taState">TradingView LIVE</span></div><div id="tvTechnicalWidget" style="min-height:520px;border:1px solid var(--line);border-radius:10px;overflow:hidden"></div><div class="grid4" style="margin-top:10px"><div class="metric"><small>RSI</small><b id="rsi">—</b></div><div class="metric"><small>RSI State</small><b id="rsiState">—</b></div><div class="metric"><small>ATR</small><b id="atr">—</b></div><div class="metric"><small>Trend</small><b id="taTrend">—</b></div></div><p class="mini" id="taSummary">TradingView Technical Analysis widget + canonical TradingView candle calculation.</p></div></section>
   
-  <section class="section admin-only" id="smartAnalysisSection"><div class="card"><div class="section-head"><div><h2>AI Smart Analysis</h2><div class="mini">AI tasdiqlash faqat Auto Trading signalida ishlaydi · oddiy refresh AI request yubormaydi</div></div><button class="btn primary" id="refreshSmartAnalysis">↻ Yangilash</button></div><div class="grid4" style="margin-top:12px"><div class="metric"><small>AI Bias</small><b id="smartBias">—</b></div><div class="metric"><small>Confidence</small><b id="smartConfidence">—</b></div><div class="metric"><small>Signal</small><b id="smartSignal">—</b></div><div class="metric"><small>Mode</small><b id="smartMode">—</b></div></div><div class="signal-box" style="margin-top:12px"><div class="mini" id="smartSummary">AI Smart Analysis hisoblanmoqda…</div><div class="mini" id="smartAdvice" style="margin-top:8px">—</div></div></div></section>
+  <section class="section" id="smartAnalysisSection"><div class="card"><div class="section-head"><div><h2>AI Smart Analysis</h2><div class="mini">AI tasdiqlash faqat Auto Trading signalida ishlaydi · oddiy refresh AI request yubormaydi</div></div><button class="btn primary" id="refreshSmartAnalysis">↻ Yangilash</button></div><div class="grid4" style="margin-top:12px"><div class="metric"><small>AI Bias</small><b id="smartBias">—</b></div><div class="metric"><small>Confidence</small><b id="smartConfidence">—</b></div><div class="metric"><small>Signal</small><b id="smartSignal">—</b></div><div class="metric"><small>Mode</small><b id="smartMode">—</b></div></div><div class="signal-box" style="margin-top:12px"><div class="mini" id="smartSummary">AI Smart Analysis hisoblanmoqda…</div><div class="mini" id="smartAdvice" style="margin-top:8px">—</div></div></div></section>
 <section class="section" id="classicSection"><div class="card"><div class="section-head"><div><h2>Classic Trade</h2><div class="mini">Classic · Trend + SNR + Pivot + RSI + MACD + EMA + Candlestick</div></div><button class="btn primary" id="refreshClassic">↻ Yangilash</button></div><div class="tfbar"><button class="tf" data-classic-interval="1min">1M</button><button class="tf active" data-classic-interval="5min">5M</button><button class="tf" data-classic-interval="15min">15M</button><button class="tf" data-classic-interval="30min">30M</button><button class="tf" data-classic-interval="1h">1H</button><button class="tf" data-classic-interval="4h">4H</button><button class="tf" data-classic-interval="1day">1D</button></div><div class="signal-box" style="margin-top:12px"><div class="section-head"><div><div class="mini" id="classicSymbol">XAU/USD · 5 MIN</div><div class="signal-main wait" id="classicSignal">WAIT</div></div><span class="pill" id="classicConfidence">—</span></div><div class="mini" id="classicReason">Classic Trade hisoblanmoqda…</div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Entry</small><b id="classicEntry">—</b></div><div class="metric"><small>SL</small><b id="classicSL">—</b></div><div class="metric"><small>TP1</small><b id="classicTP1">—</b></div><div class="metric"><small>TP2</small><b id="classicTP2">—</b></div></div></div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Trend / EMA</small><b id="classicTrend">—</b><div class="mini" id="classicEma">—</div></div><div class="metric"><small>SNR</small><b id="classicSNR">—</b><div class="mini" id="classicPivot">—</div></div><div class="metric"><small>RSI</small><b id="classicRSI">—</b><div class="mini" id="classicRSIState">—</div></div><div class="metric"><small>MACD / Pattern</small><b id="classicMACD">—</b><div class="mini" id="classicPattern">—</div></div></div></div></section>
 
   <section class="section" id="snrSection"><div class="card"><div class="section-head"><div><h2>SNR</h2><div class="mini">Support & Resistance · avtomatik zona, kuch, retest va breakout</div></div><button class="btn primary" id="refreshSNR">↻ Yangilash</button></div><div class="tfbar"><button class="tf" data-snr-interval="1min">1M</button><button class="tf active" data-snr-interval="5min">5M</button><button class="tf" data-snr-interval="15min">15M</button><button class="tf" data-snr-interval="30min">30M</button><button class="tf" data-snr-interval="1h">1H</button><button class="tf" data-snr-interval="4h">4H</button><button class="tf" data-snr-interval="1day">1D</button></div><div class="grid4"><div class="metric"><small>Current Price</small><b id="snrPrice">—</b></div><div class="metric"><small>Market Position</small><b id="snrPosition">—</b></div><div class="metric"><small>SNR Signal</small><b id="snrSignal">WAIT</b></div><div class="metric"><small>Confidence</small><b id="snrConfidence">—</b></div></div><div class="grid2" style="margin-top:12px"><div class="advanced-card"><div class="advanced-head"><div><div class="mini">SUPPORT ZONE</div><div class="advanced-signal buy" id="snrSupportZone">—</div></div><span class="pill" id="snrSupportStrength">—</span></div><div class="component-grid"><div class="component"><small>Zone</small><b id="snrSupportRange">—</b></div><div class="component"><small>Retests</small><b id="snrSupportRetests">—</b></div><div class="component"><small>Distance</small><b id="snrSupportDistance">—</b></div><div class="component"><small>Status</small><b id="snrSupportStatus">—</b></div></div></div><div class="advanced-card"><div class="advanced-head"><div><div class="mini">RESISTANCE ZONE</div><div class="advanced-signal sell" id="snrResistanceZone">—</div></div><span class="pill" id="snrResistanceStrength">—</span></div><div class="component-grid"><div class="component"><small>Zone</small><b id="snrResistanceRange">—</b></div><div class="component"><small>Retests</small><b id="snrResistanceRetests">—</b></div><div class="component"><small>Distance</small><b id="snrResistanceDistance">—</b></div><div class="component"><small>Status</small><b id="snrResistanceStatus">—</b></div></div></div></div><div class="signal-box" style="margin-top:12px"><div class="section-head"><h3>SNR Analysis</h3><span class="pill" id="snrMethod">—</span></div><div class="mini" id="snrReason">SNR hisoblanmoqda…</div></div></div></section>
@@ -641,7 +220,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
     </div>
   </section>
 
-<section class="section admin-only" id="signalsSection">
+<section class="section" id="signalsSection">
   <div class="card">
     <div class="section-head"><h2>Signals — Auto Entry</h2><span class="pill" id="autoSignalUpdated">LIVE</span></div>
     <div class="mini" style="margin-bottom:10px">Signal Lab’da <b>84% va undan yuqori</b> confidence chiqqan BUY/SELL signallar avtomatik <b>paper entry</b> qilinadi. Entry, TP, SL, ochilgan vaqt, yopilgan vaqt, davomiylik va natija doimiy tarixda saqlanadi. Bu brokerga real order yubormaydi.</div>
@@ -652,7 +231,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 <section class="section" id="calendarSection"><div class="card"><div class="section-head"><h2>Economic Calendar</h2><span class="pill">TradingView LIVE · Global</span></div><div id="tvCalendarWidget" style="min-height:700px;border:1px solid var(--line);border-radius:10px;overflow:hidden"></div><div class="mini" style="margin-top:8px">Global economic events, currencies and impact levels are provided directly by TradingView. No user API key is required.</div></div></section>
   <section class="section" id="activeSessionsSection"><div class="card"><div class="section-head"><div><h2>Aktiv seanslar</h2><div class="mini">Hisobingizga kirgan qurilmalar va oxirgi faollik</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="refreshActiveSessions" type="button">↻ Yangilash</button><button class="btn danger" id="revokeOtherSessions" type="button">Boshqa seanslarni yopish</button></div></div><div class="grid2" id="activeSessionsGrid"><div class="mini">Seanslar yuklanmoqda…</div></div></div></section>
   <section class="section" id="sessionsSection"><div class="card"><div class="section-head"><h2>Market Sessions</h2><span class="pill" id="sessionClock2">—</span></div><div class="sessions" id="sessions2"></div></div></section>
-  <section class="section admin-only" id="mt5Section"><div class="card"><div class="section-head"><div><h2>MetaTrader 5</h2><div class="mini">Exness DEMO · MT5 EA/Bridge orqali xavfsiz ulanish</div></div><div><span class="pill" id="mt5Status">🔴 DISCONNECTED</span> <button class="btn" id="refreshMT5" type="button">↻ Yangilash</button></div></div><div class="grid2"><div><label class="mini">MT5 Login / Account number</label><input class="input" id="mt5Login" inputmode="numeric" placeholder="12345678" autocomplete="off"><label class="mini">MT5 Server</label><input class="input" id="mt5Server" placeholder="Exness-MT5..." autocomplete="off"><label class="mini">Trading Password</label><input class="input" id="mt5Password" type="password" placeholder="Trading password" autocomplete="off"><div class="mini" style="margin:4px 0 10px;color:var(--muted)">Parol serverda saqlanmaydi. Haqiqiy broker ulanishi MT5 terminalidagi EA/Bridge orqali tasdiqlanadi.</div><button class="btn primary" id="connectMT5" type="button">CONNECT MT5 DEMO</button></div><div><div class="grid2"><div class="metric"><small>Balance</small><b id="mt5Balance">—</b></div><div class="metric"><small>Equity</small><b id="mt5Equity">—</b></div><div class="metric"><small>Free Margin</small><b id="mt5FreeMargin">—</b></div><div class="metric"><small>Open Positions</small><b id="mt5Positions">0</b></div><div class="metric"><small>Heartbeat</small><b id="mt5Heartbeat">—</b><div class="mini" id="mt5LastError">—</div></div></div><div class="signal-box" style="margin-top:10px"><div class="section-head"><h3>AUTO TRADING</h3><span class="pill" id="mt5AutoState">🔴 OFF</span></div><div class="mini" id="mt5AutoInfo">OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.</div><div style="margin-top:10px"><label class="mini">Lot hajmi</label><input class="input" id="mt5Lot" type="number" min="0.01" max="100" step="0.01" value="0.01" placeholder="0.01"><div class="mini">Masalan: 0.01, 0.02, 0.10. Yangi auto orderlar shu lot bilan yuboriladi.</div></div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="saveMT5Lot" type="button">💾 Lotni saqlash</button><button class="btn" id="mt5AutoOn" type="button">🟢 AUTO ON</button><button class="btn danger" id="mt5AutoOff" type="button">🔴 AUTO OFF</button></div></div></div></div><div class="mini" style="margin-top:12px">Faqat DEMO rejim. Order faqat ≥84.99% + Strong Zone + AI tasdiq + MTF moslik shartlari bajarilganda navbatga qo‘yiladi.</div></div></div>
+  <section class="section" id="mt5Section"><div class="card"><div class="section-head"><div><h2>MetaTrader 5</h2><div class="mini">Exness DEMO · MT5 EA/Bridge orqali xavfsiz ulanish</div></div><div><span class="pill" id="mt5Status">🔴 DISCONNECTED</span> <button class="btn" id="refreshMT5" type="button">↻ Yangilash</button></div></div><div class="grid2"><div><label class="mini">MT5 Login / Account number</label><input class="input" id="mt5Login" inputmode="numeric" placeholder="12345678" autocomplete="off"><label class="mini">MT5 Server</label><input class="input" id="mt5Server" placeholder="Exness-MT5..." autocomplete="off"><label class="mini">Trading Password</label><input class="input" id="mt5Password" type="password" placeholder="Trading password" autocomplete="off"><div class="mini" style="margin:4px 0 10px;color:var(--muted)">Parol serverda saqlanmaydi. Haqiqiy broker ulanishi MT5 terminalidagi EA/Bridge orqali tasdiqlanadi.</div><button class="btn primary" id="connectMT5" type="button">CONNECT MT5 DEMO</button></div><div><div class="grid2"><div class="metric"><small>Balance</small><b id="mt5Balance">—</b></div><div class="metric"><small>Equity</small><b id="mt5Equity">—</b></div><div class="metric"><small>Free Margin</small><b id="mt5FreeMargin">—</b></div><div class="metric"><small>Open Positions</small><b id="mt5Positions">0</b></div><div class="metric"><small>Heartbeat</small><b id="mt5Heartbeat">—</b><div class="mini" id="mt5LastError">—</div></div></div><div class="signal-box" style="margin-top:10px"><div class="section-head"><h3>AUTO TRADING</h3><span class="pill" id="mt5AutoState">🔴 OFF</span></div><div class="mini" id="mt5AutoInfo">OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.</div><div style="margin-top:10px"><label class="mini">Lot hajmi</label><input class="input" id="mt5Lot" type="number" min="0.01" max="100" step="0.01" value="0.01" placeholder="0.01"><div class="mini">Masalan: 0.01, 0.02, 0.10. Yangi auto orderlar shu lot bilan yuboriladi.</div></div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="saveMT5Lot" type="button">💾 Lotni saqlash</button><button class="btn" id="mt5AutoOn" type="button">🟢 AUTO ON</button><button class="btn danger" id="mt5AutoOff" type="button">🔴 AUTO OFF</button></div></div></div></div><div class="mini" style="margin-top:12px">Faqat DEMO rejim. Order faqat ≥84.99% + Strong Zone + AI tasdiq + MTF moslik shartlari bajarilganda navbatga qo‘yiladi.</div></div></div>
 <section class="section" id="historySection">
   <div class="card">
     <div class="section-head"><div><h2>Signal History</h2><div class="mini">Barcha saqlangan signal va trade natijalari · sana bo‘yicha saralash</div></div>
@@ -691,25 +270,6 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
   </div>
 </div>
 
-<script src="config.js?v=20260908f"></script>
-<script src="app.js?v=20260912-eurusd-nav-fix-2"></script>
+<script src="/config.js?v=20260908f"></script>
+<script src="/app.js?v=20260912-auth-sessions-4"></script>
 </body></html>
-
-<script>
-(function(){const a=document.getElementById('telegramGoPro');const url=(window.SIGNALX_TELEGRAM_URL||'').trim();if(a&&url)a.href=url;if(a&&!url)a.addEventListener('click',function(e){e.preventDefault();if(typeof showToast==='function')showToast('Telegram GO PRO havolasi config.js orqali ulanadi.');});})();
-</script>
-<style>
-/* STATIC USER HERO + CLEAN CHART SHELL — no moving artwork/effects; TradingView internals untouched */
-.signalx-visual-hero,.signalx-visual-hero:before,.signalx-visual-hero:after,
-.signalx-visual-hero .sx-hero-orbit,.signalx-visual-hero .sx-hero-orbit:before,
-.signalx-visual-hero .sx-hero-orbit:after,.signalx-visual-hero .sx-hero-orbit span{
-  animation:none!important;transform:none!important;will-change:auto!important;
-}
-.signalx-visual-hero:before,.signalx-visual-hero:after{display:none!important;content:none!important;}
-.signalx-visual-hero{background-position:center center!important;background-repeat:no-repeat!important;background-size:cover!important;}
-.chart:before,.chart:after{display:none!important;content:none!important;}
-.chart{background:#080c14!important;background-image:none!important;}
-</style>
-<style>
-.gold-photo-bg{animation:none!important;transform:none!important;will-change:auto!important;background-position:center center!important;}
-</style>
