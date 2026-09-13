@@ -952,3 +952,58 @@ body:after{content:""!important;position:fixed!important;inset:0!important;z-ind
   .sidebar .nav > .sx-pro-card-sidebar{margin:4px 0 2px!important;}
   .sidebar-bottom{display:none!important;}
 }
+
+/* SIDEBAR FINAL TUNING — blue neon stays exactly within each section frame. */
+@media(min-width:769px){
+  .sidebar .nav > button,
+  .sidebar .nav > .nav-external-form button,
+  .sidebar .nav > .nav-external{
+    position:relative!important;
+    box-sizing:border-box!important;
+    height:35px!important;
+    min-height:35px!important;
+    padding:7px 11px!important;
+    margin:0!important;
+    border:1px solid rgba(48,186,255,.78)!important;
+    border-radius:9px!important;
+    font-size:12.5px!important;
+    font-weight:650!important;
+    line-height:1!important;
+    color:#f7fbff!important;
+    text-shadow:0 0 2px rgba(255,255,255,.9),0 0 7px rgba(57,207,255,.45)!important;
+    box-shadow:inset 0 0 0 1px rgba(57,207,255,.18),inset 0 0 12px rgba(57,207,255,.06)!important;
+    overflow:hidden!important;
+  }
+  .sidebar .nav > button::after,
+  .sidebar .nav > .nav-external-form button::after,
+  .sidebar .nav > .nav-external::after{
+    content:""!important;
+    position:absolute!important;
+    inset:1px!important;
+    border-radius:8px!important;
+    pointer-events:none!important;
+    border:1px solid rgba(57,207,255,.24)!important;
+    box-shadow:inset 0 0 8px rgba(57,207,255,.08)!important;
+  }
+  .sidebar .nav > button:hover,
+  .sidebar .nav > .nav-external-form button:hover,
+  .sidebar .nav > .nav-external:hover,
+  .sidebar .nav > button.active,
+  .sidebar .nav > .nav-external-form button.active,
+  .sidebar .nav > .nav-external.active{
+    border-color:rgba(68,213,255,.98)!important;
+    box-shadow:inset 0 0 14px rgba(57,207,255,.12), inset 0 0 0 1px rgba(255,255,255,.06)!important;
+  }
+  .sidebar .nav{gap:3px!important;}
+}
+@media(max-width:768px){
+  .sidebar .nav{gap:3px!important;}
+  .sidebar .nav > button,
+  .sidebar .nav > .nav-external-form button,
+  .sidebar .nav > .nav-external{
+    height:35px!important;
+    min-height:35px!important;
+    font-size:12px!important;
+    padding:7px 10px!important;
+  }
+}

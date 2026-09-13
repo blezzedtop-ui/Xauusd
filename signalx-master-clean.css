@@ -1,0 +1,343 @@
+/* SIGNALX MASTER CLEAN UI — shared by XAUUSD + EURUSD
+   TradingView internals intentionally untouched. */
+:root{
+  --sx-master-bg:#020611;
+  --sx-master-white:#f7fbff;
+  --sx-master-blue:#3ad8ff;
+  --sx-master-purple:#9b5cff;
+  --sx-master-green:#25f0a6;
+  --sx-master-red:#ff4f70;
+  --sx-master-yellow:#ffd44f;
+  --sx-master-glass:rgba(5,14,30,.68);
+  --sx-master-border:rgba(65,186,255,.34);
+}
+
+html,body{
+  background:#020611!important;
+  color:var(--sx-master-white)!important;
+}
+body:before{
+  animation:none!important;
+}
+
+/* Shared page shell */
+.app{
+  display:grid!important;
+  grid-template-columns:238px minmax(0,1fr)!important;
+  align-items:stretch!important;
+  min-height:100vh!important;
+}
+.sidebar{
+  position:sticky!important;
+  top:0!important;
+  width:238px!important;
+  min-width:238px!important;
+  height:100vh!important;
+  max-height:100vh!important;
+  overflow-y:auto!important;
+  overflow-x:hidden!important;
+  padding:10px 10px 12px!important;
+  background-image:linear-gradient(180deg,rgba(2,10,26,.38),rgba(2,5,18,.67)),url('assets/custom/sidebar-background.jpg')!important;
+  background-size:cover!important;
+  background-position:center top!important;
+  background-repeat:no-repeat!important;
+  border-right:1px solid rgba(61,186,255,.42)!important;
+  box-shadow:14px 0 46px rgba(0,0,0,.34),inset -1px 0 rgba(90,220,255,.13)!important;
+  backdrop-filter:none!important;
+  -webkit-backdrop-filter:none!important;
+}
+.sidebar>*{position:relative!important;z-index:2!important}
+.sidebar:before{display:none!important}
+
+.brand{
+  margin:0 0 6px!important;
+  padding:4px 8px 9px!important;
+}
+.nav{
+  display:flex!important;
+  flex-direction:column!important;
+  gap:2px!important;
+  margin:0!important;
+  padding:0!important;
+  overflow:visible!important;
+}
+.nav button,.nav-external-form button,.nav-external{
+  width:100%!important;
+  height:32px!important;
+  min-height:32px!important;
+  padding:5px 9px!important;
+  margin:0!important;
+  border-radius:8px!important;
+  font-size:11px!important;
+  line-height:1!important;
+  white-space:nowrap!important;
+  color:#f7fbff!important;
+  text-shadow:0 0 2px #fff,0 0 8px rgba(58,216,255,.55),0 0 16px rgba(58,216,255,.18)!important;
+  border:0!important;
+  background-image:linear-gradient(90deg,rgba(2,9,28,.62),rgba(5,14,38,.76)),url('assets/custom/sidebar-item-frame.jpg')!important;
+  background-size:100% 100%!important;
+  background-position:center!important;
+  background-repeat:no-repeat!important;
+  box-shadow:inset 0 0 18px rgba(20,110,255,.10),0 0 12px rgba(0,105,255,.07)!important;
+  transform:none!important;
+}
+.nav button:hover,.nav-external:hover,
+.nav button.active,.nav-external.active{
+  color:#fff!important;
+  text-shadow:0 0 3px #fff,0 0 9px rgba(58,216,255,.82),0 0 20px rgba(58,216,255,.26)!important;
+  background-image:linear-gradient(90deg,rgba(0,137,255,.28),rgba(125,50,255,.22)),url('assets/custom/sidebar-item-frame.jpg')!important;
+  box-shadow:inset 0 0 24px rgba(0,180,255,.14),0 0 22px rgba(0,125,255,.18)!important;
+  transform:none!important;
+}
+.nav button:before,.nav-external:before,.nav-external-form:before{display:none!important}
+.sidebar-bottom{display:none!important}
+
+/* Keep PRO at the very end of sidebar menu */
+.nav > .sx-pro-card-sidebar{
+  width:100%!important;
+  flex:0 0 auto!important;
+  margin:5px 0 2px!important;
+  padding:9px!important;
+  border-radius:10px!important;
+  background:linear-gradient(145deg,rgba(7,27,66,.78),rgba(33,10,73,.70))!important;
+  border:1px solid rgba(74,202,255,.52)!important;
+  box-shadow:0 0 24px rgba(0,145,255,.15),inset 0 1px 0 rgba(255,255,255,.10)!important;
+}
+.nav > .sx-pro-card-sidebar .sx-pro-kicker{font-size:8px!important;letter-spacing:.16em!important;color:#7fdcff!important}
+.nav > .sx-pro-card-sidebar b{display:block!important;margin-top:2px!important;font-size:11px!important;line-height:1.15!important;color:#fff!important}
+.nav > .sx-pro-card-sidebar small{display:block!important;margin-top:3px!important;font-size:8px!important;line-height:1.15!important;color:#b9c9e2!important}
+.nav > .sx-pro-card-sidebar .sx-pro-btn{display:flex!important;align-items:center!important;justify-content:center!important;height:28px!important;min-height:28px!important;margin-top:6px!important;padding:4px 8px!important;font-size:10px!important}
+
+/* Shared page content */
+.main{min-width:0!important;width:100%!important;max-width:none!important;padding:12px 16px 24px!important}
+.topbar{margin-bottom:10px!important;background:rgba(2,8,22,.70)!important;border:1px solid rgba(54,176,255,.24)!important;border-radius:13px!important;backdrop-filter:blur(12px)!important;-webkit-backdrop-filter:blur(12px)!important}
+.dashboard{grid-template-columns:minmax(0,1.78fr) minmax(315px,.76fr)!important;gap:12px!important}
+
+/* Static user supplied hero image; no horizontal movement */
+.signalx-visual-hero{
+  min-height:220px!important;
+  height:auto!important;
+  border:1px solid rgba(55,188,255,.55)!important;
+  border-radius:16px!important;
+  overflow:hidden!important;
+  background-image:url('assets/custom/hero-banner.jpg')!important;
+  background-size:cover!important;
+  background-position:center center!important;
+  background-repeat:no-repeat!important;
+  box-shadow:0 0 22px rgba(0,140,255,.25),0 0 60px rgba(83,47,255,.12),inset 0 0 34px rgba(0,113,255,.16)!important;
+  animation:none!important;
+  transform:none!important;
+}
+.signalx-visual-hero:before,.signalx-visual-hero:after,
+.signalx-visual-hero .sx-hero-orbit,
+.signalx-visual-hero .sx-hero-orbit:before,
+.signalx-visual-hero .sx-hero-orbit:after,
+.signalx-visual-hero .sx-hero-orbit span{
+  display:none!important;
+  animation:none!important;
+  transform:none!important;
+}
+.sx-hero-copy{
+  left:50%!important;top:50%!important;transform:translate(-50%,-50%)!important;
+  width:min(52%,680px)!important;
+}
+.title-shimmer{
+  background:linear-gradient(90deg,#f7fbff,#69d8ff,#c47aff,#fff)!important;
+  -webkit-background-clip:text!important;background-clip:text!important;color:transparent!important;
+  animation:none!important;
+}
+
+/* Normal UI typography: white + blue edge/glow. */
+.section-head h2,.section-head h3,.symbol,.topbar h1,
+.metric b,.metric small,.card h2,.card h3,
+.history-note b,.countdown,.outcome-open,
+.pill:not(.buy):not(.sell):not(.wait):not(.badge-buy):not(.badge-sell):not(.badge-wait){
+  color:var(--sx-master-white)!important;
+  text-shadow:0 0 2px rgba(255,255,255,.92),0 0 8px rgba(58,216,255,.48),0 0 17px rgba(58,216,255,.18)!important;
+  -webkit-text-stroke:.20px rgba(58,216,255,.62)!important;
+}
+
+/* Remove legacy gold/brown text treatment from regular UI. */
+.gold,.gold-label,.accent-gold,[class*="gold"]:not(.wait):not(.piv){
+  color:var(--sx-master-white)!important;
+  text-shadow:0 0 2px #fff,0 0 8px rgba(58,216,255,.48),0 0 16px rgba(58,216,255,.18)!important;
+  -webkit-text-stroke:.20px rgba(58,216,255,.62)!important;
+}
+
+/* BUY / SELL / WAIT */
+.buy,.badge-buy,.advanced-signal.buy,.signal-main.buy{
+  color:var(--sx-master-green)!important;
+  text-shadow:0 0 2px #fff,0 0 8px rgba(37,240,166,.86),0 0 22px rgba(37,240,166,.38)!important;
+  -webkit-text-stroke:.28px rgba(37,240,166,.94)!important;
+}
+.sell,.badge-sell,.advanced-signal.sell,.signal-main.sell{
+  color:var(--sx-master-red)!important;
+  text-shadow:0 0 2px #fff,0 0 8px rgba(255,79,112,.88),0 0 22px rgba(255,79,112,.40)!important;
+  -webkit-text-stroke:.28px rgba(255,79,112,.95)!important;
+}
+.wait,.badge-wait,.advanced-signal.wait,.signal-main.wait,.piv{
+  color:var(--sx-master-yellow)!important;
+  text-shadow:0 0 2px #fff,0 0 8px rgba(255,212,79,.90),0 0 22px rgba(255,212,79,.40)!important;
+  -webkit-text-stroke:.28px rgba(255,212,79,.92)!important;
+}
+.signal-box:has(.signal-main.buy),.advanced-card:has(.advanced-signal.buy){border-color:rgba(37,240,166,.58)!important;box-shadow:0 0 24px rgba(37,240,166,.12),inset 0 0 22px rgba(37,240,166,.05)!important}
+.signal-box:has(.signal-main.sell),.advanced-card:has(.advanced-signal.sell){border-color:rgba(255,79,112,.58)!important;box-shadow:0 0 24px rgba(255,79,112,.12),inset 0 0 22px rgba(255,79,112,.05)!important}
+.signal-box:has(.signal-main.wait),.advanced-card:has(.advanced-signal.wait){border-color:rgba(255,212,79,.55)!important;box-shadow:0 0 24px rgba(255,212,79,.10),inset 0 0 22px rgba(255,212,79,.04)!important}
+
+/* Liquid glass panels */
+.card,.advanced-card,.metric,.signal-box,.session,.calendar-item,.topbar,.pill,.btn:not(.tf){
+  background:linear-gradient(145deg,rgba(8,20,42,.68),rgba(14,12,38,.54))!important;
+  border-color:rgba(65,186,255,.28)!important;
+  box-shadow:0 12px 30px rgba(0,0,0,.24),inset 0 1px 0 rgba(255,255,255,.08)!important;
+  backdrop-filter:blur(12px)!important;-webkit-backdrop-filter:blur(12px)!important;
+}
+
+/* TradingView outer shell only — internals untouched. */
+.chart{background:#080c14!important;background-image:none!important;}
+.chart:before,.chart:after{display:none!important;content:none!important}
+.chart iframe,.tradingview-widget-container iframe{text-shadow:none!important;-webkit-text-stroke:0!important}
+
+@media(max-width:1100px){
+  .app{grid-template-columns:1fr!important}
+  .sidebar{position:fixed!important;left:0!important;top:0!important;width:min(292px,86vw)!important;min-width:0!important;height:100dvh!important;max-height:100dvh!important;transform:translateX(-105%)!important;transition:transform .25s ease!important;z-index:1001!important;padding:14px 12px!important}
+  body.sx-menu-open .sidebar{transform:translateX(0)!important}
+  .nav{gap:3px!important}
+  .nav button,.nav-external-form button,.nav-external{height:34px!important;min-height:34px!important}
+  .main{padding:9px 10px 18px!important}
+  .dashboard{grid-template-columns:1fr!important}
+  .signalx-visual-hero{min-height:175px!important}
+}
+@media(max-width:650px){
+  .nav button,.nav-external-form button,.nav-external{height:34px!important;min-height:34px!important;font-size:10px!important}
+  .nav > .sx-pro-card-sidebar{margin-top:4px!important}
+  .signalx-visual-hero{min-height:155px!important}
+  .sx-hero-copy{width:57%!important}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*:before,*:after{animation:none!important;transition:none!important}
+}
+
+/* SIDEBAR FINAL REFINEMENT — fixed while page scrolls, stronger blue neon, slightly looser spacing */
+@media (min-width:1101px){
+  .sidebar{
+    position:fixed!important;
+    left:0!important;
+    top:0!important;
+    bottom:0!important;
+    width:238px!important;
+    height:100vh!important;
+    max-height:100vh!important;
+    overflow-y:auto!important;
+    overflow-x:hidden!important;
+    z-index:1001!important;
+    box-sizing:border-box!important;
+    padding:12px 10px 12px!important;
+  }
+  .app{display:block!important;min-height:100vh!important;}
+  .main{margin-left:238px!important;width:calc(100% - 238px)!important;max-width:none!important;box-sizing:border-box!important;}
+}
+
+/* Make the blue neon frame larger and cleaner */
+.nav{gap:5px!important;}
+.nav button,.nav-external-form button,.nav-external{
+  height:34px!important;
+  min-height:34px!important;
+  padding:7px 11px!important;
+  border-radius:10px!important;
+  border:1px solid rgba(47,178,255,.44)!important;
+  box-shadow:
+    inset 0 0 18px rgba(18,109,255,.11),
+    0 0 13px rgba(0,128,255,.10),
+    0 0 0 1px rgba(79,198,255,.05)!important;
+  transition:box-shadow .22s ease,border-color .22s ease,background .22s ease,transform .18s ease!important;
+}
+.nav button:hover,.nav-external:hover{
+  border-color:rgba(76,205,255,.82)!important;
+  box-shadow:
+    inset 0 0 22px rgba(22,125,255,.16),
+    0 0 20px rgba(0,142,255,.25),
+    0 0 34px rgba(94,62,255,.13)!important;
+}
+.nav button.active,.nav-external.active{
+  border-color:rgba(92,220,255,.95)!important;
+  box-shadow:
+    inset 0 0 24px rgba(12,144,255,.24),
+    0 0 24px rgba(0,153,255,.34),
+    0 0 42px rgba(111,67,255,.18)!important;
+}
+.nav button:after,.nav-external:after{
+  content:""!important;
+  position:absolute!important;
+  inset:0!important;
+  pointer-events:none!important;
+  background:linear-gradient(100deg,transparent 0%,rgba(110,225,255,0) 35%,rgba(110,225,255,.15) 49%,rgba(172,99,255,.11) 54%,transparent 67%)!important;
+  transform:translateX(-120%)!important;
+  transition:transform .8s ease!important;
+}
+.nav button:hover:after,.nav-external:hover:after{transform:translateX(120%)!important;}
+
+/* Sidebar background stays unified on every page */
+.sidebar{
+  background-image:linear-gradient(180deg,rgba(1,9,25,.26),rgba(1,5,17,.58)),url('assets/custom/sidebar-background.jpg')!important;
+  background-size:cover!important;
+  background-position:center top!important;
+  background-repeat:no-repeat!important;
+}
+
+/* PRO remains the final item inside the sidebar */
+.nav > .sx-pro-card-sidebar{margin-top:5px!important;}
+.sx-pro-card-sidebar{width:100%!important;box-sizing:border-box!important;}
+
+@media(max-width:1100px){
+  .nav{gap:5px!important;}
+  .nav button,.nav-external-form button,.nav-external{height:34px!important;min-height:34px!important;}
+}
+
+/* SIDEBAR FRAME-LOCKED NEON — final user tweak */
+.nav button,.nav-external-form button,.nav-external{
+  position:relative!important;
+  height:34px!important;
+  min-height:34px!important;
+  box-sizing:border-box!important;
+  font-size:12.5px!important;
+  font-weight:600!important;
+  line-height:1!important;
+  border:1px solid rgba(56,198,255,.88)!important;
+  border-radius:10px!important;
+  overflow:hidden!important;
+  box-shadow:none!important;
+  text-shadow:0 0 2px rgba(255,255,255,.95),0 0 8px rgba(73,206,255,.5)!important;
+}
+.nav button::after,.nav-external::after{
+  content:""!important;
+  position:absolute!important;
+  inset:0!important;
+  border:1px solid rgba(58,205,255,.95)!important;
+  border-radius:inherit!important;
+  pointer-events:none!important;
+  box-shadow:inset 0 0 8px rgba(51,194,255,.25),inset 0 0 18px rgba(55,85,255,.12)!important;
+  opacity:.95!important;
+  transform:none!important;
+  transition:box-shadow .18s ease,border-color .18s ease,opacity .18s ease!important;
+}
+.nav button:hover,.nav-external:hover,
+.nav button.active,.nav-external.active{
+  border-color:rgba(81,220,255,1)!important;
+  box-shadow:none!important;
+}
+.nav button:hover::after,.nav-external:hover::after,
+.nav button.active::after,.nav-external.active::after{
+  box-shadow:inset 0 0 10px rgba(53,212,255,.32),inset 0 0 22px rgba(88,78,255,.15)!important;
+  opacity:1!important;
+}
+
+/* Keep spacing compact while preserving readability */
+.nav{gap:5px!important;}
+
+@media(max-width:1100px){
+  .nav button,.nav-external-form button,.nav-external{
+    height:34px!important;
+    min-height:34px!important;
+    font-size:12px!important;
+  }
+}
