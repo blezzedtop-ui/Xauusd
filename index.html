@@ -836,4 +836,64 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 
 <script src="config.js?v=20260908f"></script>
 <script src="app.js?v=20260912-eurusd-nav-fix-2"></script>
+<script>
+(function(){
+  "use strict";
+  var RESOURCES = ["/signalx-master-clean.css", "/signalx-premium-theme.css", "/app.js", "/config.js"];
+
+  function renderOverlay(bad){
+    if (document.getElementById("sx-diag-overlay")) return;
+    var panel = document.createElement("div");
+    panel.id = "sx-diag-overlay";
+    panel.style.cssText = [
+      "position:fixed", "top:16px", "left:16px", "right:16px", "max-width:640px",
+      "margin:0 auto", "z-index:2147483647",
+      "background:rgba(10,10,14,0.94)",
+      "border:1px solid #ff3b3b", "border-radius:10px",
+      "box-shadow:0 8px 40px rgba(0,0,0,0.6)",
+      "padding:16px 18px", "font-family:'Courier New',monospace",
+      "color:#f5c14e", "font-size:13px", "line-height:1.55"
+    ].join(";");
+
+    var title = document.createElement("div");
+    title.textContent = "SIGNALX DIAGNOSTIKA — NIMA UCHUN YANGI SAYT YUKLANMADI?";
+    title.style.cssText = "font-weight:700;font-size:14px;color:#ff3b3b;margin-bottom:10px;letter-spacing:.3px";
+    panel.appendChild(title);
+
+    bad.forEach(function(item){
+      var line = document.createElement("div");
+      line.style.cssText = "color:#4de0ff;margin:4px 0;word-break:break-all";
+      line.textContent = "\u2717 " + item.url + " HTTP " + item.status;
+      panel.appendChild(line);
+    });
+
+    var info = document.createElement("div");
+    info.style.cssText = "margin-top:12px;opacity:.7;color:#f5c14e;font-size:12px";
+    info.textContent = "Serverda resursy yuklang emas. ZIP ichida CSS/JS mavjud, lekin serverdan keylsa dizayn eski ko'rinadi.";
+    panel.appendChild(info);
+
+    document.body.appendChild(panel);
+  }
+
+  function checkResources(){
+    var checks = RESOURCES.map(function(url){
+      return fetch(url, { cache: "no-store" }).then(function(res){
+        return { url: url, status: res.status, ok: res.ok };
+      }).catch(function(){
+        return { url: url, status: 0, ok: false };
+      });
+    });
+    Promise.all(checks).then(function(results){
+      var bad = results.filter(function(r){ return !r.ok; });
+      if (bad.length > 0) renderOverlay(bad);
+    });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", checkResources);
+  } else {
+    checkResources();
+  }
+})();
+</script>
 </body></html>
