@@ -348,3 +348,123 @@ body:before{
 .ai-signal-layout{display:grid;grid-template-columns:minmax(0,1fr) 44%;min-height:285px;border:1px solid rgba(66,121,255,.25);border-radius:11px;overflow:hidden;background:radial-gradient(circle at 80% 50%,rgba(58,49,255,.14),transparent 45%),rgba(2,8,24,.72)}.ai-signal-info{padding:11px 10px 10px;min-width:0;position:relative;z-index:2}.ai-symbol-row{display:flex;align-items:center;gap:7px;min-height:32px}.ai-symbol-dot{font-size:17px;color:#ffc126;text-shadow:0 0 10px rgba(255,193,38,.6)}.ai-symbol-name{font-size:13px;color:#fff}.ai-signal-badge{font-size:12px!important;line-height:1!important;margin-left:auto;padding:7px 9px;border:1px solid currentColor;border-radius:7px;background:rgba(25,65,57,.42);letter-spacing:.02em}.ai-price-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px 14px;margin-top:10px}.ai-price-grid>div{display:flex;justify-content:space-between;align-items:baseline;gap:8px}.ai-price-grid small{color:#a8bce0;font-size:11px}.ai-price-grid b{font-size:13px;color:#f4f7ff;font-variant-numeric:tabular-nums}.ai-confidence-row{display:flex;justify-content:space-between;align-items:center;margin-top:11px;color:#c9d8f4;font-size:11px}.ai-confidence-row b{font-size:13px;color:#20e9aa;text-shadow:0 0 12px rgba(32,233,170,.5)}.ai-confidence-track{height:7px;border-radius:999px;background:#15213a;margin-top:5px;overflow:hidden;box-shadow:inset 0 0 7px rgba(0,0,0,.55)}.ai-confidence-track span{display:block;height:100%;width:0;border-radius:999px;background:linear-gradient(90deg,#12dba0,#13edb0);box-shadow:0 0 9px rgba(18,219,160,.65);transition:width .35s ease}.ai-extra-row{display:flex;justify-content:space-between;gap:8px;margin-top:8px;color:#93a9ce;font-size:10px}.ai-extra-row b{color:#dce9ff;font-size:11px;margin-left:3px}.ai-sig-reason{font-size:10px!important;line-height:1.35!important;margin-top:7px!important;padding-top:6px!important;border-top:1px solid rgba(66,121,255,.14)!important;min-height:22px}.ai-analysis-btn{width:100%;margin-top:8px!important;padding:8px 10px!important;border-radius:8px!important;font-size:12px!important;font-weight:800!important;background:linear-gradient(90deg,#086cff,#8b18ff)!important;border-color:#5e8dff!important;box-shadow:0 0 15px rgba(34,104,255,.32),0 0 22px rgba(132,30,255,.20)!important}.ai-analysis-btn span{float:right;opacity:.8}.ai-signal-visual{position:relative;min-height:285px;overflow:hidden;background:#020617}.ai-signal-visual img{position:absolute;inset:0;width:100%;height:100%;display:block;object-fit:cover;object-position:center;filter:saturate(1.08) contrast(1.04);mix-blend-mode:screen}.ai-signal-visual:after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,rgba(2,8,24,.92) 0%,rgba(2,8,24,.42) 18%,rgba(2,8,24,.05) 55%),linear-gradient(180deg,rgba(0,0,0,.02),rgba(1,4,18,.22));pointer-events:none}.ai-visual-glow{position:absolute;inset:auto 12% 8% 12%;height:35%;background:radial-gradient(ellipse,rgba(30,110,255,.28),transparent 68%);filter:blur(15px);z-index:1;pointer-events:none}
 @media(max-width:900px){.ai-signal-layout{grid-template-columns:minmax(0,1fr) 42%;min-height:255px}.ai-signal-visual{min-height:255px}.ai-card-title .mini{font-size:9px!important}.ai-price-grid{gap:6px 9px}.ai-price-grid b{font-size:12px}.ai-analysis-btn{font-size:11px!important}}
 @media(max-width:600px){.overview-ai-card{padding:9px!important}.ai-signal-layout{grid-template-columns:1fr 39%;min-height:225px}.ai-signal-visual{min-height:225px}.ai-mini-badge{width:32px;height:32px;font-size:15px}.ai-card-title h3{font-size:13px!important}.ai-card-title .mini{font-size:8px!important}.ai-head-actions .btn{padding:6px 8px!important}.ai-live-pill{font-size:9px!important;padding:5px 7px!important}.ai-signal-info{padding:8px 7px}.ai-symbol-name{font-size:11px}.ai-signal-badge{font-size:10px!important;padding:6px 7px}.ai-price-grid{grid-template-columns:1fr;gap:4px;margin-top:7px}.ai-price-grid>div{font-size:10px}.ai-price-grid b{font-size:11px}.ai-confidence-row{margin-top:7px}.ai-extra-row{font-size:9px}.ai-extra-row b{font-size:10px}.ai-sig-reason{display:none}.ai-analysis-btn{margin-top:7px!important;padding:7px 6px!important;font-size:9px!important}.ai-signal-visual img{object-position:57% center}}
+
+/* === AI SIGNALS — EXACT COMPACT REFERENCE CARD 335x329 === */
+.overview-right .overview-ai-card{
+  width:335px!important;
+  max-width:335px!important;
+  height:329px!important;
+  min-height:329px!important;
+  max-height:329px!important;
+  padding:10px!important;
+  box-sizing:border-box!important;
+  position:relative!important;
+  overflow:hidden!important;
+}
+.overview-right .overview-ai-card .ai-card-head{
+  height:42px!important;
+  min-height:42px!important;
+  margin:0 0 6px!important;
+  position:relative!important;
+  z-index:8!important;
+}
+.overview-right .overview-ai-card .ai-mini-badge{width:38px!important;height:38px!important;flex:0 0 38px!important}
+.overview-right .overview-ai-card .ai-card-title h3{font-size:15px!important;line-height:1.05!important}
+.overview-right .overview-ai-card .ai-card-title .mini{font-size:9px!important;white-space:nowrap!important}
+.overview-right .overview-ai-card .ai-head-actions{gap:5px!important}
+.overview-right .overview-ai-card .ai-head-actions .btn{display:none!important}
+.overview-right .overview-ai-card .ai-live-pill{font-size:10px!important;padding:6px 8px!important}
+
+.overview-right .overview-ai-card .ai-signal-layout{
+  position:relative!important;
+  display:block!important;
+  height:260px!important;
+  min-height:260px!important;
+  border:1px solid rgba(66,121,255,.30)!important;
+  border-radius:10px!important;
+  overflow:hidden!important;
+  background:#020817!important;
+}
+.overview-right .overview-ai-card .ai-signal-visual{
+  position:absolute!important;
+  inset:0!important;
+  width:100%!important;
+  height:100%!important;
+  min-height:0!important;
+  z-index:1!important;
+  background:#020817!important;
+}
+.overview-right .overview-ai-card .ai-signal-visual img{
+  position:absolute!important;
+  inset:0!important;
+  width:100%!important;
+  height:100%!important;
+  object-fit:cover!important;
+  object-position:center!important;
+  opacity:.92!important;
+  mix-blend-mode:screen!important;
+}
+.overview-right .overview-ai-card .ai-signal-visual:after{
+  content:""!important;
+  position:absolute!important;
+  inset:0!important;
+  background:linear-gradient(90deg,rgba(2,8,24,.96) 0%,rgba(2,8,24,.88) 43%,rgba(2,8,24,.35) 72%,rgba(2,8,24,.08) 100%),linear-gradient(180deg,rgba(1,5,18,.08),rgba(1,5,18,.25))!important;
+  pointer-events:none!important;
+}
+.overview-right .overview-ai-card .ai-signal-info{
+  position:relative!important;
+  z-index:4!important;
+  width:100%!important;
+  height:100%!important;
+  min-height:0!important;
+  padding:9px 9px 8px!important;
+  box-sizing:border-box!important;
+  overflow:hidden!important;
+}
+.overview-right .overview-ai-card .ai-symbol-row{width:63%!important;min-height:29px!important}
+.overview-right .overview-ai-card .ai-symbol-name{font-size:13px!important}
+.overview-right .overview-ai-card .ai-signal-badge{font-size:10px!important;padding:6px 8px!important}
+.overview-right .overview-ai-card .ai-price-grid{
+  width:62%!important;
+  display:grid!important;
+  grid-template-columns:1fr!important;
+  gap:3px!important;
+  margin-top:7px!important;
+}
+.overview-right .overview-ai-card .ai-price-grid>div{
+  display:flex!important;
+  justify-content:space-between!important;
+  align-items:baseline!important;
+}
+.overview-right .overview-ai-card .ai-price-grid small{font-size:11px!important;color:#b7c9ea!important}
+.overview-right .overview-ai-card .ai-price-grid b{font-size:12px!important;color:#f5f8ff!important}
+.overview-right .overview-ai-card .ai-confidence-row{
+  width:62%!important;
+  margin-top:7px!important;
+  font-size:11px!important;
+}
+.overview-right .overview-ai-card .ai-confidence-track{width:62%!important;height:7px!important;margin-top:4px!important}
+.overview-right .overview-ai-card .ai-extra-row{display:none!important}
+.overview-right .overview-ai-card .ai-sig-reason{display:none!important}
+.overview-right .overview-ai-card .ai-analysis-btn{
+  position:absolute!important;
+  left:9px!important;
+  right:9px!important;
+  bottom:8px!important;
+  width:auto!important;
+  margin:0!important;
+  height:38px!important;
+  padding:7px 10px!important;
+  font-size:12px!important;
+  z-index:7!important;
+}
+
+@media(max-width:900px){
+  .overview-right .overview-ai-card{width:335px!important;max-width:100%!important;height:329px!important;min-height:329px!important}
+}
+@media(max-width:600px){
+  .overview-right .overview-ai-card{width:335px!important;max-width:100%!important;height:329px!important;min-height:329px!important}
+  .overview-right .overview-ai-card .ai-card-title .mini{font-size:8px!important}
+  .overview-right .overview-ai-card .ai-price-grid,.overview-right .overview-ai-card .ai-confidence-row{width:64%!important}
+  .overview-right .overview-ai-card .ai-signal-visual img{object-position:center!important}
+}
