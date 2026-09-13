@@ -815,6 +815,37 @@ async def auth_sessions(authorization: str | None = Header(default=None), sessio
         items.append(item)
     return {"sessions": items, "scope": "all" if is_admin_user(user) else "self", "is_admin": is_admin_user(user)}
 
+@app.post("/api/auth/sessions/{session_id}/revoke")
+async def revoke_one_session(session_id: int, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    """Revoke one session. Admins may revoke any user's session; normal users may revoke only their own."""
+    user = current_user(authorization, session)
+    row = session.get(SessionToken, session_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Seans topilmadi")
+    if not is_admin_user(user) and row.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Faqat o'zingizga tegishli seansni yopishingiz mumkin")
+    if row.is_revoked:
+        return {"ok": True, "revoked": 0, "session_id": session_id, "already_revoked": True}
+    row.is_revoked = True
+    row.last_seen_at = datetime.now(timezone.utc)
+    session.commit()
+    return {"ok": True, "revoked": 1, "session_id": session_id, "current": False}
+
+
+@app.post("/api/auth/sessions/revoke-all")
+async def revoke_all_sessions(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    """Revoke all sessions belonging to the current user, including the current one."""
+    user = current_user(authorization, session)
+    rows = list(session.scalars(select(SessionToken).where(SessionToken.user_id == user.id, SessionToken.is_revoked == False)))
+    count = 0
+    for row in rows:
+        row.is_revoked = True
+        row.last_seen_at = datetime.now(timezone.utc)
+        count += 1
+    session.commit()
+    return {"ok": True, "revoked": count, "logged_out": True}
+
+
 @app.post("/api/auth/sessions/revoke-others")
 async def revoke_other_sessions(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
@@ -4000,6 +4031,37 @@ async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, 
                     item["claimed"] = False
             break
     return {"ok": True, "queue": len(MT5_ORDER_QUEUE)}
+
+# Runtime static/diagnostic fix: serve root-level CSS files and expose deployment diagnostics.
+@app.get("/signalx-master-clean.css")
+async def signalx_master_clean_css() -> FileResponse:
+    return FileResponse(os.path.join(BASE_DIR, "signalx-master-clean.css"), media_type="text/css")
+
+@app.get("/signalx-premium-theme.css")
+async def signalx_premium_theme_css() -> FileResponse:
+    return FileResponse(os.path.join(BASE_DIR, "signalx-premium-theme.css"), media_type="text/css")
+
+@app.get("/api/deploy-diagnostics")
+async def deploy_diagnostics() -> dict[str, Any]:
+    files = {}
+    for name in ("index.html", "signalx-master-clean.css", "signalx-premium-theme.css", "app.js", "main.py"):
+        path = os.path.join(BASE_DIR, name)
+        exists = os.path.isfile(path)
+        data = b""
+        if exists:
+            try:
+                data = open(path, "rb").read()
+            except Exception:
+                data = b""
+        files[name] = {"exists": exists, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest() if data else None}
+    return {
+        "ok": True,
+        "diagnostic": "SIGNALX_RUNTIME_DIAGNOSTIC_V1",
+        "server_time": datetime.now(timezone.utc).isoformat(),
+        "base_dir": BASE_DIR,
+        "files": files,
+        "cwd": os.getcwd(),
+    }
 
 @app.get("/api/health")
 async def api_health() -> dict[str, Any]:

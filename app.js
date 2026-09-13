@@ -558,7 +558,8 @@ async function loadActiveSessions(){
       const status=x.active?'🟢 Faol':'🟡 Faol emas';
       const current=x.current?' · Joriy qurilma':'';
       const owner=IS_ADMIN&&x.username?`<div class="mini">👤 ${safeText(x.username)}${x.email?` · ${safeText(x.email)}`:''}</div>`:'';
-      return `<div class="advanced-card"><div class="advanced-head"><div>${owner}<div class="mini">${status}${current}</div><div class="advanced-signal wait">${safeText(x.device_model||'Noma’lum qurilma')}</div></div><span class="pill">ID ${safeText(x.id)}</span></div><div class="mini">Oxirgi faollik: ${safeText(seen)}</div><div class="mini">Yaratilgan: ${safeText(created)}</div></div>`;
+      const action=`<button class="btn danger active-session-revoke" type="button" data-session-id="${safeText(x.id)}" data-current="${x.current?'1':'0'}">${x.current?'Chiqish':'Yopish'}</button>`;
+      return `<div class="advanced-card"><div class="advanced-head"><div>${owner}<div class="mini">${status}${current}</div><div class="advanced-signal wait">${safeText(x.device_model||'Noma’lum qurilma')}</div></div><div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><span class="pill">ID ${safeText(x.id)}</span>${action}</div></div><div class="mini">Oxirgi faollik: ${safeText(seen)}</div><div class="mini">Yaratilgan: ${safeText(created)}</div></div>`;
     }).join('');
   }catch(e){ grid.innerHTML=`<div class="mini">Seanslar xatosi: ${safeText(e.message||'server xatosi')}</div>`; }
 }
@@ -567,6 +568,28 @@ async function revokeOtherSessions(){
   const d=await api('/api/auth/sessions/revoke-others',{method:'POST'});
   await loadActiveSessions();
   showToast(`Boshqa seanslar yopildi: ${d.revoked||0}`);
+}
+async function revokeOneSession(sessionId, isCurrent=false){
+  if(!token) throw Error('Avval tizimga kiring.');
+  const msg=isCurrent ? 'Joriy qurilmadagi seans yopiladi va tizimdan chiqasiz. Davom etilsinmi?' : 'Shu qurilma seansini yopilsinmi?';
+  if(!window.confirm(msg)) return;
+  const d=await api(`/api/auth/sessions/${encodeURIComponent(sessionId)}/revoke`,{method:'POST'});
+  if(isCurrent){
+    token=''; localStorage.removeItem('trading_token'); applyRoleAccess(false); setText('plan','Guest'); setText('authBtn','Kirish');
+    showToast('Joriy seans yopildi');
+    openSection('overview');
+    return;
+  }
+  await loadActiveSessions();
+  showToast(`Seans yopildi: ${d.session_id||sessionId}`);
+}
+async function revokeAllSessions(){
+  if(!token) throw Error('Avval tizimga kiring.');
+  if(!window.confirm('Barcha seanslaringiz, shu jumladan joriy qurilma ham yopiladi. Tizimdan chiqasiz. Davom etilsinmi?')) return;
+  const d=await api('/api/auth/sessions/revoke-all',{method:'POST'});
+  token=''; localStorage.removeItem('trading_token'); applyRoleAccess(false); setText('plan','Guest'); setText('authBtn','Kirish');
+  showToast(`Barcha seanslar yopildi: ${d.revoked||0}`);
+  openSection('overview');
 }
 
 async function loadMT5Status(){ if(!IS_ADMIN)return;
@@ -596,7 +619,7 @@ function bindCriticalButtons(){
   const authClose=$('authClose'); if(authClose&&authClose.dataset.bound!=='1'){authClose.dataset.bound='1';authClose.addEventListener('click',()=>{$('authModal')?.classList.remove('show');});}
   const authModal=$('authModal'); if(authModal&&authModal.dataset.bound!=='1'){authModal.dataset.bound='1';authModal.addEventListener('click',e=>{if(e.target===authModal)authModal.classList.remove('show');});}
   const authSwitch=$('authSwitch'); if(authSwitch&&authSwitch.dataset.bound!=='1'){authSwitch.dataset.bound='1';authSwitch.addEventListener('click',e=>{e.preventDefault();setAuth(authMode==='login'?'register':'login');});authSwitch.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setAuth(authMode==='login'?'register':'login');}});}
-  run('refreshSignalEngine',()=>loadSignalEngine()); run('refreshAIProviders',async()=>{await loadAIProviders();bindAIControls()}); run('refreshAdvanced',()=>loadAdvancedSignals()); run('refreshICT',()=>loadICTSignals()); run('refreshClassic',()=>loadClassicTrade(classicInterval)); run('refreshSNR',()=>loadSNR(snrInterval)); run('refreshStats',async()=>{await loadStats();await loadHistory()}); run('refreshSmartAnalysis',()=>loadSmartAnalysis()); run('refreshAISignals',()=>loadAISignals()); run('getAIAnalysis',()=>loadAISignals()); run('refreshCalendar',()=>loadCalendar()); run('refreshHistory',async()=>{await loadStats();await loadHistory()}); run('refreshTrendLines',()=>loadTrendLines(trendLineInterval)); run('connectMT5',()=>connectMT5()); run('saveMT5Lot',()=>saveMT5Lot()); run('mt5AutoOn',()=>setMT5Auto(true)); run('mt5AutoOff',()=>setMT5Auto(false)); run('refreshMT5',()=>loadMT5Status()); run('refreshActiveSessions',()=>loadActiveSessions()); run('revokeOtherSessions',()=>revokeOtherSessions()); run('openFullHistory',()=>{openSection('historySection');});
+  run('refreshSignalEngine',()=>loadSignalEngine()); run('refreshAIProviders',async()=>{await loadAIProviders();bindAIControls()}); run('refreshAdvanced',()=>loadAdvancedSignals()); run('refreshICT',()=>loadICTSignals()); run('refreshClassic',()=>loadClassicTrade(classicInterval)); run('refreshSNR',()=>loadSNR(snrInterval)); run('refreshStats',async()=>{await loadStats();await loadHistory()}); run('refreshSmartAnalysis',()=>loadSmartAnalysis()); run('refreshAISignals',()=>loadAISignals()); run('getAIAnalysis',()=>loadAISignals()); run('refreshCalendar',()=>loadCalendar()); run('refreshHistory',async()=>{await loadStats();await loadHistory()}); run('refreshTrendLines',()=>loadTrendLines(trendLineInterval)); run('connectMT5',()=>connectMT5()); run('saveMT5Lot',()=>saveMT5Lot()); run('mt5AutoOn',()=>setMT5Auto(true)); run('mt5AutoOff',()=>setMT5Auto(false)); run('refreshMT5',()=>loadMT5Status()); run('refreshActiveSessions',()=>loadActiveSessions()); run('revokeOtherSessions',()=>revokeOtherSessions()); run('revokeAllSessions',()=>revokeAllSessions()); run('openFullHistory',()=>{openSection('historySection');});
 }
 function bindUIActions(){
   document.querySelectorAll('.tfbar').forEach(bar=>{if(bar.dataset.bound==='1')return;bar.dataset.bound='1';bar.addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b&&bar.contains(b))setTf(b.dataset.interval);const s=e.target.closest('[data-signal-interval]');if(s&&bar.contains(s)){document.querySelectorAll('[data-signal-interval]').forEach(x=>x.classList.toggle('active',x===s));signalInterval=s.dataset.signalInterval;loadSelectedSignal(signalInterval).catch(()=>{});}const c=e.target.closest('[data-classic-interval]');if(c&&bar.contains(c)){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===c));classicInterval=c.dataset.classicInterval;loadClassicTrade(classicInterval).catch(()=>{});}const n=e.target.closest('[data-snr-interval]');if(n&&bar.contains(n)){document.querySelectorAll('[data-snr-interval]').forEach(x=>x.classList.toggle('active',x===n));snrInterval=n.dataset.snrInterval;loadSNR(snrInterval).catch(()=>{});}})});
@@ -606,10 +629,12 @@ function bindUIActions(){
   const xauBtn=$('xauUsdPageBtn'); if(xauBtn && xauBtn.dataset.bound!=='1'){xauBtn.dataset.bound='1';xauBtn.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();window.location.assign('/');});}
   if(document.body.dataset.actionsBound==='1')return;document.body.dataset.actionsBound='1';
   document.addEventListener('click',e=>{
+    const revoke=e.target.closest?.('.active-session-revoke');
+    if(revoke){e.preventDefault();e.stopPropagation();revokeOneSession(revoke.dataset.sessionId,revoke.dataset.current==='1').catch(err=>showToast(err?.message||'Seansni yopib bo\'lmadi'));return;}
     const b=e.target.closest?.('button');if(!b)return;const id=b.id;
     if(id==='authBtn'){e.preventDefault();e.stopPropagation();const modal=$('authModal');if(!modal)return;if(String(b.textContent||'').trim()==='Chiqish'){logoutUser();return;}setAuth('login');setText('authMsg','');modal.classList.add('show');setTimeout(()=>$('email')?.focus(),50);return;}
     if(id==='authSwitch'){e.preventDefault();setAuth(authMode==='login'?'register':'login');return;}
-    const actions={saveSignal:saveSignal,refreshSignalEngine:()=>loadSignalEngine(),refreshAIProviders:()=>loadAIProviders(),refreshICT:()=>loadICTSignals(),refreshAdvanced:()=>loadAdvancedSignals(),refreshClassic:()=>loadClassicTrade(classicInterval),refreshSNR:()=>loadSNR(snrInterval),refreshStats:async()=>{await loadStats();await loadHistory()},refreshSmartAnalysis:()=>loadSmartAnalysis(),refreshAISignals:()=>loadAISignals(),refreshCalendar:()=>loadCalendar(),refreshHistory:async()=>{await loadStats();await loadHistory()},connectMT5:()=>connectMT5(),saveMT5Lot:()=>saveMT5Lot(),mt5AutoOn:()=>setMT5Auto(true),mt5AutoOff:()=>setMT5Auto(false),refreshMT5:()=>loadMT5Status()};
+    const actions={saveSignal:saveSignal,refreshSignalEngine:()=>loadSignalEngine(),refreshAIProviders:()=>loadAIProviders(),refreshICT:()=>loadICTSignals(),refreshAdvanced:()=>loadAdvancedSignals(),refreshClassic:()=>loadClassicTrade(classicInterval),refreshSNR:()=>loadSNR(snrInterval),refreshStats:async()=>{await loadStats();await loadHistory()},refreshSmartAnalysis:()=>loadSmartAnalysis(),refreshAISignals:()=>loadAISignals(),refreshCalendar:()=>loadCalendar(),refreshHistory:async()=>{await loadStats();await loadHistory()},connectMT5:()=>connectMT5(),saveMT5Lot:()=>saveMT5Lot(),mt5AutoOn:()=>setMT5Auto(true),mt5AutoOff:()=>setMT5Auto(false),refreshMT5:()=>loadMT5Status(),refreshActiveSessions:()=>loadActiveSessions(),revokeOtherSessions:()=>revokeOtherSessions(),revokeAllSessions:()=>revokeAllSessions()};
     if(actions[id]){e.preventDefault();e.stopPropagation();b.disabled=true;const old=b.innerHTML;b.innerHTML='⟳ Ishlanmoqda…';Promise.resolve().then(actions[id]).then(()=>showToast(id.startsWith('refresh')?'Yangilandi':'Bajarildi')).catch(err=>{console.error('UI ACTION ERROR',id,err);showToast((id.startsWith('refresh')?'Yangilash':'Amal')+' xatosi: '+(err?.message||'server xatosi'));}).finally(()=>{b.disabled=false;b.innerHTML=old;});}
   });
 }
