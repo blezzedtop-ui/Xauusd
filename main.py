@@ -349,6 +349,8 @@ class User(Base):
     # email = real recipient address; username = generated login.
     email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     username: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=True)
+    # Server-side authorization role. New registrations are always ordinary users.
+    role: Mapped[str] = mapped_column(String(20), default="user", nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(String(255))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     subscription: Mapped["Subscription | None"] = relationship(back_populates="user", uselist=False, cascade="all, delete-orphan")
@@ -454,6 +456,9 @@ def ensure_schema() -> None:
         with engine.begin() as conn:
             if "username" not in columns:
                 conn.exec_driver_sql("ALTER TABLE users ADD COLUMN username VARCHAR(80)")
+            if "role" not in columns:
+                conn.exec_driver_sql("ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'user'")
+            conn.exec_driver_sql("UPDATE users SET role = COALESCE(NULLIF(role, ''), 'user')")
             conn.exec_driver_sql("UPDATE users SET username = email WHERE username IS NULL OR username = ''")
             conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ux_users_username ON users (username)")
             sig_cols = {c["name"] for c in inspector.get_columns("signal_history")}
@@ -494,6 +499,7 @@ def ensure_admin_user() -> None:
         else:
             current.username = admin_login
             current.password_hash = hash_password(admin_password)
+        current.role = "admin"
         if not current.subscription:
             current.subscription = Subscription(plan="admin", status="active", renews_at=None)
         else:
@@ -664,6 +670,22 @@ def current_user(authorization: str | None, session: Session) -> User:
         raise HTTPException(status_code=401, detail="User not found")
     return user
 
+def is_admin_user(user: User) -> bool:
+    """Single source of truth for privileged dashboard access.
+
+    Keep subscription-plan compatibility with older databases while making the
+    explicit role authoritative for all newly registered accounts.
+    """
+    return str(getattr(user, "role", "user") or "user").lower() == "admin" or (
+        user.subscription is not None and str(user.subscription.plan or "").lower() == "admin"
+    )
+
+def require_admin(authorization: str | None, session: Session) -> User:
+    user = current_user(authorization, session)
+    if not is_admin_user(user):
+        raise HTTPException(status_code=403, detail="Bu bo‘lim faqat administrator uchun. Oddiy user AI tizimidan foydalana olmaydi.")
+    return user
+
 
 class AuthBody(BaseModel):
     username: str = Field(min_length=3, max_length=255)
@@ -694,7 +716,7 @@ async def auth_login(body: AuthBody, request: Request, session: Session = Depend
         raise HTTPException(status_code=401, detail="Login yoki parol noto‘g‘ri")
     raw = create_session(user.id, session, request.headers.get("user-agent"))
     plan = user.subscription.plan if user.subscription else "free"
-    return {"token": raw, "user": {"id": user.id, "username": user.username, "email": user.email, "plan": plan}}
+    return {"token": raw, "user": {"id": user.id, "username": user.username, "email": user.email, "plan": plan, "role": getattr(user, "role", "user"), "is_admin": is_admin_user(user)}}
 
 
 @app.post("/api/auth/register")
@@ -708,7 +730,7 @@ async def auth_register(body: RegisterBody, request: Request, session: Session =
     login, password = generate_credentials()
     while session.scalar(select(User).where(User.username == login)):
         login, password = generate_credentials()
-    user = User(email=email, username=login, password_hash=hash_password(password))
+    user = User(email=email, username=login, role="user", password_hash=hash_password(password))
     session.add(user)
     session.flush()
     user.subscription = Subscription(plan="free", status="active")
@@ -717,7 +739,7 @@ async def auth_register(body: RegisterBody, request: Request, session: Session =
     email_ok, email_message = send_credentials_email(email, login, password)
     return {
         "token": raw,
-        "user": {"id": user.id, "username": login, "email": email, "plan": "free"},
+        "user": {"id": user.id, "username": login, "email": email, "plan": "free", "role": "user", "is_admin": False},
         "credentials": {"login": login, "password": password},
         "email_message": email_message if email_ok else "Email yuborilmadi, login/parol shu yerda ko‘rsatildi."
     }
@@ -739,36 +761,56 @@ async def auth_logout(authorization: str | None = Header(default=None), session:
 async def auth_me(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
     plan = user.subscription.plan if user.subscription else "free"
-    return {"user": {"id": user.id, "username": user.username, "email": user.email, "plan": plan}}
+    return {"user": {"id": user.id, "username": user.username, "email": user.email, "plan": plan, "role": getattr(user, "role", "user"), "is_admin": is_admin_user(user)}}
 
 @app.get("/api/auth/sessions")
 async def auth_sessions(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    # Privacy rule: ordinary users can see only their own sessions; admins can
+    # see all users' active/non-revoked sessions. This is enforced server-side.
     user = current_user(authorization, session)
     now = datetime.now(timezone.utc)
-    rows = list(session.scalars(select(SessionToken).where(SessionToken.user_id == user.id).order_by(SessionToken.last_seen_at.desc())))
+    if is_admin_user(user):
+        rows = list(session.scalars(
+            select(SessionToken, User)
+            .join(User, SessionToken.user_id == User.id)
+            .order_by(SessionToken.last_seen_at.desc())
+        ).all())
+    else:
+        rows = [(row, user) for row in session.scalars(
+            select(SessionToken)
+            .where(SessionToken.user_id == user.id)
+            .order_by(SessionToken.last_seen_at.desc())
+        )]
+
     items = []
-    for row in rows:
+    raw = authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else ""
+    current_hash = token_hash(raw) if raw else ""
+    for row, owner in rows:
         exp = row.expires_at.replace(tzinfo=timezone.utc) if row.expires_at and row.expires_at.tzinfo is None else row.expires_at
         seen = row.last_seen_at.replace(tzinfo=timezone.utc) if row.last_seen_at and row.last_seen_at.tzinfo is None else row.last_seen_at
         active = bool(seen and (now - seen).total_seconds() <= 30 * 60 and not row.is_revoked and exp and exp >= now)
         if not active and row.is_revoked:
             continue
-        items.append({
+        item = {
             "id": row.id,
+            "user_id": owner.id,
+            "username": owner.username or "—",
+            "email": owner.email or "",
             "device_model": row.device_model or "Noma’lum qurilma",
             "user_agent": row.user_agent or "",
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "last_seen_at": row.last_seen_at.isoformat() if row.last_seen_at else None,
             "expires_at": row.expires_at.isoformat() if row.expires_at else None,
             "active": active,
-            "current": False,
-        })
-    raw = authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else ""
-    current_hash = token_hash(raw) if raw else ""
-    for item, row in zip(items, [r for r in rows if not r.is_revoked]):
-        if row.token_hash == current_hash:
-            item["current"] = True
-    return {"sessions": items}
+            "current": row.token_hash == current_hash,
+        }
+        # Do not leak another user's identity to ordinary users.
+        if not is_admin_user(user):
+            item.pop("user_id", None)
+            item.pop("username", None)
+            item.pop("email", None)
+        items.append(item)
+    return {"sessions": items, "scope": "all" if is_admin_user(user) else "self", "is_admin": is_admin_user(user)}
 
 @app.post("/api/auth/sessions/revoke-others")
 async def revoke_other_sessions(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
@@ -1308,7 +1350,7 @@ async def fetch_yahoo_price(symbol: str) -> float:
 
 async def get_chart_history(symbol: str, interval: str, days: int = 31) -> tuple[list[dict[str, Any]], str, str | None]:
     data=await fetch_tradingview_candles(symbol,interval,min(CANDLE_LIMIT,TRADINGVIEW_BARS))
-    return data,"tradingview",f"TradingView {TRADINGVIEW_SYMBOL} chart series"
+    return data,"tradingview",f"TradingView {tv_symbol_for(symbol)} chart series"
 
 
 def _tv_session(prefix: str) -> str:
@@ -1317,6 +1359,13 @@ def _tv_session(prefix: str) -> str:
 def _tv_frame(method: str, params: list[Any]) -> str:
     payload=json.dumps({"m":method,"p":params},separators=(",",":"))
     return f"~m~{len(payload.encode('utf-8'))}~m~{payload}"
+
+def tv_symbol_for(symbol: str) -> str:
+    """Return the TradingView symbol matching the requested instrument page."""
+    key = clean_symbol(symbol)
+    if key in {"EURUSD", "EUR/USD"}:
+        return os.getenv("TRADINGVIEW_EURUSD_SYMBOL", "OANDA:EURUSD").strip() or "OANDA:EURUSD"
+    return os.getenv("TRADINGVIEW_SYMBOL", "OANDA:XAUUSD").strip() or "OANDA:XAUUSD"
 
 def _tv_interval(interval: str) -> str:
     return {"1min":"1","5min":"5","15min":"15","30min":"30","1h":"60","4h":"240","1day":"1D"}[validate_interval(interval)]
@@ -1346,8 +1395,9 @@ async def _fetch_tradingview_candles_once(symbol: str, interval: str, limit: int
             await send("chart_create_session",[cs,""])
             await send("quote_create_session",[qs])
             await send("quote_set_fields",[qs,"lp","ch","chp"])
-            await send("quote_add_symbols",[qs,TRADINGVIEW_SYMBOL])
-            resolve=json.dumps({"symbol":TRADINGVIEW_SYMBOL,"adjustment":"splits","session":"regular"},separators=(",",":"))
+            tv_symbol = tv_symbol_for(symbol)
+            await send("quote_add_symbols",[qs,tv_symbol])
+            resolve=json.dumps({"symbol":tv_symbol,"adjustment":"splits","session":"regular"},separators=(",",":"))
             await send("resolve_symbol",[cs,"sds_sym_1","="+resolve])
             await send("create_series",[cs,"sds_1","s1","sds_sym_1",tf,int(limit),""])
             deadline=asyncio.get_running_loop().time()+TRADINGVIEW_TIMEOUT
@@ -1420,14 +1470,8 @@ async def fetch_tradingview_candles(symbol: str, interval: str, limit: int = TRA
 
 
 async def fetch_tradingview_price(symbol: str) -> float:
-    """Return the TradingView/OANDA XAUUSD quote used by the embedded chart.
-
-    OANDA:XAUUSD is a CFD/metal symbol, so try TradingView's CFD scanner first.
-    The forex scanner is retained only as a compatibility fallback.  We NEVER
-    fall back to RealMarketAPI here: a different provider would create a visible
-    price mismatch between the dashboard and the TradingView chart.
-    """
-    tv_symbol = os.getenv("TRADINGVIEW_SYMBOL", "OANDA:XAUUSD").strip() or "OANDA:XAUUSD"
+    """Return the latest TradingView quote for the requested instrument."""
+    tv_symbol = tv_symbol_for(symbol)
     payload = {
         "filter": [],
         "options": {"lang": "en"},
@@ -1459,7 +1503,7 @@ async def fetch_tradingview_price(symbol: str) -> float:
                 errors.append(f"{market}: no close")
             except Exception as exc:
                 errors.append(f"{market}: {type(exc).__name__}: {exc}")
-    raise MarketDataError("TradingView OANDA:XAUUSD quote unavailable. " + " | ".join(errors))
+    raise MarketDataError(f"TradingView {tv_symbol} quote unavailable. " + " | ".join(errors))
 
 
 async def fetch_realmarket_price(symbol: str, interval: str = DEFAULT_INTERVAL) -> float:
@@ -1509,7 +1553,7 @@ async def fetch_live_price_any(symbol: str, interval: str = DEFAULT_INTERVAL) ->
     if cached and now-cached[0]<1.0:return cached[1],cached[2]
     bars=await fetch_tradingview_candles(symbol,interval,2)
     if not bars: raise MarketDataError("TradingView returned no live candle")
-    price=float(bars[-1]["close"]); source=f"TradingView {TRADINGVIEW_SYMBOL} chart series"
+    price=float(bars[-1]["close"]); source=f"TradingView {tv_symbol_for(symbol)} chart series"
     LIVE_PRICE_CACHE[key]=(now,price,source); return price,source
 
 def merge_live_price_into_candles(candles: list[dict[str, Any]], interval: str, price: float) -> list[dict[str, Any]]:
@@ -1541,7 +1585,7 @@ def merge_live_price_into_candles(candles: list[dict[str, Any]], interval: str, 
 async def get_candles(symbol: str, interval: str, limit: int) -> tuple[list[dict[str, Any]], str, str | None]:
     interval = validate_interval(interval)
     data, _, _ = await get_chart_history(symbol, interval, max(31, min(limit, 260)))
-    return data[-limit:], "tradingview", f"TradingView {TRADINGVIEW_SYMBOL} chart series"
+    return data[-limit:], "tradingview", f"TradingView {tv_symbol_for(symbol)} chart series"
 
 
 async def get_pivot_reference(symbol: str) -> tuple[dict[str, float], str | None]:
@@ -2898,7 +2942,7 @@ async def candles_endpoint(symbol: str, interval: str = Query(DEFAULT_INTERVAL),
             "interval": interval,
             "mode": "live",
             "provider": "TradingView",
-            "source": TRADINGVIEW_SYMBOL,
+            "source": tv_symbol_for(symbol),
             "candles": rows,
             "candle": rows[-1],
             "warning": None,
@@ -2908,7 +2952,8 @@ async def candles_endpoint(symbol: str, interval: str = Query(DEFAULT_INTERVAL),
 
 
 @app.get("/api/v1/book-openai-analysis/{symbol:path}")
-async def get_book_openai_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
+async def get_book_openai_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    require_admin(authorization, session)
     try:
         return await book_openai_second_opinion(clean_symbol(symbol), validate_interval(interval))
     except Exception as exc:
@@ -2931,7 +2976,7 @@ async def quote(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[st
         return {
             "symbol": symbol, "price": round(float(price), 4), "mode": "live",
             "provider": source, "timestamp": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
-            "source": "TradingView OANDA:XAUUSD chart series",
+            "source": tv_symbol_for(symbol),
         }
     except Exception as exc:
         raise HTTPException(status_code=503, detail="TradingView live quote unavailable: " + str(exc))
@@ -2977,7 +3022,8 @@ async def get_classic_trade(symbol: str, interval: str = Query(DEFAULT_INTERVAL)
         raise HTTPException(status_code=503, detail="Classic Trade unavailable: "+str(exc))
 
 @app.get("/api/v1/ai-smart-analysis/{symbol:path}")
-async def get_ai_smart_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
+async def get_ai_smart_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    require_admin(authorization, session)
     try:
         analysis = await build_full_analysis(clean_symbol(symbol), validate_interval(interval))
         ai = analysis.get("ai_smart") or {}
@@ -3007,7 +3053,7 @@ async def get_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> 
         technical["ai_validation"] = None
         return {
             "ok": True, "symbol": symbol, "interval": interval, "mode": "tradingview",
-            "provider": "TradingView", "source": TRADINGVIEW_SYMBOL,
+            "provider": "TradingView", "source": tv_symbol_for(symbol),
             "current_price": round(float(candles_data[-1]["close"]), 4),
             "candles": candles_data, "candle_time": candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time"), "levels": levels, "technical": technical,
             "setup": setup, "direction": setup.get("signal", "WAIT"),
@@ -3348,6 +3394,7 @@ async def get_ict_signals(symbol: str) -> dict[str, Any]:
 
 @app.get("/api/v1/signals/advanced/{symbol:path}")
 async def advanced_signals(symbol: str, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    require_admin(authorization, session)
     key = clean_symbol(symbol)
     now = asyncio.get_running_loop().time()
     cached = ADVANCED_SIGNAL_CACHE.get(key)
@@ -3362,6 +3409,7 @@ async def advanced_signals(symbol: str, authorization: str | None = Header(defau
 
 @app.post("/api/v1/signals/auto-record")
 async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    require_admin(authorization, session)
     """Auto-enter only ultra-conservative setups using confidence >=84.99%, strong zones, AI confirmation, and MTF alignment."""
     user = current_user(authorization, session)
     key = clean_symbol(symbol)
@@ -3552,11 +3600,12 @@ async def trend_lines(symbol: str, interval: str = DEFAULT_INTERVAL) -> dict[str
                 "generated_at": datetime.now(timezone.utc).isoformat()}
 
 @app.get("/api/v1/signals/live/{symbol:path}")
-async def live_signals(symbol: str) -> dict[str, Any]:
+async def live_signals(symbol: str, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    require_admin(authorization, session)
     # Every request recomputes signals from the current live candle feed.
     # No demo/static signal data is used.
     result = await build_advanced_signals(clean_symbol(symbol), news_blocked=False)
-    return {**result, "mode": "live", "source": f"TradingView {TRADINGVIEW_SYMBOL} chart series"}
+    return {**result, "mode": "live", "source": f"TradingView {tv_symbol_for(symbol)} chart series"}
 
 @app.post("/api/v1/signals/save-advanced")
 async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
@@ -3616,6 +3665,7 @@ class MT5StateBody(BaseModel):
     positions: int = 0
     error: str = ""
     candles: dict[str, list[dict[str, Any]]] = {}
+    markets: dict[str, dict[str, Any]] = {}
 
 class MT5ReportBody(BaseModel):
     action: str = ""
@@ -3756,7 +3806,8 @@ class AIControlBody(BaseModel):
     all_enabled: bool | None = None
 
 @app.post("/api/v1/ai/providers/control")
-async def ai_providers_control(body: AIControlBody):
+async def ai_providers_control(body: AIControlBody, authorization: str | None = Header(default=None), session: Session = Depends(db)):
+    require_admin(authorization, session)
     global AI_AUTO_MODE
     if body.all_enabled is not None:
         for p in list(AI_PROVIDER_ENABLED):
@@ -3772,7 +3823,8 @@ async def ai_providers_control(body: AIControlBody):
     raise HTTPException(status_code=400, detail="provider yoki all_enabled kerak")
 
 @app.get("/api/v1/ai/providers")
-async def ai_providers_status():
+async def ai_providers_status(authorization: str | None = Header(default=None), session: Session = Depends(db)):
+    require_admin(authorization, session)
     # Only configured providers are exposed to the dashboard. Missing-key
     # providers are intentionally hidden instead of showing "OFFLINE".
     configured={
@@ -3817,7 +3869,8 @@ async def ai_providers_status():
     return {"order":[x["id"] for x in providers],"router":"score","providers":providers}
 
 @app.get("/api/v1/mt5/status")
-async def mt5_status(symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+async def mt5_status(symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    require_admin(authorization, session)
     key = _mt5_market_key(symbol)
     state = dict(_mt5_market_state(key))
     raw_seen = state.get("last_seen")
@@ -3832,7 +3885,8 @@ async def mt5_status(symbol: str = DEFAULT_SYMBOL, authorization: str | None = H
     return {"ok": True, "symbol": key, "auto_trading": MT5_AUTO_TRADING, "lot": MT5_LOT_SIZE, "state": state, "queue": len(MT5_ORDER_QUEUE), "demo_only": True, "heartbeat_timeout_sec": MT5_HEARTBEAT_TIMEOUT}
 
 @app.post("/api/v1/mt5/connect")
-async def mt5_connect(body: MT5ConnectBody, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+async def mt5_connect(body: MT5ConnectBody, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    require_admin(authorization, session)
     if not body.demo:
         raise HTTPException(status_code=400, detail="Faqat DEMO hisob ulanishi mumkin.")
     if not body.login or not body.server or not body.password:
@@ -3842,7 +3896,8 @@ async def mt5_connect(body: MT5ConnectBody, authorization: str | None = Header(d
     return {"ok": True, "demo_only": True, "connected": False, "message": "Ma'lumotlar qabul qilindi. Exness DEMO MT5 terminalida EA/bridge ishga tushirilgach ulanish tasdiqlanadi."}
 
 @app.post("/api/v1/mt5/lot")
-async def mt5_lot(body: MT5LotBody, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+async def mt5_lot(body: MT5LotBody, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    require_admin(authorization, session)
     global MT5_LOT_SIZE
     lot = float(body.lot)
     if not (0.01 <= lot <= 100.0):
@@ -3852,7 +3907,8 @@ async def mt5_lot(body: MT5LotBody, authorization: str | None = Header(default=N
     return {"ok": True, "lot": MT5_LOT_SIZE, "demo_only": True}
 
 @app.post("/api/v1/mt5/auto-trading")
-async def mt5_auto_trading(enabled: bool = Query(...), authorization: str | None = Header(default=None)) -> dict[str, Any]:
+async def mt5_auto_trading(enabled: bool = Query(...), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    require_admin(authorization, session)
     global MT5_AUTO_TRADING
     MT5_AUTO_TRADING = bool(enabled)
     return {"ok": True, "auto_trading": MT5_AUTO_TRADING, "demo_only": True}
@@ -3883,6 +3939,32 @@ async def mt5_state(body: MT5StateBody, token: str = Query(...)) -> dict[str, An
     if not secrets.compare_digest(token, MT5_BRIDGE_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid MT5 bridge token")
     now_iso = datetime.now(timezone.utc).isoformat()
+    markets_payload = body.markets or {}
+    if markets_payload:
+        saved = []
+        for raw_key, raw_market in markets_payload.items():
+            key = _mt5_market_key(raw_key)
+            if not isinstance(raw_market, dict):
+                continue
+            snapshot = {
+                "connected": bool(raw_market.get("connected", body.connected)),
+                "account": raw_market.get("account") or body.login or None,
+                "server": raw_market.get("server") or body.server or None,
+                "balance": raw_market.get("balance", body.balance),
+                "equity": raw_market.get("equity", body.equity),
+                "free_margin": raw_market.get("free_margin", body.free_margin),
+                "margin": raw_market.get("margin", body.margin),
+                "positions": raw_market.get("positions", body.positions),
+                "last_seen": now_iso,
+                "last_error": raw_market.get("error") or body.error or "",
+                "symbol": key,
+                "candles": raw_market.get("candles") or {},
+            }
+            MT5_BRIDGE_STATE.setdefault("markets", {})[key] = snapshot
+            saved.append(key)
+        # Keep global heartbeat fresh while preserving the per-symbol snapshots.
+        MT5_BRIDGE_STATE.update({"connected": bool(body.connected), "login": body.login or None, "server": body.server or None, "last_seen": now_iso, "last_error": body.error or "", "symbol": saved[0] if saved else body.symbol or None})
+        return {"ok": True, "symbols": saved}
     key = _mt5_market_key(body.symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL)
     snapshot = {"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": now_iso, "last_error": body.error or "", "symbol": key, "candles": body.candles or {}}
     MT5_BRIDGE_STATE.update(snapshot)

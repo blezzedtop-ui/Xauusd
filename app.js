@@ -1,5 +1,18 @@
-const IS_EUR_PAGE=/^\/eurusd(?:\/?$)/i.test(location.pathname);const symbol=IS_EUR_PAGE?'EUR/USD':'XAU/USD';const TV_SYMBOL=IS_EUR_PAGE?'OANDA:EURUSD':'OANDA:XAUUSD';let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,lastRestQuoteAt=0,streamKey='';
+let IS_ADMIN=false;const IS_EUR_PAGE=/^\/eurusd(?:\/?$)/i.test(location.pathname);const symbol=IS_EUR_PAGE?'EUR/USD':'XAU/USD';const TV_SYMBOL=IS_EUR_PAGE?'OANDA:EURUSD':'OANDA:XAUUSD';let interval='5min',pivotInterval='5min',aiInterval='5min',signalInterval='5min',token=localStorage.getItem('trading_token')||'',authMode='login',chart,series,chart2,series2,countdownData={close_timestamp:null},marketWS=null,liveCandle=null,lastTickTs=0,lastRestQuoteAt=0,streamKey='';
 const $=id=>document.getElementById(id);let trendLineInterval='5min';let trendLiveRefreshTimer=null;let trendOverlayChart=null,trendOverlaySeries=null,trendOverlayLayers=[];const setText=(id,v)=>{const el=$(id);if(el)el.textContent=v??'—';};const fmt=v=>v==null?'—':Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4});
+
+function applyRoleAccess(isAdmin){
+  IS_ADMIN=!!isAdmin;
+  document.body.classList.toggle('is-admin', IS_ADMIN);
+  document.querySelectorAll('.admin-only').forEach(el=>{el.setAttribute('aria-hidden', IS_ADMIN?'false':'true');});
+  if(!IS_ADMIN){
+    const active=document.querySelector('.section.active.admin-only');
+    if(active){ openSection('overview'); }
+  }
+}
+function requireAdminClient(){
+  if(!IS_ADMIN) throw Error('Bu bo‘lim faqat administrator uchun. Oddiy user AI tizimidan foydalana olmaydi.');
+}
 function showToast(m){$('toast').textContent=m;$('toast').classList.add('show');setTimeout(()=>$('toast').classList.remove('show'),2300)}
 
 // Cloud deployment: when the frontend and FastAPI are on the same Railway service, leave API_BASE_URL empty.
@@ -72,6 +85,7 @@ function setTf(v){
  connectMarketStream();
 }
 async function loadAIProviders(){
+  if(!IS_ADMIN)return;
   const el=$('aiProvidersGrid'); if(!el)return;
   try{
     const d=await api('/api/v1/ai/providers');
@@ -81,10 +95,11 @@ async function loadAIProviders(){
   }catch(e){el.innerHTML='<div class="mini">AI provider status unavailable.</div>'}
 }
 
-async function controlAIProvider(provider, enabled){ await api('/api/v1/ai/providers/control',{method:'POST',body:JSON.stringify({provider,enabled})}); await loadAIProviders(); }
+async function controlAIProvider(provider, enabled){ requireAdminClient(); await api('/api/v1/ai/providers/control',{method:'POST',body:JSON.stringify({provider,enabled})}); await loadAIProviders(); }
 function bindAIControls(){ const grid=$('aiProvidersGrid'); if(!grid||grid.dataset.controlsBound==='1')return; grid.dataset.controlsBound='1'; grid.addEventListener('click',e=>{const b=e.target.closest('[data-ai-toggle]'); if(!b)return; const provider=b.dataset.aiToggle; const enabled=b.dataset.enabled!=='true'; controlAIProvider(provider,enabled).catch(err=>showToast(err.message||'AI boshqaruv xatosi'));}); ['aiAllOn','aiAllOff','aiAutoMode'].forEach(id=>{const b=$(id); if(!b||b.dataset.bound==='1')return; b.dataset.bound='1'; b.addEventListener('click',async()=>{try{await api('/api/v1/ai/providers/control',{method:'POST',body:JSON.stringify({all_enabled:id!=='aiAllOff'})}); await loadAIProviders(); showToast('AI sozlamalari yangilandi');}catch(err){showToast(err.message||'AI boshqaruv xatosi')}})}); }
 
 async function loadSignalEngine(){
+  requireAdminClient();
   const grid=$('signalEngineGrid'); if(!grid)return;
   const order=['1min','5min','15min','30min','1h','4h','1day'];
   grid.innerHTML=order.map(tf=>`<div class="metric"><small>${tfName(tf)}</small><b class="wait">...</b><div class="mini">Signal hisoblanmoqda</div></div>`).join('');
@@ -135,6 +150,7 @@ async function loadAnalysisOnly(){
   }catch(e){ $('taState').textContent='ERROR'; $('taSummary').textContent='Technical Analysis error: '+e.message; return null; }
 }
 async function loadSmartAnalysis(){
+  requireAdminClient();
   try{
     const d=await api(`/api/v1/ai-smart-analysis/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(interval)}`);
     const ai=d?.ai||{}; const bias=ai.bias||d?.direction||'NEUTRAL'; const signal=d?.direction||'WAIT';
@@ -303,7 +319,7 @@ async function loadICTSignals(){
   }
 }
 
-async function loadAdvancedSignals(){$('advancedStatus').textContent='7 timeframe hisoblanmoqda…';$('advancedGrid').innerHTML='<div class="card">Signal hisoblanmoqda...</div>';try{const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);const order=['1min','5min','15min','30min','1h','4h','1day'];$('advancedGrid').innerHTML=order.map(tf=>advCard(tf,d.timeframes?.[tf]||{})).join('');if(token) order.forEach(tf=>recordModuleSignal('Signal Lab',d,d.timeframes?.[tf]||{},tf,d.timeframes?.[tf]?.candle_time||liveCandle?.time));$('advancedStatus').textContent=`${symbol} · ${new Date(d.generated_at).toLocaleString()} · har bir timeframe alohida`; }catch(e){$('advancedStatus').textContent=e.message;$('advancedGrid').innerHTML='<div class="card">Signal yuklanmadi.</div>'}}
+async function loadAdvancedSignals(){if(!IS_ADMIN)return;$('advancedStatus').textContent='7 timeframe hisoblanmoqda…';$('advancedGrid').innerHTML='<div class="card">Signal hisoblanmoqda...</div>';try{const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);const order=['1min','5min','15min','30min','1h','4h','1day'];$('advancedGrid').innerHTML=order.map(tf=>advCard(tf,d.timeframes?.[tf]||{})).join('');if(token) order.forEach(tf=>recordModuleSignal('Signal Lab',d,d.timeframes?.[tf]||{},tf,d.timeframes?.[tf]?.candle_time||liveCandle?.time));$('advancedStatus').textContent=`${symbol} · ${new Date(d.generated_at).toLocaleString()} · har bir timeframe alohida`; }catch(e){$('advancedStatus').textContent=e.message;$('advancedGrid').innerHTML='<div class="card">Signal yuklanmadi.</div>'}}
 document.addEventListener('click',e=>{ const b=e.target.closest('.history-period'); if(!b)return; historyPeriod=b.dataset.historyPeriod||'all'; localStorage.setItem('history_period',historyPeriod); syncHistoryPeriodButtons(); loadStats().catch(()=>{}); loadHistory().catch(()=>{});  });
 
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-save-advanced]');if(!b)return;const tf=b.dataset.saveAdvanced;b.disabled=true;try{await api(`/api/v1/signals/save-advanced?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}`,{method:'POST'});showToast(tfName(tf)+' signal saqlandi');loadStats();if($('historySection').classList.contains('active'))loadHistory()}catch(err){showToast(err.message)}finally{b.disabled=false}});
@@ -327,7 +343,7 @@ let snrInterval='5min';
 function snrFmt(v){return v==null||!Number.isFinite(Number(v))?'—':fmt(Number(v));}
 async function loadSNR(tf=snrInterval){try{const d=await api(`/api/v1/snr/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`);const x=d.snr||{};$('snrPrice').textContent=snrFmt(d.current_price);$('snrPosition').textContent=x.position||'—';const sig=x.signal||'WAIT',el=$('snrSignal');el.textContent=sig;el.className=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';$('snrConfidence').textContent=`${x.confidence??0}%`;$('snrSupportZone').textContent=snrFmt(x.support?.mid);$('snrSupportRange').textContent=`${snrFmt(x.support?.low)} – ${snrFmt(x.support?.high)}`;$('snrSupportStrength').textContent=`${x.support?.strength??0}%`;$('snrSupportRetests').textContent=x.support?.retests??0;$('snrSupportDistance').textContent=x.support?.distance_pct!=null?`${Number(x.support.distance_pct).toFixed(2)}%`:'—';$('snrSupportStatus').textContent=x.support?.status||'—';$('snrResistanceZone').textContent=snrFmt(x.resistance?.mid);$('snrResistanceRange').textContent=`${snrFmt(x.resistance?.low)} – ${snrFmt(x.resistance?.high)}`;$('snrResistanceStrength').textContent=`${x.resistance?.strength??0}%`;$('snrResistanceRetests').textContent=x.resistance?.retests??0;$('snrResistanceDistance').textContent=x.resistance?.distance_pct!=null?`${Number(x.resistance.distance_pct).toFixed(2)}%`:'—';$('snrResistanceStatus').textContent=x.resistance?.status||'—';$('snrReason').textContent=x.reason||'—';$('snrMethod').textContent=`${tfName(tf)} · ${x.method||'SNR engine'}`; await recordModuleSignal('SNR',d,x,tf,d.candle_time); }catch(e){$('snrReason').textContent='SNR error: '+(e.message||'server error')}}
 document.addEventListener('click',e=>{const b=e.target.closest('[data-snr-interval]');if(b){document.querySelectorAll('[data-snr-interval]').forEach(x=>x.classList.toggle('active',x===b));snrInterval=b.dataset.snrInterval;loadSNR(snrInterval).catch(()=>{})}});
-async function loadAISignals(){ try{ const d=await api(`/api/v1/signals/live/${encodeURIComponent(symbol)}`); const x=d?.timeframes?.[interval]||{}; const sig=String(x.signal||'WAIT'); $('aiSigSignal').textContent=sig; $('aiSigSignal').className=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait'; $('aiSigConfidence').textContent=(x.confidence??0)+'%'; $('aiSigEntry').textContent=fmt(x.entry); $('aiSigSL').textContent=fmt(x.stop_loss); $('aiSigTP1').textContent=fmt((x.take_profit||[])[0]); $('aiSigTP2').textContent=fmt((x.take_profit||[])[1]); $('aiSigRR').textContent=x.risk_reward?`1 : ${x.risk_reward}`:'—'; $('aiSigMode').textContent=(x.confidence??0)>=84?'SIGNAL':'WAIT'; $('aiSigReason').textContent=(x.reason||'Quantitative + AI signal') + (x.ai_validation ? ` | AI ${x.ai_consensus||'—'} · ${x.ai_validation.confidence??0}%` : ''); await recordModuleSignal('AI Signals',d,x,interval,x.candle_time||d.candle_time); }catch(e){ $('aiSigReason').textContent='AI Signals error: '+(e.message||'server error'); } }
+async function loadAISignals(){ if(!IS_ADMIN)return; try{ const d=await api(`/api/v1/signals/live/${encodeURIComponent(symbol)}`); const x=d?.timeframes?.[interval]||{}; const sig=String(x.signal||'WAIT'); $('aiSigSignal').textContent=sig; $('aiSigSignal').className=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait'; $('aiSigConfidence').textContent=(x.confidence??0)+'%'; $('aiSigEntry').textContent=fmt(x.entry); $('aiSigSL').textContent=fmt(x.stop_loss); $('aiSigTP1').textContent=fmt((x.take_profit||[])[0]); $('aiSigTP2').textContent=fmt((x.take_profit||[])[1]); $('aiSigRR').textContent=x.risk_reward?`1 : ${x.risk_reward}`:'—'; $('aiSigMode').textContent=(x.confidence??0)>=84?'SIGNAL':'WAIT'; $('aiSigReason').textContent=(x.reason||'Quantitative + AI signal') + (x.ai_validation ? ` | AI ${x.ai_consensus||'—'} · ${x.ai_validation.confidence??0}%` : ''); await recordModuleSignal('AI Signals',d,x,interval,x.candle_time||d.candle_time); }catch(e){ $('aiSigReason').textContent='AI Signals error: '+(e.message||'server error'); } }
 function tlClass(sig){return sig==='BUY'||sig==='STRONG BUY'?'buy':sig==='SELL'||sig==='STRONG SELL'?'sell':'wait'}
 function trendCard(tf,x){
   const tl=x.trendline||{}, fib=x.fibonacci||{}, adv=x.advanced||{}; const sig=adv.signal||tl.signal||'WAIT'; const power=tl.trend_power??0;
@@ -423,11 +439,11 @@ async function loadTrendLines(tf=trendLineInterval){
     const buys=dirs.filter(v=>v==='BUY').length,sells=dirs.filter(v=>v==='SELL').length;
     $('trendMatrixFinal').textContent=buys>=4?'🟢 STRONG BUY':sells>=4?'🔴 STRONG SELL':buys>=3?'🟢 BUY':sells>=3?'🔴 SELL':'🟡 WAIT';
     if(token){ await recordModuleSignal('Auto Trend Line', {interval:tf,candle_time:(tl.candles||[]).at(-1)?.time,signal:t.signal||'WAIT',confidence:t.trend_power??0,entry:x.entry,stop_loss:x.stop_loss,take_profit:x.take_profit,trendline:t,fibonacci:fib}, x, tf, (tl.candles||[]).at(-1)?.time); }
-    $('trendLineStatus').textContent=`${symbol} · ${tfName(tf)} · Trend Line + Fibonacci · FAQAT Exness MT5 XAUUSDm candlelari · ${new Date(tl.generated_at).toLocaleString()}`;
+    $('trendLineStatus').textContent=`${symbol} · ${tfName(tf)} · Trend Line + Fibonacci · FAQAT Exness MT5 ${IS_EUR_PAGE?'EURUSDm':'XAUUSDm'} candlelari · ${new Date(tl.generated_at).toLocaleString()}`;
     if($('trendChartTf')) $('trendChartTf').textContent=tfName(tf);
   }catch(e){$('trendLineStatus').textContent='Trend Line error: '+e.message;}
 }
-function openSection(id){const target=$(id);if(!target)return;document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',aiSignalsSection:'AI Signals',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{})},50);}if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='aiSignalsSection')loadAISignals().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section')loadMT5Status().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
+function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',aiSignalsSection:'AI Signals',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{})},50);}if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='aiSignalsSection')loadAISignals().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section')loadMT5Status().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
 
 document.addEventListener('click',e=>{const b=e.target.closest('[data-classic-interval]');if(b){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===b));classicInterval=b.dataset.classicInterval;loadClassicTrade(classicInterval)}});
 document.addEventListener('click',e=>{
@@ -444,6 +460,7 @@ document.addEventListener('click',e=>{
   }
 });
 async function loadSelectedSignal(tf){
+  if(!IS_ADMIN)return;
   try{
     const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);
     const x=d.timeframes?.[tf]||{};
@@ -536,7 +553,8 @@ async function loadActiveSessions(){
       const created=x.created_at?new Date(x.created_at).toLocaleString(): '—';
       const status=x.active?'🟢 Faol':'🟡 Faol emas';
       const current=x.current?' · Joriy qurilma':'';
-      return `<div class="advanced-card"><div class="advanced-head"><div><div class="mini">${status}${current}</div><div class="advanced-signal wait">${safeText(x.device_model||'Noma’lum qurilma')}</div></div><span class="pill">ID ${safeText(x.id)}</span></div><div class="mini">Oxirgi faollik: ${safeText(seen)}</div><div class="mini">Yaratilgan: ${safeText(created)}</div></div>`;
+      const owner=IS_ADMIN&&x.username?`<div class="mini">👤 ${safeText(x.username)}${x.email?` · ${safeText(x.email)}`:''}</div>`:'';
+      return `<div class="advanced-card"><div class="advanced-head"><div>${owner}<div class="mini">${status}${current}</div><div class="advanced-signal wait">${safeText(x.device_model||'Noma’lum qurilma')}</div></div><span class="pill">ID ${safeText(x.id)}</span></div><div class="mini">Oxirgi faollik: ${safeText(seen)}</div><div class="mini">Yaratilgan: ${safeText(created)}</div></div>`;
     }).join('');
   }catch(e){ grid.innerHTML=`<div class="mini">Seanslar xatosi: ${safeText(e.message||'server xatosi')}</div>`; }
 }
@@ -547,7 +565,7 @@ async function revokeOtherSessions(){
   showToast(`Boshqa seanslar yopildi: ${d.revoked||0}`);
 }
 
-async function loadMT5Status(){
+async function loadMT5Status(){ if(!IS_ADMIN)return;
   const d=await api(`/api/v1/mt5/status?symbol=${encodeURIComponent(symbol)}`); const st=d.state||{};
   const connState=String(st.connection_state||'').toUpperCase();
   const connLabel=connState==='CONNECTED' || st.connected ? '🟢 CONNECTED' : (connState==='STALE' ? '🟡 STALE' : '🔴 DISCONNECTED');
@@ -557,15 +575,15 @@ async function loadMT5Status(){
   const on=!!d.auto_trading; setText('mt5AutoState',on?'🟢 ON':'🔴 OFF'); setText('mt5AutoInfo',on?'Auto trading yoqilgan. Faqat ≥84.99% + Strong Zone + AI tasdiq + MTF moslik setup navbatiga tushadi.':"OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.");
   
 }
-async function connectMT5(){
+async function connectMT5(){ requireAdminClient();
   const login=String($('mt5Login')?.value||'').trim(), server=String($('mt5Server')?.value||'').trim(), password=String($('mt5Password')?.value||'');
   if(!login||!server||!password) throw Error('MT5 Login, Server va Trading Password kiriting.');
   const d=await api('/api/v1/mt5/connect',{method:'POST',body:JSON.stringify({login,server,password,demo:true})});
   sessionStorage.setItem('mt5_login',login); sessionStorage.setItem('mt5_server',server); sessionStorage.removeItem('mt5_password');
   $('mt5Password').value=''; await loadMT5Status(); showToast(d.message||'MT5 ma’lumotlari qabul qilindi');
 }
-async function saveMT5Lot(){ const raw=parseFloat(String($('mt5Lot')?.value||'0')); if(!Number.isFinite(raw)||raw<0.01||raw>100) throw Error('Lot 0.01 dan 100 gacha bo‘lishi kerak.'); const d=await api('/api/v1/mt5/lot',{method:'POST',body:JSON.stringify({lot:raw})}); setText('mt5Lot',String(d.lot??raw)); showToast('Lot saqlandi: '+(d.lot??raw)); await loadMT5Status(); }
-async function setMT5Auto(enabled){ const d=await api('/api/v1/mt5/auto-trading?enabled='+(enabled?'true':'false'),{method:'POST'}); await loadMT5Status(); showToast(enabled?'AUTO TRADING ON':'AUTO TRADING OFF'); }
+async function saveMT5Lot(){ requireAdminClient(); const raw=parseFloat(String($('mt5Lot')?.value||'0')); if(!Number.isFinite(raw)||raw<0.01||raw>100) throw Error('Lot 0.01 dan 100 gacha bo‘lishi kerak.'); const d=await api('/api/v1/mt5/lot',{method:'POST',body:JSON.stringify({lot:raw})}); setText('mt5Lot',String(d.lot??raw)); showToast('Lot saqlandi: '+(d.lot??raw)); await loadMT5Status(); }
+async function setMT5Auto(enabled){ requireAdminClient(); const d=await api('/api/v1/mt5/auto-trading?enabled='+(enabled?'true':'false'),{method:'POST'}); await loadMT5Status(); showToast(enabled?'AUTO TRADING ON':'AUTO TRADING OFF'); }
 function bindCriticalButtons(){
   const run=(id,fn)=>{const b=$(id);if(!b||b.dataset.directBound==='1')return;b.dataset.directBound='1';b.addEventListener('click',async e=>{e.preventDefault();e.stopPropagation();if(b.disabled)return;const old=b.innerHTML;b.disabled=true;b.innerHTML='⟳ Ishlanmoqda…';try{await fn();showToast(id==='authBtn'?'':'Yangilandi')}catch(err){console.error('DIRECT BUTTON',id,err);showToast((err?.message||'Server xatosi'))}finally{b.disabled=false;b.innerHTML=old}});};
   const auth=$('authBtn');
@@ -593,7 +611,7 @@ function bindUIActions(){
 }
 document.addEventListener('click',e=>{const b=e.target.closest('[data-trend-interval]');if(b){e.preventDefault();document.querySelectorAll('[data-trend-interval]').forEach(x=>x.classList.toggle('active',x===b));trendLineInterval=b.dataset.trendInterval;loadTrendLines(trendLineInterval);}});
 if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',()=>{bindUIActions();bindCriticalButtons()},{once:true});}else{bindUIActions();bindCriticalButtons();}
-async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(()=>{});token='';localStorage.removeItem('trading_token');$('plan').textContent='Guest';$('authBtn').textContent='Kirish';loadStats();loadHistory();$('authModal').classList.remove('show');$('authMsg').textContent='';showToast('Tizimdan chiqildi')};$('authForm').onsubmit=async e=>{
+async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(()=>{});token='';localStorage.removeItem('trading_token');applyRoleAccess(false);$('plan').textContent='Guest';$('authBtn').textContent='Kirish';loadStats();loadHistory();$('authModal').classList.remove('show');$('authMsg').textContent='';showToast('Tizimdan chiqildi')};$('authForm').onsubmit=async e=>{
  e.preventDefault();
  const identity=String($('email').value||'').trim();
  const password=String($('password').value||'');
@@ -606,7 +624,9 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
    if(!d || !d.token) throw Error('Server login javobida token qaytarmadi.');
    token=d.token;
    localStorage.setItem('trading_token',token);
-   $('plan').textContent=d.user?.plan||'free';
+   const u=d.user||{};
+   applyRoleAccess(!!(u.is_admin||u.role==='admin'||u.plan==='admin'));
+   $('plan').textContent=IS_ADMIN?'ADMIN':(u.plan||'free');
    $('authBtn').textContent='Chiqish';
    if(authMode==='register' && d.credentials){
      $('authMsg').textContent=(d.email_message||'Hisob yaratildi')+' Login: '+d.credentials.login+' | Parol: '+d.credentials.password;
@@ -640,8 +660,8 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
     loadSessions().catch(()=>{}); loadMT5Status().catch(()=>{});
     if(token){
       autoEntryTick().catch(()=>{});
-      try{const me=await api('/api/auth/me');$('plan').textContent=me.plan||'free';$('authBtn').textContent='Chiqish'}
-      catch(_){token='';localStorage.removeItem('trading_token')}
+      try{const me=await api('/api/auth/me');const u=me.user||{};IS_ADMIN=!!(u.is_admin||u.role==='admin'||u.plan==='admin');applyRoleAccess(IS_ADMIN);$('plan').textContent=IS_ADMIN?'ADMIN':(u.plan||'free');$('authBtn').textContent='Chiqish'}
+      catch(_){token='';localStorage.removeItem('trading_token');applyRoleAccess(false)}
       loadStats().catch(()=>{}); loadHistory().catch(()=>{});
     }
     // Lightweight quote heartbeat; do not hammer REST APIs.
@@ -649,10 +669,10 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
     // Main signal/analysis refresh.
     setInterval(()=>{
       if(document.visibilityState!=='visible') return;
-      if(token) autoEntryTick().catch(()=>{});
+      if(token && IS_ADMIN) autoEntryTick().catch(()=>{});
       loadAnalysisOnly().catch(()=>{});
-      if($('overview').classList.contains('active')) loadSignalEngine().catch(()=>{});
-      if($('signalsSection').classList.contains('active')) loadAutoSignals().catch(()=>{});if($('aiSignalsSection').classList.contains('active')) loadAISignals().catch(()=>{});if($('ictSection').classList.contains('active')) loadICTSignals().catch(()=>{});
+      if(IS_ADMIN && $('overview').classList.contains('active')) loadSignalEngine().catch(()=>{});
+      if(IS_ADMIN && $('signalsSection').classList.contains('active')) loadAutoSignals().catch(()=>{});if(IS_ADMIN && $('aiSignalsSection').classList.contains('active')) loadAISignals().catch(()=>{});if($('ictSection').classList.contains('active')) loadICTSignals().catch(()=>{});
       if($('signalSection').classList.contains('active')) loadSelectedSignal(signalInterval).catch(()=>{});
       if($('classicSection').classList.contains('active')) loadClassicTrade(classicInterval).catch(()=>{});
       if($('snrSection').classList.contains('active')) loadSNR(snrInterval).catch(()=>{});
@@ -677,3 +697,17 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
     try{mountTradingView('chart', interval)}catch(_){}
   }
 })();;
+
+/* SignalX V3 mobile sidebar drawer — navigation only, no trading logic changes. */
+(function(){
+  const openMenu=()=>{document.body.classList.add('sx-menu-open');const b=document.getElementById('sxMobileMenu');if(b)b.setAttribute('aria-expanded','true');};
+  const closeMenu=()=>{document.body.classList.remove('sx-menu-open');const b=document.getElementById('sxMobileMenu');if(b)b.setAttribute('aria-expanded','false');};
+  document.addEventListener('click',function(e){
+    const menu=e.target.closest('#sxMobileMenu');
+    if(menu){e.preventDefault();document.body.classList.contains('sx-menu-open')?closeMenu():openMenu();return;}
+    if(e.target.closest('#sxSidebarOverlay')){closeMenu();return;}
+    const nav=e.target.closest('.sidebar .nav button');
+    if(nav) setTimeout(closeMenu,60);
+  });
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMenu();});
+})();
