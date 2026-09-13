@@ -1007,3 +1007,28 @@ body:after{content:""!important;position:fixed!important;inset:0!important;z-ind
     padding:7px 10px!important;
   }
 }
+
+
+/* === SIGNALX OVERVIEW RE-ORGANIZATION 2026-09-13 === */
+.overview-dashboard{grid-template-columns:minmax(0,1fr) 390px!important;gap:14px!important}
+.overview-left,.overview-right{min-width:0!important}
+.overview-tv-card{overflow:hidden!important}
+.overview-bottom-grid{display:grid!important;grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr);gap:14px;margin-top:14px}
+.overview-ai-card{overflow:hidden!important}
+.ai-signals-art{position:relative;height:220px;margin:0 0 12px;border:1px solid rgba(55,207,255,.24);border-radius:14px;overflow:hidden;background:#020617;box-shadow:inset 0 0 35px rgba(40,90,255,.10),0 0 28px rgba(60,90,255,.08)}
+.ai-signals-art:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(2,7,22,.02),rgba(2,7,22,.30));pointer-events:none}
+.ai-signals-art img{width:100%;height:100%;display:block;object-fit:cover;object-position:center;filter:saturate(1.08) contrast(1.04)}
+.ai-signals-box{margin-top:0!important}
+.ai-sig-reason{margin-top:9px;padding-top:8px;border-top:1px solid rgba(55,207,255,.12);line-height:1.45}
+.overview-right>.card{margin-bottom:14px}
+.signal-engine-page{max-width:none!important}
+@media(max-width:1100px){
+  .overview-dashboard{grid-template-columns:minmax(0,1fr) 320px!important}
+  .overview-bottom-grid{grid-template-columns:1fr!important}
+}
+@media(max-width:900px){
+  .overview-dashboard{grid-template-columns:1fr!important}
+  .overview-bottom-grid{grid-template-columns:1fr!important}
+  .ai-signals-art{height:250px}
+}
+@media(max-width:600px){.ai-signals-art{height:205px}.overview-bottom-grid{gap:10px}.overview-right>.card{margin-bottom:10px}}
