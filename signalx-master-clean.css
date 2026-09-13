@@ -468,3 +468,257 @@ body:before{
   .overview-right .overview-ai-card .ai-price-grid,.overview-right .overview-ai-card .ai-confidence-row{width:64%!important}
   .overview-right .overview-ai-card .ai-signal-visual img{object-position:center!important}
 }
+
+
+/* =========================================================
+   SIGNALX SIDEBAR — LIQUID GLASS VISUALIZATION SYSTEM
+   Every navigation item gets its own animated liquid glass
+   treatment and accent palette while keeping the original
+   icon -> divider -> label structure readable.
+   ========================================================= */
+
+.sidebar .nav > button,
+.sidebar .nav > .nav-external-form button,
+.sidebar .nav > .nav-external{
+  --sx-liquid-a:rgba(40,190,255,.42);
+  --sx-liquid-b:rgba(100,70,255,.24);
+  --sx-liquid-c:rgba(40,235,255,.16);
+  isolation:isolate!important;
+  overflow:hidden!important;
+  position:relative!important;
+  background:
+    linear-gradient(180deg,rgba(8,20,42,.76),rgba(4,10,26,.62))!important;
+  border:1px solid rgba(73,203,255,.46)!important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.12),
+    inset 0 -1px 0 rgba(30,160,255,.10),
+    0 5px 16px rgba(0,0,0,.22)!important;
+  backdrop-filter:blur(14px) saturate(150%)!important;
+  -webkit-backdrop-filter:blur(14px) saturate(150%)!important;
+  transition:
+    border-color .22s ease,
+    box-shadow .22s ease,
+    transform .22s ease,
+    background .22s ease!important;
+}
+
+/* Moving liquid body */
+.sidebar .nav > button::before,
+.sidebar .nav > .nav-external-form button::before,
+.sidebar .nav > .nav-external::before{
+  content:""!important;
+  position:absolute!important;
+  inset:-55% -25%!important;
+  z-index:0!important;
+  pointer-events:none!important;
+  background:
+    radial-gradient(42% 72% at 14% 58%,var(--sx-liquid-a),transparent 68%),
+    radial-gradient(48% 76% at 86% 34%,var(--sx-liquid-b),transparent 70%),
+    radial-gradient(34% 58% at 52% 104%,var(--sx-liquid-c),transparent 72%)!important;
+  filter:blur(10px) saturate(135%)!important;
+  opacity:.78!important;
+  transform:translate3d(-8%,0,0) scale(1)!important;
+  animation:sxSidebarLiquid 5.8s ease-in-out infinite alternate!important;
+}
+
+/* Glass highlight / liquid sweep */
+.sidebar .nav > button::after,
+.sidebar .nav > .nav-external-form button::after,
+.sidebar .nav > .nav-external::after{
+  content:""!important;
+  position:absolute!important;
+  inset:1px!important;
+  z-index:3!important;
+  pointer-events:none!important;
+  border:1px solid rgba(104,225,255,.68)!important;
+  border-radius:inherit!important;
+  background:
+    linear-gradient(115deg,
+      transparent 0%,
+      transparent 28%,
+      rgba(255,255,255,.025) 39%,
+      rgba(130,240,255,.13) 47%,
+      rgba(175,112,255,.11) 53%,
+      rgba(255,255,255,.02) 61%,
+      transparent 72%)!important;
+  background-size:240% 100%!important;
+  background-position:130% 0!important;
+  box-shadow:
+    inset 0 0 10px rgba(55,194,255,.13),
+    inset 0 0 22px rgba(82,80,255,.08)!important;
+  animation:sxSidebarSheen 6.6s linear infinite!important;
+  opacity:.88!important;
+}
+
+/* Keep icon, divider and label above the liquid layers */
+.sidebar .nav > button > *,
+.sidebar .nav > .nav-external-form button > *,
+.sidebar .nav > .nav-external > *{
+  position:relative!important;
+  z-index:4!important;
+}
+.sidebar .nav > button > .sx-nav-icon,
+.sidebar .nav > .nav-external-form button > .sx-nav-icon{
+  filter:drop-shadow(0 0 5px rgba(82,218,255,.50))!important;
+  transition:filter .22s ease,transform .22s ease!important;
+}
+.sidebar .nav > button > .sx-nav-divider,
+.sidebar .nav > .nav-external-form button > .sx-nav-divider{
+  box-shadow:0 0 7px rgba(73,205,255,.30)!important;
+  opacity:.72!important;
+}
+.sidebar .nav > button > .sx-nav-label,
+.sidebar .nav > .nav-external-form button > .sx-nav-label,
+.sidebar .nav > .nav-external{
+  text-shadow:
+    0 0 2px rgba(255,255,255,.95),
+    0 0 7px rgba(78,213,255,.42),
+    0 0 15px rgba(75,112,255,.18)!important;
+}
+
+/* Unique liquid palettes per sidebar section */
+.sidebar .nav > button[data-section="overview"]{
+  --sx-liquid-a:rgba(30,196,255,.46);--sx-liquid-b:rgba(62,92,255,.26);--sx-liquid-c:rgba(64,232,255,.14);
+}
+.sidebar .nav > button[data-section="chartSection"]{
+  --sx-liquid-a:rgba(0,225,255,.48);--sx-liquid-b:rgba(70,112,255,.30);--sx-liquid-c:rgba(0,180,255,.16);
+}
+.sidebar .nav > button[data-section="analysisSection"]{
+  --sx-liquid-a:rgba(68,169,255,.44);--sx-liquid-b:rgba(93,79,255,.30);--sx-liquid-c:rgba(53,220,255,.16);
+}
+.sidebar .nav > button[data-section="smartAnalysisSection"]{
+  --sx-liquid-a:rgba(45,207,255,.44);--sx-liquid-b:rgba(165,84,255,.34);--sx-liquid-c:rgba(53,242,193,.14);
+}
+.sidebar .nav > button[data-section="signalEngineSection"]{
+  --sx-liquid-a:rgba(30,217,255,.50);--sx-liquid-b:rgba(87,58,255,.34);--sx-liquid-c:rgba(255,79,132,.12);
+}
+.sidebar .nav > button[data-section="aiFallbackSection"]{
+  --sx-liquid-a:rgba(72,216,255,.42);--sx-liquid-b:rgba(111,79,255,.38);--sx-liquid-c:rgba(55,244,196,.14);
+}
+.sidebar .nav > button[data-section="classicSection"]{
+  --sx-liquid-a:rgba(76,187,255,.40);--sx-liquid-b:rgba(84,104,255,.24);--sx-liquid-c:rgba(96,220,255,.16);
+}
+.sidebar .nav > button[data-section="snrSection"]{
+  --sx-liquid-a:rgba(72,199,255,.43);--sx-liquid-b:rgba(157,78,255,.28);--sx-liquid-c:rgba(255,214,88,.12);
+}
+.sidebar .nav > button[data-section="trendLineSection"]{
+  --sx-liquid-a:rgba(28,214,255,.44);--sx-liquid-b:rgba(71,101,255,.30);--sx-liquid-c:rgba(41,240,174,.12);
+}
+.sidebar .nav > button[data-section="signalSection"]{
+  --sx-liquid-a:rgba(39,225,255,.46);--sx-liquid-b:rgba(110,69,255,.31);--sx-liquid-c:rgba(255,86,143,.11);
+}
+.sidebar .nav > button[data-section="ictSection"]{
+  --sx-liquid-a:rgba(59,203,255,.44);--sx-liquid-b:rgba(87,70,255,.30);--sx-liquid-c:rgba(255,209,79,.12);
+}
+.sidebar .nav > button[data-section="signalsSection"]{
+  --sx-liquid-a:rgba(50,210,255,.44);--sx-liquid-b:rgba(97,71,255,.30);--sx-liquid-c:rgba(255,76,113,.14);
+}
+.sidebar .nav > button[data-section="mtfSection"]{
+  --sx-liquid-a:rgba(0,216,255,.46);--sx-liquid-b:rgba(92,104,255,.28);--sx-liquid-c:rgba(70,244,206,.12);
+}
+.sidebar .nav > button[data-section="calendarSection"]{
+  --sx-liquid-a:rgba(50,192,255,.42);--sx-liquid-b:rgba(127,79,255,.28);--sx-liquid-c:rgba(255,207,94,.12);
+}
+.sidebar .nav > button[data-section="sessionsSection"]{
+  --sx-liquid-a:rgba(50,215,255,.46);--sx-liquid-b:rgba(66,89,255,.25);--sx-liquid-c:rgba(63,244,192,.12);
+}
+.sidebar .nav > button[data-section="historySection"]{
+  --sx-liquid-a:rgba(62,193,255,.42);--sx-liquid-b:rgba(124,75,255,.31);--sx-liquid-c:rgba(104,168,255,.13);
+}
+.sidebar .nav > button[data-section="activeSessionsSection"]{
+  --sx-liquid-a:rgba(44,229,255,.47);--sx-liquid-b:rgba(77,87,255,.31);--sx-liquid-c:rgba(35,240,164,.15);
+}
+.sidebar .nav > button[data-section="mt5Section"]{
+  --sx-liquid-a:rgba(48,205,255,.44);--sx-liquid-b:rgba(107,75,255,.30);--sx-liquid-c:rgba(255,91,129,.11);
+}
+
+/* External page buttons inherit a section-like palette */
+.sidebar .nav > .nav-external#eurUsdPageBtn{
+  --sx-liquid-a:rgba(77,192,255,.45);--sx-liquid-b:rgba(74,94,255,.28);--sx-liquid-c:rgba(54,231,183,.12);
+}
+.sidebar .nav > .nav-external#xauUsdPageBtn{
+  --sx-liquid-a:rgba(81,195,255,.45);--sx-liquid-b:rgba(95,75,255,.28);--sx-liquid-c:rgba(255,203,78,.12);
+}
+
+/* Hover: floating glass + faster liquid */
+.sidebar .nav > button:hover,
+.sidebar .nav > .nav-external-form button:hover,
+.sidebar .nav > .nav-external:hover{
+  border-color:rgba(104,225,255,.94)!important;
+  transform:translateY(-1px) scale(1.008)!important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.16),
+    inset 0 0 22px rgba(45,183,255,.13),
+    0 8px 20px rgba(0,100,255,.18),
+    0 0 24px rgba(60,104,255,.11)!important;
+}
+.sidebar .nav > button:hover::before,
+.sidebar .nav > .nav-external-form button:hover::before,
+.sidebar .nav > .nav-external:hover::before{
+  opacity:1!important;
+  animation-duration:3.8s!important;
+}
+.sidebar .nav > button:hover > .sx-nav-icon,
+.sidebar .nav > .nav-external-form button:hover > .sx-nav-icon{
+  transform:scale(1.04)!important;
+  filter:drop-shadow(0 0 7px rgba(96,226,255,.72))!important;
+}
+
+/* Active: stronger glass core + luminous rim */
+.sidebar .nav > button.active,
+.sidebar .nav > .nav-external-form button.active,
+.sidebar .nav > .nav-external.active{
+  border-color:rgba(115,232,255,1)!important;
+  background:linear-gradient(180deg,rgba(11,40,75,.78),rgba(7,13,38,.68))!important;
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.18),
+    inset 0 0 30px rgba(35,192,255,.17),
+    0 0 20px rgba(26,172,255,.24),
+    0 0 42px rgba(98,77,255,.13)!important;
+}
+.sidebar .nav > button.active::before,
+.sidebar .nav > .nav-external-form button.active::before,
+.sidebar .nav > .nav-external.active::before{
+  opacity:1!important;
+  animation-duration:3.2s!important;
+}
+.sidebar .nav > button.active::after,
+.sidebar .nav > .nav-external-form button.active::after,
+.sidebar .nav > .nav-external.active::after{
+  border-color:rgba(126,235,255,.98)!important;
+  box-shadow:
+    inset 0 0 12px rgba(71,216,255,.28),
+    inset 0 0 24px rgba(97,75,255,.16),
+    0 0 12px rgba(61,201,255,.12)!important;
+}
+.sidebar .nav > button.active > .sx-nav-icon,
+.sidebar .nav > .nav-external-form button.active > .sx-nav-icon{
+  filter:drop-shadow(0 0 8px rgba(102,228,255,.86))!important;
+}
+
+/* Premium card remains separate from liquid buttons */
+.sidebar .sx-pro-card-sidebar{
+  backdrop-filter:blur(14px) saturate(145%)!important;
+  -webkit-backdrop-filter:blur(14px) saturate(145%)!important;
+}
+
+@keyframes sxSidebarLiquid{
+  0%{transform:translate3d(-9%,-2%,0) scale(1.00) rotate(-1deg)}
+  50%{transform:translate3d(4%,5%,0) scale(1.08) rotate(1deg)}
+  100%{transform:translate3d(11%,-4%,0) scale(1.03) rotate(-1deg)}
+}
+@keyframes sxSidebarSheen{
+  0%{background-position:130% 0;opacity:.58}
+  46%{background-position:18% 0;opacity:.84}
+  100%{background-position:-120% 0;opacity:.58}
+}
+@media(prefers-reduced-motion:reduce){
+  .sidebar .nav > button::before,
+  .sidebar .nav > button::after,
+  .sidebar .nav > .nav-external-form button::before,
+  .sidebar .nav > .nav-external-form button::after,
+  .sidebar .nav > .nav-external::before,
+  .sidebar .nav > .nav-external::after{
+    animation:none!important;
+  }
+}
