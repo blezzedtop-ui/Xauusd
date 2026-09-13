@@ -547,6 +547,18 @@ async def serve_config_js() -> FileResponse:
 async def serve_manifest() -> FileResponse:
     return FileResponse(os.path.join(BASE_DIR, "manifest.webmanifest"), media_type="application/manifest+json")
 
+# The premium redesign ships two root-level stylesheets referenced by index.html
+# as absolute paths (e.g. /signalx-master-clean.css?v=...). Without an explicit
+# route these 404 and the browser silently falls back to the old, unstyled page.
+@app.get("/signalx-master-clean.css")
+async def serve_signalx_master_clean_css() -> FileResponse:
+    return FileResponse(os.path.join(BASE_DIR, "signalx-master-clean.css"), media_type="text/css")
+
+@app.get("/signalx-premium-theme.css")
+async def serve_signalx_premium_theme_css() -> FileResponse:
+    return FileResponse(os.path.join(BASE_DIR, "signalx-premium-theme.css"), media_type="text/css")
+
+
 TIMEFRAME_SECONDS = {
     "1min": 60,
     "5min": 300,
