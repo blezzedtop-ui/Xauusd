@@ -1189,3 +1189,102 @@ body:not(.sx-menu-open) .sidebar{pointer-events:auto!important;}
 </script>
 
 </body></html>
+
+<style id="signalx-phone-final-v2-20260913">
+/* PHONE-ONLY V2 PATCH — desktop (>=1101px) is intentionally untouched. */
+@media (max-width:1100px){
+  /* Drawer must always sit above the dimmer. */
+  .sx-sidebar-overlay{
+    z-index:9000!important;
+    background:rgba(1,5,12,.62)!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+  }
+  .sidebar{
+    z-index:10000!important;
+    isolation:isolate!important;
+    opacity:1!important;
+    filter:none!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+    pointer-events:auto!important;
+  }
+  body.sx-menu-open .sidebar{z-index:10001!important;pointer-events:auto!important;}
+  .sidebar::before,.sidebar::after{pointer-events:none!important;}
+  .sidebar .nav,
+  .sidebar .nav > button,
+  .sidebar .nav > .nav-external-form,
+  .sidebar .nav > .nav-external,
+  .sidebar .sx-nav-icon,
+  .sidebar .sx-nav-divider,
+  .sidebar .sx-nav-label{pointer-events:auto!important;}
+  .sidebar .nav > button,
+  .sidebar .nav > .nav-external-form button,
+  .sidebar .nav > .nav-external{
+    opacity:1!important;
+    filter:none!important;
+  }
+  .sidebar .sx-nav-icon,
+  .sidebar .sx-nav-icon svg{visibility:visible!important;opacity:1!important;filter:none!important;}
+
+  /* One horizontal touch surface for content that is wider than an iPhone. */
+  html,body{overflow-x:hidden!important;}
+  .main{
+    width:100%!important;min-width:0!important;
+    overflow-x:visible!important;
+    touch-action:pan-y!important;
+  }
+  .section.active{
+    width:100%!important;min-width:0!important;
+    overflow-x:auto!important;overflow-y:visible!important;
+    -webkit-overflow-scrolling:touch!important;
+    touch-action:pan-x pan-y!important;
+    overscroll-behavior-x:contain!important;
+    scrollbar-width:none!important;
+  }
+  .section.active::-webkit-scrollbar{display:none!important;}
+  .section.active > *{max-width:none!important;}
+  .section.active .scroll,
+  .section.active .history-wrap,
+  .section.active .table-wrap,
+  .section.active .table-scroll,
+  .section.active .levels,
+  .section.active .sessions,
+  .section.active .grid2,
+  .section.active .grid4{
+    touch-action:pan-x pan-y!important;
+  }
+  .history{min-width:850px!important;width:850px!important;}
+  .section.active .history-wrap,.section.active .scroll{overflow-x:auto!important;-webkit-overflow-scrolling:touch!important;}
+
+  /* Do not let decorative glass pseudo-layers intercept or blur text. */
+  .section.active .card::before,
+  .section.active .card::after,
+  .section.active .advanced-card::before,
+  .section.active .advanced-card::after,
+  .section.active .signal-box::before,
+  .section.active .signal-box::after,
+  .section.active .session::before,
+  .section.active .session::after{pointer-events:none!important;}
+}
+</style>
+<script id="signalx-phone-v2-guard-20260913">
+(function(){
+  function fixPhone(){
+    if(window.innerWidth>1100)return;
+    const sidebar=document.querySelector('.sidebar');
+    const overlay=document.getElementById('sxSidebarOverlay');
+    if(sidebar){sidebar.style.zIndex='10001';sidebar.style.pointerEvents='auto';}
+    if(overlay && !document.body.classList.contains('sx-menu-open')){
+      overlay.style.pointerEvents='none';overlay.style.opacity='0';
+    }
+    document.querySelectorAll('.sidebar .sx-nav-icon[data-icon]').forEach(function(el){
+      el.style.visibility='visible';el.style.opacity='1';
+      const svg=el.querySelector('svg'); if(svg){svg.style.visibility='visible';svg.style.opacity='1';}
+    });
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',fixPhone,{once:true});else fixPhone();
+  window.addEventListener('resize',fixPhone,{passive:true});
+  window.addEventListener('orientationchange',function(){setTimeout(fixPhone,80);},{passive:true});
+})();
+</script>
