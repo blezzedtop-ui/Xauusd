@@ -452,7 +452,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 
 </style>
 <!-- SIGNALX LIQUID GLASS PATCH -->
-<link rel="stylesheet" href="signalx-master-clean.css?v=20260913-banner">
+<link rel="stylesheet" href="signalx-master-clean.css?v=20260913-ai335-final-01">
 
 <style id="signalx-ai-signals-final-inline">
 /* FINAL AI SIGNALS CARD — force compact reference layout */
@@ -591,35 +591,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
  .overview-right>.overview-ai-card,.overview-right>.card:nth-child(2){height:329px!important;min-height:329px!important;max-height:329px!important;}
 }
 </style>
-<!-- SIGNALX TOP ALIGNMENT FIX 2026-09-13 -->
-<style id="signalx-top-alignment-fix">
-/* Keep every section anchored to the top of the content area. */
-html,body{min-height:100%!important;}
-.app{align-items:start!important;}
-.main{align-self:start!important;justify-self:stretch!important;margin-top:0!important;margin-bottom:0!important;padding-top:7px!important;}
-.topbar{margin-top:0!important;}
-.signalx-visual-hero{margin-top:0!important;}
-.section{margin-top:0!important;align-self:start!important;}
-.section.active{margin-top:0!important;transform:none!important;}
-/* Persistent banner stays directly below the topbar and above the active section. */
-.persistent-site-banner{margin-top:0!important;margin-bottom:12px!important;position:relative!important;}
-@media(max-width:1100px){.main{align-self:start!important;margin-top:0!important;padding-top:6px!important;}}
-</style>
-
-<style>
-/* SignalX unified neon sidebar system */
-.sidebar{width:250px;min-width:250px;padding:18px 12px 14px;background:linear-gradient(180deg,rgba(4,10,22,.97),rgba(3,8,18,.96));border-right:1px solid rgba(30,113,255,.28);backdrop-filter:none}
-.brand{padding:6px 10px 16px;margin-bottom:12px;border-bottom:1px solid rgba(30,113,255,.22)}
-.nav{gap:6px}
-.nav button.signal-nav-item{position:relative;display:flex;align-items:center;gap:9px;width:100%;min-height:34px;height:34px;padding:6px 10px;border:1px solid rgba(31,116,255,.52);border-radius:8px;background:linear-gradient(180deg,rgba(8,28,58,.96),rgba(4,15,34,.98));color:#f4f8ff;text-align:left;font-size:12px;font-weight:650;letter-spacing:.05px;line-height:1;box-shadow:inset 0 0 9px rgba(0,100,255,.28),0 0 6px rgba(0,93,255,.14);overflow:hidden;white-space:nowrap}
-.nav button.signal-nav-item::after{content:"";position:absolute;inset:1px;border-radius:7px;pointer-events:none;background:linear-gradient(90deg,rgba(41,142,255,.12),transparent 55%,rgba(74,89,255,.10));opacity:.8}
-.nav button.signal-nav-item:hover{color:#fff;border-color:#238cff;background:linear-gradient(180deg,rgba(11,40,82,.98),rgba(5,20,43,.98));box-shadow:inset 0 0 12px rgba(0,119,255,.42),0 0 11px rgba(0,110,255,.26);transform:translateX(1px)}
-.nav button.signal-nav-item.active{color:#fff;border-color:#168cff;background:linear-gradient(180deg,rgba(12,50,104,.98),rgba(5,23,52,.98));box-shadow:inset 0 0 15px rgba(0,126,255,.48),0 0 14px rgba(0,119,255,.34)}
-.nav button.signal-nav-item .sx-nav-icon{position:relative;z-index:2;display:inline-flex;align-items:center;justify-content:center;width:17px;min-width:17px;height:17px;color:#fff;font-size:13px;font-weight:800;text-shadow:0 0 7px rgba(61,157,255,.85)}
-.nav button.signal-nav-item .sx-nav-label{position:relative;z-index:2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.nav button.nav-external.signal-nav-item{margin-top:1px}
-@media (max-width:900px){.sidebar{width:230px;min-width:230px}.nav button.signal-nav-item{height:32px;min-height:32px;font-size:11.5px}}
-</style></head>
+</head>
 <body>
 <div class="gold-3d-orb"></div>
 <div class="gold-photo-bg" aria-hidden="true"></div>
@@ -627,41 +599,33 @@ html,body{min-height:100%!important;}
 <aside class="sidebar">
   <div class="brand"><div class="brand-logo sx-logo-mark"><img alt="SignalX" decoding="async" height="34" src="assets/logo/signalx-icon.svg" width="34"/></div><div class="brand-copy"><b>SignalX</b><span>EURUSD TRADING</span></div></div>
   <div class="nav">
-    <button class="active signal-nav-item" data-section="overview"><span class="sx-nav-icon">⌂</span><span class="sx-nav-label">Overview</span></button>
-    <button data-section="chartSection" class="signal-nav-item"><span class="sx-nav-icon">▥</span><span class="sx-nav-label">Live Chart</span></button>
-    <button data-section="analysisSection" class="signal-nav-item"><span class="sx-nav-icon">◇</span><span class="sx-nav-label">Technical Analysis</span></button>
-    <button class="admin-only signal-nav-item" data-section="smartAnalysisSection"><span class="sx-nav-icon">✦</span><span class="sx-nav-label">AI Smart Analysis</span></button>
-    <button class="admin-only signal-nav-item" data-section="aiFallbackSection"><span class="sx-nav-icon">⌘</span><span class="sx-nav-label">AI Fallback Network</span></button>
-    <button data-section="classicSection" class="signal-nav-item"><span class="sx-nav-icon">▣</span><span class="sx-nav-label">Classic Trade</span></button>
-    <button data-section="snrSection" class="signal-nav-item"><span class="sx-nav-icon">◇</span><span class="sx-nav-label">SNR</span></button>
-    <button data-section="trendLineSection" class="signal-nav-item"><span class="sx-nav-icon">↗</span><span class="sx-nav-label">Trend Line</span></button>
-    <button class="admin-only signal-nav-item" data-section="signalSection"><span class="sx-nav-icon">⌁</span><span class="sx-nav-label">Signal Lab</span></button>
-    <button data-section="ictSection" class="signal-nav-item"><span class="sx-nav-icon">◎</span><span class="sx-nav-label">ICT Signals</span></button>
-    <button class="admin-only signal-nav-item" data-section="signalsSection"><span class="sx-nav-icon">◉</span><span class="sx-nav-label">Signals</span></button>
-    <button data-section="mtfSection" class="signal-nav-item"><span class="sx-nav-icon">◷</span><span class="sx-nav-label">Multi-Timeframe</span></button>
-    <button data-section="calendarSection" class="signal-nav-item"><span class="sx-nav-icon">▦</span><span class="sx-nav-label">Economic Calendar</span></button>
-    <button data-section="sessionsSection" class="signal-nav-item"><span class="sx-nav-icon">⊙</span><span class="sx-nav-label">Market Sessions</span></button>
-    <button data-section="historySection" class="signal-nav-item"><span class="sx-nav-icon">▤</span><span class="sx-nav-label">Signal History</span></button>
-    <button data-section="activeSessionsSection" class="signal-nav-item"><span class="sx-nav-icon">●</span><span class="sx-nav-label">Aktiv Seanslar</span></button>
-    <button class="admin-only signal-nav-item" data-section="mt5Section"><span class="sx-nav-icon">◌</span><span class="sx-nav-label">MetaTrader 5</span></button>
+    <button class="active" data-section="overview"><span class="sx-nav-icon" data-icon="home"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Overview</span></button>
+    <button data-section="chartSection"><span class="sx-nav-icon" data-icon="chart"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Live Chart</span></button>
+    <button data-section="analysisSection"><span class="sx-nav-icon" data-icon="analysis"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Technical Analysis</span></button>
+    <button class="admin-only" data-section="smartAnalysisSection"><span class="sx-nav-icon" data-icon="brain"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">AI Smart Analysis</span></button>
+    <button class="admin-only" data-section="aiFallbackSection"><span class="sx-nav-icon" data-icon="network"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">AI Fallback Network</span></button>
+    <button data-section="classicSection"><span class="sx-nav-icon" data-icon="trade"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Classic Trade</span></button>
+    <button data-section="snrSection"><span class="sx-nav-icon" data-icon="diamond"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">SNR</span></button>
+    <button data-section="trendLineSection"><span class="sx-nav-icon" data-icon="trend"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Trend Line</span></button>
+    <button class="admin-only" data-section="signalSection"><span class="sx-nav-icon" data-icon="lab"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal Lab</span></button>
+    <button data-section="ictSection"><span class="sx-nav-icon" data-icon="target"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">ICT Signals</span></button>
+    <button class="admin-only" data-section="signalsSection"><span class="sx-nav-icon" data-icon="alert"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signals</span></button>
+    <button data-section="mtfSection"><span class="sx-nav-icon" data-icon="time"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Multi-Timeframe</span></button>
+    <button data-section="calendarSection"><span class="sx-nav-icon" data-icon="calendar"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Economic Calendar</span></button>
+    <button data-section="sessionsSection"><span class="sx-nav-icon" data-icon="globe"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Market Sessions</span></button>
+    <button data-section="historySection"><span class="sx-nav-icon" data-icon="history"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal History</span></button>
+    <button data-section="activeSessionsSection"><span class="sx-nav-icon" data-icon="status"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Aktiv Seanslar</span></button>
+    <button class="admin-only" data-section="mt5Section"><span class="sx-nav-icon" data-icon="terminal"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">MetaTrader 5</span></button>
     <button type="button" id="xauUsdPageBtn" class="nav-external">🥇 XAUUSD</button>
   <div class="sx-pro-card sx-pro-card-sidebar">
-  <div class="sx-pro-head">
-    <div class="sx-pro-icon">✦</div>
-    <div class="sx-pro-copy">
-      <div class="sx-pro-kicker">SIGNALX <span>PRO</span></div>
-      <b>AI + AUTO TRADING</b>
-      <small>Advanced signals &amp; premium tools</small>
-    </div>
-    <span class="sx-pro-live"><i></i> PRO</span>
-  </div>
-  <a class="sx-pro-btn" href="https://t.me/Shohrux_Ravshanov" id="telegramGoPro" target="_blank" rel="noopener"><span>✈</span> GO PRO <em>›</em></a>
+  <div><span class="sx-pro-kicker">SIGNALX PRO</span><b>AI + AUTO TRADING</b><small>Advanced signals and premium tools</small></div>
+  <a class="sx-pro-btn" href="https://t.me/Shohrux_Ravshanov" id="telegramGoPro" target="_blank" rel="noopener">✈ GO PRO</a>
 </div>
 </div>
 </aside>
 <main class="main">
   <div class="topbar"><button type="button" class="sx-mobile-menu" id="sxMobileMenu" aria-label="Menu" aria-expanded="false">☰</button><div><h1 id="pageTitle" class="title-shimmer">EURUSD Market Overview</h1><p>Har bir bo‘lim alohida ishlaydi. Timeframe o‘zgarsa tanlangan modul qayta hisoblanadi.</p></div><div class="tools"><div class="health"><span class="dot"></span><span class="pill" id="mode">Checking…</span></div><span class="pill" id="plan">Guest</span><button class="btn primary auth-top" id="authBtn">Kirish</button></div></div>
-    <div class="signalx-visual-hero persistent-site-banner" data-persistent-banner="true" aria-hidden="true">
+    <div class="signalx-visual-hero" aria-hidden="true">
       <div class="sx-hero-copy"><span>WELCOME TO</span><strong>SignalX</strong><em>AI POWERED TRADING TERMINAL</em></div>
       <div class="sx-hero-orbit"><i></i><b></b><span></span></div>
       <div class="sx-hero-tag">TRADE SMARTER<br><small>DISCIPLINE TODAY • PROFIT TOMORROW</small></div>

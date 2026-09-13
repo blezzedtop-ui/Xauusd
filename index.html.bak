@@ -599,25 +599,25 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 <aside class="sidebar">
   <div class="brand"><div class="brand-logo sx-logo-mark"><img alt="SignalX" decoding="async" height="34" src="assets/logo/signalx-icon.svg" width="34"/></div><div class="brand-copy"><b>SignalX</b><span>XAUUSD TRADING</span></div></div>
   <div class="nav">
-    <button class="active" data-section="overview"><span class="sx-nav-icon" data-icon="home"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Overview</span></button>
-    <button data-section="chartSection"><span class="sx-nav-icon" data-icon="chart"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Live Chart</span></button>
-    <button data-section="analysisSection"><span class="sx-nav-icon" data-icon="analysis"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Technical Analysis</span></button>
-    <button class="admin-only" data-section="smartAnalysisSection"><span class="sx-nav-icon" data-icon="brain"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">AI Smart Analysis</span></button>
-    <button class="admin-only" data-section="signalEngineSection"><span class="sx-nav-icon" data-icon="bolt"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal Engine</span></button>
-    <button class="admin-only" data-section="aiFallbackSection"><span class="sx-nav-icon" data-icon="network"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">AI Fallback Network</span></button>
-    <button data-section="classicSection"><span class="sx-nav-icon" data-icon="trade"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Classic Trade</span></button>
-    <button data-section="snrSection"><span class="sx-nav-icon" data-icon="diamond"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">SNR</span></button>
-    <button data-section="trendLineSection"><span class="sx-nav-icon" data-icon="trend"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Trend Line</span></button>
-    <button class="admin-only" data-section="signalSection"><span class="sx-nav-icon" data-icon="lab"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal Lab</span></button>
-    <button data-section="ictSection"><span class="sx-nav-icon" data-icon="target"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">ICT Signals</span></button>
-    <button class="admin-only" data-section="signalsSection"><span class="sx-nav-icon" data-icon="alert"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signals</span></button>
-    <button data-section="mtfSection"><span class="sx-nav-icon" data-icon="time"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Multi-Timeframe</span></button>
-    <button data-section="calendarSection"><span class="sx-nav-icon" data-icon="calendar"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Economic Calendar</span></button>
-    <button data-section="sessionsSection"><span class="sx-nav-icon" data-icon="globe"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Market Sessions</span></button>
-    <button data-section="historySection"><span class="sx-nav-icon" data-icon="history"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal History</span></button>
-    <button data-section="activeSessionsSection"><span class="sx-nav-icon" data-icon="status"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Aktiv Seanslar</span></button>
-    <button class="admin-only" data-section="mt5Section"><span class="sx-nav-icon" data-icon="terminal"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">MetaTrader 5</span></button>
-    <button type="button" id="eurUsdPageBtn" class="nav-external"><span class="sx-nav-icon" data-icon="euro"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">EURUSD</span></button>
+    <button class="active" data-section="overview">▣ Overview</button>
+    <button data-section="chartSection">◩ Live Chart</button>
+    <button data-section="analysisSection">◈ Technical Analysis</button>
+    <button class="admin-only" data-section="smartAnalysisSection">🧠 AI Smart Analysis</button>
+    <button class="admin-only" data-section="signalEngineSection">⚡ Signal Engine</button>
+    <button class="admin-only" data-section="aiFallbackSection">🤖 AI Fallback Network</button>
+    <button data-section="classicSection">▣ Classic Trade</button>
+    <button data-section="snrSection">◈ SNR</button>
+    <button data-section="trendLineSection">📈 Trend Line</button>
+    <button class="admin-only" data-section="signalSection">⚡ Signal Lab</button>
+    <button data-section="ictSection">🎯 ICT Signals</button>
+    <button class="admin-only" data-section="signalsSection">🚨 Signals</button>
+    <button data-section="mtfSection">◫ Multi-Timeframe</button>
+    <button data-section="calendarSection">◷ Economic Calendar</button>
+    <button data-section="sessionsSection">◉ Market Sessions</button>
+    <button data-section="historySection">▤ Signal History</button>
+    <button data-section="activeSessionsSection">◉ Aktiv Seanslar</button>
+    <button class="admin-only" data-section="mt5Section">◉ MetaTrader 5</button>
+    <button type="button" id="eurUsdPageBtn" class="nav-external">💱 EURUSD</button>
   <div class="sx-pro-card sx-pro-card-sidebar">
   <div><span class="sx-pro-kicker">SIGNALX PRO</span><b>AI + AUTO TRADING</b><small>Advanced signals and premium tools</small></div>
   <a class="sx-pro-btn" href="https://t.me/Shohrux_Ravshanov" id="telegramGoPro" target="_blank" rel="noopener">✈ GO PRO</a>
