@@ -770,7 +770,10 @@ async def auth_sessions(authorization: str | None = Header(default=None), sessio
     user = current_user(authorization, session)
     now = datetime.now(timezone.utc)
     if is_admin_user(user):
-        rows = list(session.scalars(
+        # A multi-entity SELECT must use execute(), not scalars(); scalars()
+        # would discard the User entity and cause tuple-unpacking below to
+        # raise HTTP 500 on the Active Sessions page.
+        rows = list(session.execute(
             select(SessionToken, User)
             .join(User, SessionToken.user_id == User.id)
             .order_by(SessionToken.last_seen_at.desc())

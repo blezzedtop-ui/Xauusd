@@ -468,3 +468,9 @@ body:before{
   .overview-right .overview-ai-card .ai-price-grid,.overview-right .overview-ai-card .ai-confidence-row{width:64%!important}
   .overview-right .overview-ai-card .ai-signal-visual img{object-position:center!important}
 }
+
+/* PERSISTENT SIGNALX TOP BANNER — visible across every navigation section */
+.persistent-site-banner{display:block!important;visibility:visible!important;position:relative!important;z-index:50!important;isolation:isolate!important;flex:none!important;width:100%!important;max-width:100%!important;margin:0 0 14px!important;overflow:hidden!important;}
+.persistent-site-banner img{display:block!important;width:100%!important;height:100%!important;object-fit:cover!important;}
+@media(max-width:1050px){.persistent-site-banner{margin-bottom:10px!important;}}
+@media(max-width:620px){.persistent-site-banner{margin-bottom:8px!important;}}
