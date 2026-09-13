@@ -245,7 +245,7 @@ body:before{background:radial-gradient(circle at 20% 20%,rgba(0,153,255,.12),tra
 @media(max-width:390px){.main{padding:6px!important}.nav button{padding:7px 8px!important;font-size:10px!important}.btn,.tf{padding:7px 8px!important;font-size:10px!important}.card{padding:8px!important}.chart{height:325px!important}.brand-copy b{font-size:18px!important}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
 </style>
-<link rel="stylesheet" href="/signalx-premium-theme.css?v=20260912-v3-shell"><style id="signalx-v3-final-shell">
+<link rel="stylesheet" href="signalx-premium-theme.css?v=20260913-v6-sync"><style id="signalx-v3-final-shell">
 /* SIGNALX V3 FINAL SHELL: desktop left sidebar + mobile drawer */
 .sx-mobile-menu{display:none}
 .sx-sidebar-overlay{display:none}
@@ -375,6 +375,152 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 }
 </style>
 
+<style id="signalx-liquid-glass-patch">
+/* SIGNALX LIQUID GLASS + STATUS TYPOGRAPHY PATCH 2026-09-13
+   TradingView live chart internals intentionally untouched. */
+:root{
+  --sx-white:#f7fbff;
+  --sx-blue-neon:#37cfff;
+  --sx-blue-soft:rgba(55,207,255,.55);
+  --sx-green-neon:#27f3a8;
+  --sx-red-neon:#ff4c6d;
+  --sx-yellow-neon:#ffd34d;
+}
+
+/* Tight sidebar spacing */
+.sidebar .nav{gap:2px!important}
+.sidebar .nav button,.sidebar .nav-external-form button{
+  min-height:35px!important;
+  padding:7px 10px!important;
+  margin:0!important;
+  line-height:1.15!important;
+}
+.sidebar .brand{margin-bottom:7px!important;padding-bottom:11px!important}
+.sidebar-bottom{padding-top:8px!important}
+.sidebar .sx-pro-card{margin-top:8px!important;margin-bottom:8px!important}
+
+/* White text + electric-blue edge/glow for normal labels/headings */
+.section-head h2,.section-head h3,
+.symbol,.topbar h1,
+.metric b,.metric small,
+.card h2,.card h3,
+.nav button,.nav-external-form button,
+.sx-title-wrap h1,
+.history-note b,
+.countdown,.outcome-open,
+.pill:not(.buy):not(.sell):not(.wait):not(.badge-buy):not(.badge-sell):not(.badge-wait){
+  color:var(--sx-white)!important;
+  text-shadow:
+    0 0 2px rgba(255,255,255,.88),
+    0 0 8px rgba(55,207,255,.44),
+    0 0 18px rgba(55,207,255,.20)!important;
+  -webkit-text-stroke:.22px rgba(55,207,255,.62);
+}
+.section-head h2,.section-head h3{letter-spacing:.01em}
+
+/* BUY / SELL / WAIT statuses: dedicated neon edge colors */
+.buy,.badge-buy,.advanced-signal.buy,.signal-main.buy{
+  color:var(--sx-green-neon)!important;
+  text-shadow:
+    0 0 2px rgba(255,255,255,.55),
+    0 0 8px rgba(39,243,168,.75),
+    0 0 20px rgba(39,243,168,.38)!important;
+  -webkit-text-stroke:.3px rgba(39,243,168,.92);
+}
+.sell,.badge-sell,.advanced-signal.sell,.signal-main.sell{
+  color:var(--sx-red-neon)!important;
+  text-shadow:
+    0 0 2px rgba(255,255,255,.45),
+    0 0 8px rgba(255,76,109,.78),
+    0 0 20px rgba(255,76,109,.38)!important;
+  -webkit-text-stroke:.3px rgba(255,76,109,.92);
+}
+.wait,.badge-wait,.advanced-signal.wait,.signal-main.wait{
+  color:var(--sx-yellow-neon)!important;
+  text-shadow:
+    0 0 2px rgba(255,255,255,.44),
+    0 0 8px rgba(255,211,77,.78),
+    0 0 20px rgba(255,211,77,.38)!important;
+  -webkit-text-stroke:.3px rgba(255,211,77,.90);
+}
+
+/* Status borders / pills */
+.signal-box:has(.signal-main.buy),
+.advanced-card:has(.advanced-signal.buy){border-color:rgba(39,243,168,.52)!important;box-shadow:0 0 24px rgba(39,243,168,.11),inset 0 0 22px rgba(39,243,168,.045)!important}
+.signal-box:has(.signal-main.sell),
+.advanced-card:has(.advanced-signal.sell){border-color:rgba(255,76,109,.52)!important;box-shadow:0 0 24px rgba(255,76,109,.11),inset 0 0 22px rgba(255,76,109,.045)!important}
+.signal-box:has(.signal-main.wait),
+.advanced-card:has(.advanced-signal.wait){border-color:rgba(255,211,77,.48)!important;box-shadow:0 0 24px rgba(255,211,77,.09),inset 0 0 22px rgba(255,211,77,.035)!important}
+
+/* Liquid-glass panels: moving reflective sheen without touching TradingView chart internals */
+.card,.metric,.signal-box,.session,.calendar-item,.advanced-card,.source-stat,.topbar{
+  position:relative!important;
+  overflow:hidden!important;
+  isolation:isolate!important;
+  background:
+    linear-gradient(135deg,rgba(255,255,255,.075),rgba(255,255,255,.018) 34%,rgba(16,33,65,.16) 68%,rgba(104,63,220,.09)),
+    linear-gradient(145deg,rgba(7,20,43,.74),rgba(5,10,25,.72))!important;
+  border-color:rgba(76,174,255,.30)!important;
+  backdrop-filter:blur(22px) saturate(125%)!important;
+  -webkit-backdrop-filter:blur(22px) saturate(125%)!important;
+  box-shadow:
+    0 14px 42px rgba(0,0,0,.28),
+    inset 0 1px 0 rgba(255,255,255,.09),
+    inset 0 -1px 0 rgba(29,129,255,.08),
+    0 0 26px rgba(43,151,255,.06)!important;
+}
+.card::before,.metric::before,.signal-box::before,.session::before,.calendar-item::before,.advanced-card::before,.source-stat::before,.topbar::before{
+  content:"";position:absolute;inset:-35%;pointer-events:none;z-index:-1;
+  background:linear-gradient(115deg,transparent 38%,rgba(92,211,255,.09) 48%,rgba(255,255,255,.10) 51%,rgba(154,84,255,.08) 54%,transparent 64%);
+  transform:translateX(-65%) rotate(4deg);
+  animation:sxGlassShine 8s ease-in-out infinite;
+}
+.card::after,.metric::after,.signal-box::after,.session::after,.calendar-item::after,.advanced-card::after,.source-stat::after,.topbar::after{
+  content:"";position:absolute;inset:1px;pointer-events:none;z-index:-1;border-radius:inherit;
+  background:radial-gradient(circle at 18% 8%,rgba(101,218,255,.07),transparent 27%),radial-gradient(circle at 85% 90%,rgba(147,76,255,.06),transparent 25%);
+}
+@keyframes sxGlassShine{0%,20%{transform:translateX(-65%) rotate(4deg);opacity:0}32%{opacity:1}58%{transform:translateX(65%) rotate(4deg);opacity:.72}70%,100%{transform:translateX(85%) rotate(4deg);opacity:0}}
+
+/* Sidebar items get the same liquid-glass motion while remaining compact */
+.sidebar .nav button,.sidebar .nav-external-form button{
+  position:relative!important;
+  overflow:hidden!important;
+  background:
+    linear-gradient(110deg,rgba(8,27,58,.74),rgba(21,11,55,.52)),
+    url('assets/user-bg/section-frame.jpg') center/100% 100% no-repeat!important;
+  border:1px solid rgba(70,162,255,.34)!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.055),0 0 14px rgba(31,143,255,.055)!important;
+  backdrop-filter:blur(14px) saturate(130%)!important;
+}
+.sidebar .nav button::after,.sidebar .nav-external-form button::after{
+  content:"";position:absolute;inset:-60% -30%;pointer-events:none;
+  background:linear-gradient(115deg,transparent 43%,rgba(255,255,255,.12) 49%,rgba(70,209,255,.10) 52%,transparent 60%);
+  transform:translateX(-45%) skewX(-14deg);
+  animation:sxSideShine 7s ease-in-out infinite;
+}
+@keyframes sxSideShine{0%,25%{transform:translateX(-55%) skewX(-14deg);opacity:0}40%{opacity:.9}65%{transform:translateX(55%) skewX(-14deg);opacity:.35}80%,100%{transform:translateX(70%) skewX(-14deg);opacity:0}}
+.sidebar .nav button:hover,.sidebar .nav button.active,.sidebar .nav-external-form button:hover{
+  border-color:rgba(55,207,255,.76)!important;
+  box-shadow:0 0 24px rgba(39,180,255,.19),inset 0 0 20px rgba(89,75,255,.08)!important;
+}
+
+/* Keep status badges visually distinct */
+.setup-badge.strong,.badge-buy{border-color:rgba(39,243,168,.62)!important;box-shadow:0 0 14px rgba(39,243,168,.16)!important}
+.badge-sell{border-color:rgba(255,76,109,.62)!important;box-shadow:0 0 14px rgba(255,76,109,.16)!important}
+.badge-wait{border-color:rgba(255,211,77,.62)!important;box-shadow:0 0 14px rgba(255,211,77,.14)!important}
+
+@media(max-width:900px){
+  .sidebar .nav{gap:3px!important}
+  .sidebar .nav button,.sidebar .nav-external-form button{min-height:37px!important;padding:8px 10px!important}
+  .card,.metric,.signal-box,.session,.calendar-item,.advanced-card,.source-stat,.topbar{backdrop-filter:blur(18px) saturate(118%)!important;-webkit-backdrop-filter:blur(18px) saturate(118%)!important}
+}
+@media(prefers-reduced-motion:reduce){
+  .card::before,.metric::before,.signal-box::before,.session::before,.calendar-item::before,.advanced-card::before,.source-stat::before,.topbar::before,
+  .sidebar .nav button::after,.sidebar .nav-external-form button::after{animation:none!important}
+}
+
+</style>
+<!-- SIGNALX LIQUID GLASS PATCH -->
 </head>
 <body>
 <div class="gold-3d-orb"></div>
@@ -401,7 +547,13 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
     <button class="admin-only" data-section="mt5Section">◉ MetaTrader 5</button>
     <button type="button" id="xauUsdPageBtn" class="nav-external">🥇 XAUUSD</button>
   </div>
-  <div class="sidebar-bottom"><div class="tiny">Pivot + Key Levels engine<br>Live data via backend API</div></div>
+  <div class="sidebar-bottom">
+  <div class="sx-pro-card">
+    <div><span class="sx-pro-kicker">SIGNALX PRO</span><b>AI + AUTO TRADING</b><small>Advanced signals and premium tools</small></div>
+    <a class="sx-pro-btn" href="https://t.me/Shohrux_Ravshanov" id="telegramGoPro" target="_blank" rel="noopener">✈ GO PRO</a>
+  </div>
+  <div class="tiny">Pivot + Key Levels engine<br>Live data via backend API</div>
+</div>
 </aside>
 <main class="main">
   <div class="topbar"><button type="button" class="sx-mobile-menu" id="sxMobileMenu" aria-label="Menu" aria-expanded="false">☰</button><div><h1 id="pageTitle" class="title-shimmer">EURUSD Market Overview</h1><p>Har bir bo‘lim alohida ishlaydi. Timeframe o‘zgarsa tanlangan modul qayta hisoblanadi.</p></div><div class="tools"><div class="health"><span class="dot"></span><span class="pill" id="mode">Checking…</span></div><span class="pill" id="plan">Guest</span><button class="btn primary auth-top" id="authBtn">Kirish</button></div></div>
@@ -546,3 +698,22 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 <script src="config.js?v=20260908f"></script>
 <script src="app.js?v=20260912-eurusd-nav-fix-2"></script>
 </body></html>
+
+<script>
+(function(){const a=document.getElementById('telegramGoPro');const url=(window.SIGNALX_TELEGRAM_URL||'').trim();if(a&&url)a.href=url;if(a&&!url)a.addEventListener('click',function(e){e.preventDefault();if(typeof showToast==='function')showToast('Telegram GO PRO havolasi config.js orqali ulanadi.');});})();
+</script>
+<style>
+/* STATIC USER HERO + CLEAN CHART SHELL — no moving artwork/effects; TradingView internals untouched */
+.signalx-visual-hero,.signalx-visual-hero:before,.signalx-visual-hero:after,
+.signalx-visual-hero .sx-hero-orbit,.signalx-visual-hero .sx-hero-orbit:before,
+.signalx-visual-hero .sx-hero-orbit:after,.signalx-visual-hero .sx-hero-orbit span{
+  animation:none!important;transform:none!important;will-change:auto!important;
+}
+.signalx-visual-hero:before,.signalx-visual-hero:after{display:none!important;content:none!important;}
+.signalx-visual-hero{background-position:center center!important;background-repeat:no-repeat!important;background-size:cover!important;}
+.chart:before,.chart:after{display:none!important;content:none!important;}
+.chart{background:#080c14!important;background-image:none!important;}
+</style>
+<style>
+.gold-photo-bg{animation:none!important;transform:none!important;will-change:auto!important;background-position:center center!important;}
+</style>

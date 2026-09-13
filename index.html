@@ -1,7 +1,8 @@
-<!doctype html>
+<!DOCTYPE html>
+
 <html lang="uz">
 <head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8"/><meta content="width=device-width,initial-scale=1" name="viewport"/>
 <title>SignalX — Trading Terminal</title>
 <style>
 :root{--bg:#070a0f;--panel:#0d1219;--panel2:#101720;--line:#1c2632;--text:#eef3f8;--muted:#8d9aaa;--accent:#65a3ff;--green:#30d49a;--red:#ff6471;--gold:#f5c15d;--purple:#a98cff;--shadow:0 16px 40px rgba(0,0,0,.24)}
@@ -15,10 +16,9 @@
 .btn{pointer-events:auto!important;position:relative!important;z-index:100!important}.buy,.badge-buy{color:#35d49a!important}.sell,.badge-sell{color:#ff5c70!important}.advanced-signal.buy,.signal-main.buy{color:#35d49a!important}.advanced-signal.sell,.signal-main.sell{color:#ff5c70!important}.history .buy{color:#35d49a!important}.history .sell{color:#ff5c70!important}.history-group td{background:#101923;color:#dbe8f7;border-top:2px solid var(--line);font-size:12px;padding-top:12px;padding-bottom:8px}.source-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.source-stat{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:11px}.source-stat .source-title{font-weight:800;font-size:12px}.source-stat .source-win{font-size:20px;font-weight:900;margin-top:5px}.source-stat .source-line{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}@media(max-width:1000px){.source-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.source-stats-grid{grid-template-columns:1fr}} </style>
 <style>.title-shimmer{background:linear-gradient(90deg,#eef3f8 0%,#9fc7ff 35%,#f5c15d 52%,#eef3f8 72%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:titleShimmer 7s linear infinite}@keyframes titleShimmer{to{background-position:-220% 0}}.gold-photo-bg{position:fixed;inset:0;z-index:0;pointer-events:none;background-image:url("assets/gold-trading-bg.png");background-size:cover;background-position:center;background-repeat:no-repeat;filter:saturate(.92) contrast(1.03);opacity:.34;transform:translateZ(0);will-change:transform}.gold-photo-bg:after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(3,6,10,.34),rgba(3,7,13,.72) 72%,rgba(2,5,9,.86));}.main{position:relative;z-index:3}.sidebar,.topbar,.card,.toast,.modal{z-index:4}.gold-photo-bg+*{position:relative;z-index:2}@media (max-width:900px){.gold-photo-bg{opacity:.22;background-position:center top}}
 .advanced-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.advanced-card{border:1px solid var(--line);background:rgba(8,14,21,.86);border-radius:12px;padding:12px;box-shadow:0 12px 30px rgba(0,0,0,.16)}.advanced-card.buy{border-color:rgba(48,212,154,.35)}.advanced-card.sell{border-color:rgba(240,105,120,.35)}.advanced-card.wait{border-color:rgba(245,193,93,.25)}.advanced-head{display:flex;justify-content:space-between;align-items:center;gap:10px}.advanced-signal{font-size:22px;font-weight:1000;letter-spacing:.06em}.component-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:10px}.component{padding:7px 8px;border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.02)}.component small{display:block;color:var(--muted);font-size:9px;margin-bottom:3px}.component b{font-size:11px}.ai-reason{margin-top:5px;line-height:1.35;word-break:break-word;opacity:.98;display:block;min-height:18px}.ai-provider-card .ai-reason b{color:var(--gold)}.advanced-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px}.badge-buy{color:var(--green)}.badge-sell{color:var(--red)}.badge-wait{color:var(--gold)}@media(max-width:900px){.advanced-grid{grid-template-columns:1fr}}
-.btn{pointer-events:auto!important;position:relative!important;z-index:100!important}.buy,.badge-buy{color:#35d49a!important}.sell,.badge-sell{color:#ff5c70!important}.advanced-signal.buy,.signal-main.buy{color:#35d49a!important}.advanced-signal.sell,.signal-main.sell{color:#ff5c70!important}.history .buy{color:#35d49a!important}.history .sell{color:#ff5c70!important}.history-group td{background:#101923;color:#dbe8f7;border-top:2px solid var(--line);font-size:12px;padding-top:12px;padding-bottom:8px}.source-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.source-stat{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:11px}.source-stat .source-title{font-weight:800;font-size:12px}.source-stat .source-win{font-size:20px;font-weight:900;margin-top:5px}.source-stat .source-line{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}@media(max-width:1000px){.source-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.source-stats-grid{grid-template-columns:1fr}} </style><link rel="manifest" href="manifest.webmanifest">
-<meta name="theme-color" content="#0b1220">
+.btn{pointer-events:auto!important;position:relative!important;z-index:100!important}.buy,.badge-buy{color:#35d49a!important}.sell,.badge-sell{color:#ff5c70!important}.advanced-signal.buy,.signal-main.buy{color:#35d49a!important}.advanced-signal.sell,.signal-main.sell{color:#ff5c70!important}.history .buy{color:#35d49a!important}.history .sell{color:#ff5c70!important}.history-group td{background:#101923;color:#dbe8f7;border-top:2px solid var(--line);font-size:12px;padding-top:12px;padding-bottom:8px}.source-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.source-stat{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:11px}.source-stat .source-title{font-weight:800;font-size:12px}.source-stat .source-win{font-size:20px;font-weight:900;margin-top:5px}.source-stat .source-line{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}@media(max-width:1000px){.source-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.source-stats-grid{grid-template-columns:1fr}} </style><link href="manifest.webmanifest" rel="manifest"/>
+<meta content="#0b1220" name="theme-color"/>
 <script src="https://unpkg.com/lightweight-charts@4.2.2/dist/lightweight-charts.standalone.production.js"></script>
-
 <style>
 /* RED LIQUID GLASS DESIGN — UI ONLY. TradingView chart/JS untouched. */
 :root{--accent:#ff3b4f;--accent2:#ff6b78;--glass-red:rgba(255,45,65,.10);--glass-red-strong:rgba(255,45,65,.18);--red-line:rgba(255,82,96,.34);--red-glow:rgba(255,45,65,.20)}
@@ -61,8 +61,6 @@ html,body{background:radial-gradient(circle at 15% 0%,rgba(255,36,58,.10),transp
  .signal-main{font-size:19px}.mini{font-size:11px}.levels .row,.list-row{padding:7px 0}
 }
 .btn{pointer-events:auto!important;position:relative!important;z-index:100!important}.buy,.badge-buy{color:#35d49a!important}.sell,.badge-sell{color:#ff5c70!important}.advanced-signal.buy,.signal-main.buy{color:#35d49a!important}.advanced-signal.sell,.signal-main.sell{color:#ff5c70!important}.history .buy{color:#35d49a!important}.history .sell{color:#ff5c70!important}.history-group td{background:#101923;color:#dbe8f7;border-top:2px solid var(--line);font-size:12px;padding-top:12px;padding-bottom:8px}.source-stats-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px}.source-stat{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:11px}.source-stat .source-title{font-weight:800;font-size:12px}.source-stat .source-win{font-size:20px;font-weight:900;margin-top:5px}.source-stat .source-line{font-size:11px;color:var(--muted);margin-top:5px;line-height:1.5}@media(max-width:1000px){.source-stats-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:650px){.source-stats-grid{grid-template-columns:1fr}} </style>
-
-
 <style>
 :root{--bg:#080603;--panel:rgba(25,17,7,.58);--panel2:rgba(34,23,9,.52);--line:rgba(245,193,93,.24);--text:#fff8e8;--muted:#b9a982;--accent:#f5c15d;--green:#35d49a;--red:#ff6471;--gold:#f5c15d;--purple:#b59cff;--shadow:0 24px 70px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.06)}
 html,body{background:#050301;color:var(--text)}
@@ -87,7 +85,6 @@ body:before{content:"";position:fixed;inset:-8%;z-index:0;pointer-events:none;ba
 @media(max-width:900px){.gold-3d-orb{width:150px;height:150px;right:-30px;top:18vh}.gold-photo-bg{opacity:.17!important}}
 .nav-external{display:block;position:relative;z-index:1000;pointer-events:auto!important;user-select:none;-webkit-user-select:none;width:100%;border:1px solid transparent;background:transparent;color:var(--gold);text-align:left;padding:11px 12px;border-radius:10px;cursor:pointer;font-weight:800}.nav-external:hover{background:#111923;color:#fff}.nav-external::after{content:" ↗";opacity:.65}.nav-external-form{display:block;margin:0;padding:0;width:100%}.nav-external-form .nav-external{width:100%;display:block;font:inherit}
 </style>
-
 <style>
 /* Premium 3D liquid-glass instrument logo */
 .brand{position:relative;gap:9px;flex-wrap:wrap}
@@ -115,7 +112,6 @@ body.is-admin button.admin-only{display:inline-flex!important}
 .nav form.admin-only{display:none!important}
 body.is-admin .nav form.admin-only{display:block!important}
 </style>
-
 <style id="signalx-mobile-performance">
 /* SignalX Mobile Premium UI — visual-only responsive layer. TradingView/MT5 chart internals untouched. */
 @media (max-width: 600px){
@@ -170,8 +166,6 @@ body.is-admin .nav form.admin-only{display:block!important}
   *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important;}
 }
 </style>
-
-
 <style id="signalx-premium-responsive-final">
 /* SignalX Premium Responsive Shell — UI-only. TradingView/MT5 chart internals untouched. */
 :root{--sx-blue:#1aa8ff;--sx-cyan:#45e7ff;--sx-purple:#9b5cff;--sx-pink:#d84dff;--sx-glass:rgba(8,18,34,.58);--sx-border:rgba(62,176,255,.28);--sx-glow:rgba(0,156,255,.22)}
@@ -245,260 +239,9 @@ body:before{background:radial-gradient(circle at 20% 20%,rgba(0,153,255,.12),tra
 @media(max-width:390px){.main{padding:6px!important}.nav button{padding:7px 8px!important;font-size:10px!important}.btn,.tf{padding:7px 8px!important;font-size:10px!important}.card{padding:8px!important}.chart{height:325px!important}.brand-copy b{font-size:18px!important}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
 </style>
-<link rel="stylesheet" href="/signalx-premium-theme.css?v=20260913-v4">
-<style id="signalx-v3-neon-redesign">
-/* SIGNALX V3 VISUAL REDESIGN
-   UI/CSS ONLY. Existing TradingView, MT5 bridge, auth, AI permissions,
-   active-session permissions and application JS are intentionally untouched. */
-:root{
- --sx-bg:#030611;
- --sx-bg2:#060b19;
- --sx-panel:rgba(8,14,31,.82);
- --sx-panel2:rgba(11,18,40,.88);
- --sx-line:rgba(83,113,255,.22);
- --sx-line-strong:rgba(71,174,255,.55);
- --sx-blue:#27a8ff;
- --sx-cyan:#35e7ff;
- --sx-purple:#8a5cff;
- --sx-violet:#b14cff;
- --sx-green:#26e39a;
- --sx-red:#ff4f70;
- --sx-gold:#ffc857;
- --sx-text:#f2f7ff;
- --sx-muted:#8391ad;
- --sx-glow:0 0 28px rgba(39,168,255,.13);
- --sx-radius:16px;
- --sx-shadow:0 18px 55px rgba(0,0,0,.42);
-}
-html,body{
- background:
- radial-gradient(900px 500px at 72% -10%,rgba(80,61,255,.18),transparent 65%),
- radial-gradient(750px 500px at 15% 12%,rgba(0,190,255,.10),transparent 65%),
- linear-gradient(135deg,#02040b 0%,#030816 52%,#060718 100%) !important;
- color:var(--sx-text);
-}
-body:before{
- content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
- background:
- linear-gradient(rgba(45,120,255,.035) 1px,transparent 1px),
- linear-gradient(90deg,rgba(45,120,255,.035) 1px,transparent 1px);
- background-size:42px 42px;
- mask-image:linear-gradient(to bottom,black,transparent 88%);
-}
-.gold-photo-bg{display:none!important}
-.gold-3d-orb{opacity:.12!important;filter:blur(8px) hue-rotate(110deg) saturate(1.8)!important}
-.app{grid-template-columns:238px minmax(0,1fr)!important;position:relative;z-index:1}
-.sidebar{
- position:sticky!important;top:0;height:100vh!important;
- background:linear-gradient(180deg,rgba(4,9,24,.94),rgba(3,7,17,.90))!important;
- border-right:1px solid rgba(64,127,255,.22)!important;
- box-shadow:12px 0 45px rgba(0,0,0,.32),inset -1px 0 rgba(58,151,255,.08)!important;
- backdrop-filter:blur(22px)!important;
- padding:16px 12px!important;
-}
-.brand{
- display:flex!important;align-items:center!important;gap:11px!important;
- padding:8px 10px 17px!important;margin-bottom:12px!important;
- border-bottom:1px solid rgba(76,126,255,.15)!important;
-}
-.brand-copy b{font-size:20px!important;letter-spacing:.2px!important;text-shadow:0 0 22px rgba(39,168,255,.34)}
-.brand-copy span{color:#6e86b2!important;font-size:9px!important;letter-spacing:.14em}
-.sx-logo-mark{
- width:42px!important;height:42px!important;border-radius:13px!important;
- display:grid!important;place-items:center!important;
- background:linear-gradient(145deg,#153c91,#5d35dc)!important;
- border:1px solid rgba(101,190,255,.75)!important;
- box-shadow:0 0 28px rgba(50,127,255,.32),inset 0 1px rgba(255,255,255,.22)!important;
-}
-.sx-logo-mark span{font-size:13px;font-weight:1000;letter-spacing:.08em;color:#fff;text-shadow:0 0 15px #4ddaff}
-.nav{gap:5px!important}
-.nav button{
- color:#7f90b1!important;
- border:1px solid transparent!important;
- background:linear-gradient(90deg,rgba(14,27,55,.34),transparent)!important;
- border-radius:11px!important;
- padding:10px 11px!important;
- transition:.2s ease!important;
-}
-.nav button:hover{
- color:#dff6ff!important;border-color:rgba(45,173,255,.22)!important;
- background:linear-gradient(90deg,rgba(22,75,132,.30),rgba(89,56,190,.10))!important;
- box-shadow:0 0 20px rgba(25,159,255,.09)!important;
- transform:translateX(2px);
-}
-.nav button.active{
- color:#fff!important;
- background:linear-gradient(90deg,rgba(20,102,194,.34),rgba(99,53,205,.22))!important;
- border-color:rgba(60,171,255,.48)!important;
- box-shadow:inset 3px 0 var(--sx-cyan),0 0 25px rgba(33,145,255,.12)!important;
-}
-.nav button.admin-only{ }
-.sidebar-bottom{margin-top:auto!important}
-.sx-pro-card{
- margin:12px 2px 12px;padding:12px;border-radius:14px;
- border:1px solid rgba(119,91,255,.35);
- background:linear-gradient(145deg,rgba(35,31,91,.50),rgba(6,20,48,.62));
- box-shadow:0 0 28px rgba(91,73,255,.10),inset 0 1px rgba(255,255,255,.06);
-}
-.sx-pro-card b,.sx-pro-card small{display:block}
-.sx-pro-kicker{font-size:9px;color:#8daeff;letter-spacing:.16em;font-weight:900}
-.sx-pro-card b{font-size:12px;margin-top:5px}
-.sx-pro-card small{color:#7182a5;font-size:9px;line-height:1.4;margin:5px 0 9px}
-.sx-pro-btn{
- display:flex;align-items:center;justify-content:center;padding:8px 10px;border-radius:9px;
- color:#fff;text-decoration:none;font-weight:900;font-size:10px;letter-spacing:.08em;
- background:linear-gradient(100deg,#2167ff,#8a45ff);
- border:1px solid rgba(120,210,255,.45);
- box-shadow:0 0 20px rgba(76,88,255,.22);
-}
-.main{padding:16px 18px 28px!important;max-width:1800px!important}
-.topbar{
- padding:11px 13px!important;margin-bottom:13px!important;
- border:1px solid rgba(71,125,255,.17)!important;border-radius:16px!important;
- background:linear-gradient(110deg,rgba(7,14,32,.80),rgba(9,12,31,.68))!important;
- box-shadow:0 12px 40px rgba(0,0,0,.25),inset 0 1px rgba(255,255,255,.035)!important;
- backdrop-filter:blur(20px)!important;
-}
-.sx-title-wrap{min-width:210px}
-.topbar h1{font-size:18px!important}
-.topbar p{color:#7184aa!important}
-.sx-top-actions{display:flex;align-items:center;gap:10px;flex:1;justify-content:flex-end}
-.sx-ticker-strip{display:flex;gap:6px;overflow:auto;max-width:700px}
-.sx-ticker{
- min-width:125px;padding:7px 9px;border:1px solid rgba(68,133,255,.18);border-radius:10px;
- background:rgba(6,15,34,.62);font-size:9px;display:grid;grid-template-columns:1fr auto;gap:2px 7px;
-}
-.sx-ticker b{font-size:10px;color:#dce9ff}.sx-ticker span{color:#7185aa}.sx-ticker strong{color:var(--sx-green);font-size:8px;grid-row:1/3;grid-column:2;align-self:center}
-.tools{gap:7px!important}
-.pill{
- background:rgba(8,18,42,.68)!important;border-color:rgba(67,127,255,.24)!important;
- color:#91a9d3!important;box-shadow:inset 0 1px rgba(255,255,255,.035)!important;
-}
-.btn,.tf{
- background:linear-gradient(145deg,rgba(18,35,69,.78),rgba(8,17,37,.72))!important;
- border-color:rgba(68,135,255,.25)!important;color:#cfe0fb!important;
- border-radius:10px!important;box-shadow:inset 0 1px rgba(255,255,255,.04)!important;
-}
-.btn:hover,.tf:hover{
- border-color:rgba(48,202,255,.58)!important;color:#fff!important;
- box-shadow:0 0 22px rgba(27,164,255,.13)!important;transform:translateY(-1px)
-}
-.btn.primary,.tf.active{
- background:linear-gradient(135deg,#1556c9,#6540d8)!important;
- border-color:rgba(85,205,255,.62)!important;color:#fff!important;
- box-shadow:0 0 25px rgba(42,113,255,.25),inset 0 1px rgba(255,255,255,.22)!important;
-}
-.card{
- background:linear-gradient(145deg,rgba(8,16,37,.84),rgba(5,11,26,.79))!important;
- border:1px solid rgba(69,119,255,.19)!important;
- border-radius:var(--sx-radius)!important;
- box-shadow:var(--sx-shadow),inset 0 1px rgba(255,255,255,.035)!important;
- backdrop-filter:blur(18px)!important;
-}
-.card:hover{border-color:rgba(58,172,255,.33)!important;box-shadow:var(--sx-shadow),0 0 32px rgba(27,137,255,.07)!important}
-.metric,.signal-box,.advanced-card,.session,.calendar-item{
- background:linear-gradient(145deg,rgba(9,20,43,.72),rgba(5,12,28,.72))!important;
- border-color:rgba(70,124,255,.17)!important;border-radius:12px!important;
-}
-.metric:hover,.signal-box:hover,.advanced-card:hover{
- border-color:rgba(55,185,255,.34)!important;box-shadow:0 0 25px rgba(38,137,255,.08)!important;
-}
-.section-head h2,.section-head h3{color:#e7f0ff!important}
-.mini,.sub,.tiny{color:#7889aa!important}
-.symbol{color:#f1f7ff!important;text-shadow:0 0 18px rgba(39,168,255,.12)}
-.price{font-size:34px!important;color:#fff!important;text-shadow:0 0 30px rgba(50,179,255,.20)!important}
-.up,.buy,.badge-buy,.sup{color:#2ee8a5!important;text-shadow:0 0 15px rgba(46,232,165,.18)}
-.down,.sell,.badge-sell,.res{color:#ff5875!important;text-shadow:0 0 15px rgba(255,88,117,.14)}
-.wait,.piv{color:#ffc857!important}
-.chart{
- border-color:rgba(60,136,255,.18)!important;
- background:linear-gradient(180deg,rgba(3,9,22,.82),rgba(2,7,17,.94))!important;
- box-shadow:inset 0 0 35px rgba(28,93,255,.05)!important;
-}
-.chart:before{
- content:"";display:block;position:absolute;pointer-events:none;
-}
-.dot{background:var(--sx-green)!important;box-shadow:0 0 13px rgba(38,227,154,.75)!important}
-.title-shimmer{
- background:linear-gradient(90deg,#fff,#70d8ff,#a76bff,#fff)!important;
- background-size:220% 100%!important;
- -webkit-background-clip:text!important;background-clip:text!important;
- color:transparent!important;
- animation:titleShimmer 6s linear infinite!important;
-}
-@keyframes titleShimmer{to{background-position:-220% 0}}
-@keyframes sxPulse{0%,100%{box-shadow:0 0 15px rgba(40,160,255,.08)}50%{box-shadow:0 0 28px rgba(40,160,255,.20)}}
-.ai-reason{color:#c5d6f0!important}
-.history-group td{background:rgba(10,25,53,.72)!important;border-color:rgba(66,119,255,.16)!important}
-.source-stat{background:rgba(7,18,39,.72)!important;border-color:rgba(65,121,255,.18)!important}
-.input{background:rgba(3,10,24,.84)!important;border-color:rgba(66,125,255,.25)!important;color:#fff!important}
-.input:focus{border-color:rgba(55,190,255,.72)!important;box-shadow:0 0 0 3px rgba(34,157,255,.10),0 0 22px rgba(34,157,255,.10)!important}
-.modal{background:rgba(1,4,12,.82)!important;backdrop-filter:blur(18px)!important}
-.modal-card{background:linear-gradient(145deg,rgba(9,19,43,.96),rgba(5,10,25,.96))!important;border-color:rgba(70,132,255,.32)!important;box-shadow:0 30px 90px rgba(0,0,0,.6),0 0 40px rgba(45,104,255,.10)!important}
-.toast{background:rgba(7,18,39,.95)!important;border-color:rgba(61,150,255,.30)!important}
-.advanced-signal{letter-spacing:.04em;text-shadow:0 0 18px currentColor}
-.section.active > .card,.section.active .signalx-visual-hero{animation:sxFade .25s ease-out}
-@keyframes sxFade{from{opacity:.65;transform:translateY(4px)}to{opacity:1;transform:none}}
-/* Existing visual hero gets integrated into the new glass system. */
-.signalx-visual-hero{
- border:1px solid rgba(72,130,255,.22)!important;
- border-radius:18px!important;
- background:
- radial-gradient(circle at 76% 50%,rgba(126,76,255,.16),transparent 32%),
- radial-gradient(circle at 28% 50%,rgba(20,176,255,.12),transparent 35%),
- linear-gradient(120deg,rgba(5,12,29,.94),rgba(8,11,29,.78))!important;
- box-shadow:0 0 45px rgba(39,118,255,.09),inset 0 1px rgba(255,255,255,.05)!important;
- overflow:hidden!important;
-}
-.sx-hero-copy strong{color:#eef7ff!important;text-shadow:0 0 30px rgba(48,196,255,.35)!important}
-.sx-hero-copy em,.sx-hero-tag{color:#7fd9ff!important}
-.sx-hero-orbit{filter:drop-shadow(0 0 18px rgba(60,185,255,.45))}
-.sx-hero-orbit i{border-color:rgba(56,207,255,.60)!important}
-.sx-hero-orbit b{background:radial-gradient(circle,#6eeaff,#784eff 55%,transparent 70%)!important}
-.sx-hero-orbit span{background:linear-gradient(135deg,#2bd9ff,#8d4dff)!important;box-shadow:0 0 30px rgba(74,158,255,.55)!important}
-@media(max-width:1100px){
- .app{grid-template-columns:1fr!important}
- .sidebar{position:sticky!important;height:auto!important}
- .sx-top-actions{width:100%;justify-content:space-between}
- .sx-ticker-strip{max-width:none;flex:1}
-}
-@media(max-width:900px){
- .sidebar{padding:9px 10px!important}
- .brand{padding:3px 6px 9px!important}
- .nav button{padding:8px 10px!important}
- .main{padding:9px 10px 22px!important}
- .topbar{padding:9px!important}
- .sx-title-wrap{min-width:0}
- .sx-top-actions{display:block}
- .sx-ticker-strip{margin:7px 0;max-width:100%}
- .sx-ticker{min-width:112px}
- .tools{justify-content:flex-start}
- .signalx-visual-hero{min-height:230px}
-}
-@media(max-width:620px){
- .sx-ticker-strip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}
- .sx-ticker{min-width:0}
- .sx-ticker span{display:none}
- .sx-ticker strong{grid-column:auto;grid-row:auto}
- .topbar{border-radius:13px!important}
- .chart{height:390px!important}
-}
-@media(max-width:480px){
- .sx-ticker-strip{grid-template-columns:repeat(3,1fr);gap:4px}
- .sx-ticker{padding:6px 6px;font-size:8px}
- .sx-ticker b{font-size:9px}
- .chart{height:360px!important}
- .price{font-size:27px!important}
-}
-@media(prefers-reduced-motion:reduce){
- *,*:before,*:after{animation-duration:.001ms!important;animation-iteration-count:1!important;scroll-behavior:auto!important}
-}
-</style>
+<link href="signalx-premium-theme.css?v=20260913-v6-sync" rel="stylesheet"/>
 
-<style id="signalx-v3-asset-positioning">
-.v3-hero-bull,.v3-hero-bear{position:absolute;object-fit:contain;pointer-events:none;z-index:1;filter:drop-shadow(0 0 22px rgba(53,231,255,.22))}.v3-hero-bull{left:4px;bottom:-16px;width:min(38%,600px);max-height:280px}.v3-hero-bear{left:24%;bottom:-4px;width:min(28%,500px);max-height:240px;opacity:.78;filter:drop-shadow(0 0 20px rgba(164,92,255,.22))}.sx-hero-copy{max-width:48%}.signalx-visual-hero .sx-hero-orbit{z-index:2}.signalx-visual-hero .sx-hero-tag{z-index:4}
-@media(max-width:700px){.v3-hero-bull{width:46%;bottom:-8px;left:-12px;opacity:.72}.v3-hero-bear{width:34%;left:22%;bottom:-2px;opacity:.48}.sx-hero-copy{max-width:65%}}
-</style>
+
 <style id="signalx-v3-final-shell">
 /* SIGNALX V3 FINAL SHELL: desktop left sidebar + mobile drawer */
 .sx-mobile-menu{display:none}
@@ -530,7 +273,6 @@ body:before{
 }
 @media(prefers-reduced-motion:reduce){.sidebar{transition:none!important}.sx-sidebar-overlay{transition:none!important}}
 </style>
-
 <style id="signalx-user-background-layout">
 /* USER-SUPPLIED V3 BACKGROUNDS — exact assets, layered into real UI */
 :root{
@@ -628,194 +370,328 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
  .sx-hero-copy>em{font-size:8px!important;}
 }
 </style>
+<style id="signalx-liquid-glass-patch">
+/* SIGNALX LIQUID GLASS + STATUS TYPOGRAPHY PATCH 2026-09-13
+   TradingView live chart internals intentionally untouched. */
+:root{
+  --sx-white:#f7fbff;
+  --sx-blue-neon:#37cfff;
+  --sx-blue-soft:rgba(55,207,255,.55);
+  --sx-green-neon:#27f3a8;
+  --sx-red-neon:#ff4c6d;
+  --sx-yellow-neon:#ffd34d;
+}
 
+/* Tight sidebar spacing */
+.sidebar .nav{gap:2px!important}
+.sidebar .nav button,.sidebar .nav-external-form button{
+  min-height:35px!important;
+  padding:7px 10px!important;
+  margin:0!important;
+  line-height:1.15!important;
+}
+.sidebar .brand{margin-bottom:7px!important;padding-bottom:11px!important}
+.sidebar-bottom{padding-top:8px!important}
+.sidebar .sx-pro-card{margin-top:8px!important;margin-bottom:8px!important}
+
+/* White text + electric-blue edge/glow for normal labels/headings */
+.section-head h2,.section-head h3,
+.symbol,.topbar h1,
+.metric b,.metric small,
+.card h2,.card h3,
+.nav button,.nav-external-form button,
+.sx-title-wrap h1,
+.history-note b,
+.countdown,.outcome-open,
+.pill:not(.buy):not(.sell):not(.wait):not(.badge-buy):not(.badge-sell):not(.badge-wait){
+  color:var(--sx-white)!important;
+  text-shadow:
+    0 0 2px rgba(255,255,255,.88),
+    0 0 8px rgba(55,207,255,.44),
+    0 0 18px rgba(55,207,255,.20)!important;
+  -webkit-text-stroke:.22px rgba(55,207,255,.62);
+}
+.section-head h2,.section-head h3{letter-spacing:.01em}
+
+/* BUY / SELL / WAIT statuses: dedicated neon edge colors */
+.buy,.badge-buy,.advanced-signal.buy,.signal-main.buy{
+  color:var(--sx-green-neon)!important;
+  text-shadow:
+    0 0 2px rgba(255,255,255,.55),
+    0 0 8px rgba(39,243,168,.75),
+    0 0 20px rgba(39,243,168,.38)!important;
+  -webkit-text-stroke:.3px rgba(39,243,168,.92);
+}
+.sell,.badge-sell,.advanced-signal.sell,.signal-main.sell{
+  color:var(--sx-red-neon)!important;
+  text-shadow:
+    0 0 2px rgba(255,255,255,.45),
+    0 0 8px rgba(255,76,109,.78),
+    0 0 20px rgba(255,76,109,.38)!important;
+  -webkit-text-stroke:.3px rgba(255,76,109,.92);
+}
+.wait,.badge-wait,.advanced-signal.wait,.signal-main.wait{
+  color:var(--sx-yellow-neon)!important;
+  text-shadow:
+    0 0 2px rgba(255,255,255,.44),
+    0 0 8px rgba(255,211,77,.78),
+    0 0 20px rgba(255,211,77,.38)!important;
+  -webkit-text-stroke:.3px rgba(255,211,77,.90);
+}
+
+/* Status borders / pills */
+.signal-box:has(.signal-main.buy),
+.advanced-card:has(.advanced-signal.buy){border-color:rgba(39,243,168,.52)!important;box-shadow:0 0 24px rgba(39,243,168,.11),inset 0 0 22px rgba(39,243,168,.045)!important}
+.signal-box:has(.signal-main.sell),
+.advanced-card:has(.advanced-signal.sell){border-color:rgba(255,76,109,.52)!important;box-shadow:0 0 24px rgba(255,76,109,.11),inset 0 0 22px rgba(255,76,109,.045)!important}
+.signal-box:has(.signal-main.wait),
+.advanced-card:has(.advanced-signal.wait){border-color:rgba(255,211,77,.48)!important;box-shadow:0 0 24px rgba(255,211,77,.09),inset 0 0 22px rgba(255,211,77,.035)!important}
+
+/* Liquid-glass panels: moving reflective sheen without touching TradingView chart internals */
+.card,.metric,.signal-box,.session,.calendar-item,.advanced-card,.source-stat,.topbar{
+  position:relative!important;
+  overflow:hidden!important;
+  isolation:isolate!important;
+  background:
+    linear-gradient(135deg,rgba(255,255,255,.075),rgba(255,255,255,.018) 34%,rgba(16,33,65,.16) 68%,rgba(104,63,220,.09)),
+    linear-gradient(145deg,rgba(7,20,43,.74),rgba(5,10,25,.72))!important;
+  border-color:rgba(76,174,255,.30)!important;
+  backdrop-filter:blur(22px) saturate(125%)!important;
+  -webkit-backdrop-filter:blur(22px) saturate(125%)!important;
+  box-shadow:
+    0 14px 42px rgba(0,0,0,.28),
+    inset 0 1px 0 rgba(255,255,255,.09),
+    inset 0 -1px 0 rgba(29,129,255,.08),
+    0 0 26px rgba(43,151,255,.06)!important;
+}
+.card::before,.metric::before,.signal-box::before,.session::before,.calendar-item::before,.advanced-card::before,.source-stat::before,.topbar::before{
+  content:"";position:absolute;inset:-35%;pointer-events:none;z-index:-1;
+  background:linear-gradient(115deg,transparent 38%,rgba(92,211,255,.09) 48%,rgba(255,255,255,.10) 51%,rgba(154,84,255,.08) 54%,transparent 64%);
+  transform:translateX(-65%) rotate(4deg);
+  animation:sxGlassShine 8s ease-in-out infinite;
+}
+.card::after,.metric::after,.signal-box::after,.session::after,.calendar-item::after,.advanced-card::after,.source-stat::after,.topbar::after{
+  content:"";position:absolute;inset:1px;pointer-events:none;z-index:-1;border-radius:inherit;
+  background:radial-gradient(circle at 18% 8%,rgba(101,218,255,.07),transparent 27%),radial-gradient(circle at 85% 90%,rgba(147,76,255,.06),transparent 25%);
+}
+@keyframes sxGlassShine{0%,20%{transform:translateX(-65%) rotate(4deg);opacity:0}32%{opacity:1}58%{transform:translateX(65%) rotate(4deg);opacity:.72}70%,100%{transform:translateX(85%) rotate(4deg);opacity:0}}
+
+/* Sidebar items get the same liquid-glass motion while remaining compact */
+.sidebar .nav button,.sidebar .nav-external-form button{
+  position:relative!important;
+  overflow:hidden!important;
+  background:
+    linear-gradient(110deg,rgba(8,27,58,.74),rgba(21,11,55,.52)),
+    url('assets/user-bg/section-frame.jpg') center/100% 100% no-repeat!important;
+  border:1px solid rgba(70,162,255,.34)!important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.055),0 0 14px rgba(31,143,255,.055)!important;
+  backdrop-filter:blur(14px) saturate(130%)!important;
+}
+.sidebar .nav button::after,.sidebar .nav-external-form button::after{
+  content:"";position:absolute;inset:-60% -30%;pointer-events:none;
+  background:linear-gradient(115deg,transparent 43%,rgba(255,255,255,.12) 49%,rgba(70,209,255,.10) 52%,transparent 60%);
+  transform:translateX(-45%) skewX(-14deg);
+  animation:sxSideShine 7s ease-in-out infinite;
+}
+@keyframes sxSideShine{0%,25%{transform:translateX(-55%) skewX(-14deg);opacity:0}40%{opacity:.9}65%{transform:translateX(55%) skewX(-14deg);opacity:.35}80%,100%{transform:translateX(70%) skewX(-14deg);opacity:0}}
+.sidebar .nav button:hover,.sidebar .nav button.active,.sidebar .nav-external-form button:hover{
+  border-color:rgba(55,207,255,.76)!important;
+  box-shadow:0 0 24px rgba(39,180,255,.19),inset 0 0 20px rgba(89,75,255,.08)!important;
+}
+
+/* Keep status badges visually distinct */
+.setup-badge.strong,.badge-buy{border-color:rgba(39,243,168,.62)!important;box-shadow:0 0 14px rgba(39,243,168,.16)!important}
+.badge-sell{border-color:rgba(255,76,109,.62)!important;box-shadow:0 0 14px rgba(255,76,109,.16)!important}
+.badge-wait{border-color:rgba(255,211,77,.62)!important;box-shadow:0 0 14px rgba(255,211,77,.14)!important}
+
+@media(max-width:900px){
+  .sidebar .nav{gap:3px!important}
+  .sidebar .nav button,.sidebar .nav-external-form button{min-height:37px!important;padding:8px 10px!important}
+  .card,.metric,.signal-box,.session,.calendar-item,.advanced-card,.source-stat,.topbar{backdrop-filter:blur(18px) saturate(118%)!important;-webkit-backdrop-filter:blur(18px) saturate(118%)!important}
+}
+@media(prefers-reduced-motion:reduce){
+  .card::before,.metric::before,.signal-box::before,.session::before,.calendar-item::before,.advanced-card::before,.source-stat::before,.topbar::before,
+  .sidebar .nav button::after,.sidebar .nav-external-form button::after{animation:none!important}
+}
+
+</style>
+<!-- SIGNALX LIQUID GLASS PATCH -->
 </head>
 <body>
 <div class="gold-3d-orb"></div>
-<div class="gold-photo-bg" aria-hidden="true"></div>
+<div aria-hidden="true" class="gold-photo-bg"></div>
 <div class="sx-sidebar-overlay" id="sxSidebarOverlay"></div><div class="app">
 <aside class="sidebar">
-  <div class="brand brand-xau"><div class="brand-logo sx-logo-mark"><img src="assets/logo/signalx-icon.svg" alt="SignalX" width="34" height="34" decoding="async"></div><div class="brand-copy"><b>SignalX</b><span>AI POWERED TRADING</span></div></div>
-  <div class="nav">
-    <button class="active" data-section="overview">▣ Overview</button>
-    <button data-section="chartSection">◩ Live Chart</button>
-    <button data-section="analysisSection">◈ Technical Analysis</button>
-    <button class="admin-only" data-section="smartAnalysisSection">🧠 AI Smart Analysis</button>
-    <button data-section="classicSection">▣ Classic Trade</button>
-    <button data-section="snrSection">◈ SNR</button>
-    <button data-section="trendLineSection">📈 Trend Line</button>
-    <button class="admin-only" data-section="signalSection">⚡ Signal Lab</button>
-    <button data-section="ictSection">🎯 ICT Signals</button>
-    <button class="admin-only" data-section="signalsSection">🚨 Signals</button>
-    <button data-section="mtfSection">◫ Multi-Timeframe</button>
-    <button data-section="calendarSection">◷ Economic Calendar</button>
-    <button data-section="sessionsSection">◉ Market Sessions</button>
-    <button data-section="historySection">▤ Signal History</button>
-    <button data-section="activeSessionsSection">◉ Aktiv Seanslar</button>
-    <button class="admin-only" data-section="mt5Section">◉ MetaTrader 5</button>
-    <form id="eurUsdPageForm" class="nav-external-form" action="/eurusd" method="get"><button id="eurUsdPageBtn" class="nav-external" type="submit">💱 EURUSD</button></form>
-  </div>
-  <div class="sidebar-bottom">
-  <div class="sx-pro-card">
-    <div><span class="sx-pro-kicker">SIGNALX PRO</span><b>AI + AUTO TRADING</b><small>Advanced signals and premium tools</small></div>
-    <a class="sx-pro-btn" href="#" id="telegramGoPro" target="_blank" rel="noopener">✈ GO PRO</a>
-  </div>
-  <div class="tiny">Pivot + Key Levels engine<br>Live data via backend API</div>
+<div class="brand brand-xau"><div class="brand-logo sx-logo-mark"><img alt="SignalX" decoding="async" height="34" src="assets/logo/signalx-icon.svg" width="34"/></div><div class="brand-copy"><b>SignalX</b><span>AI POWERED TRADING</span></div></div>
+<div class="nav">
+<button class="active" data-section="overview">▣ Overview</button>
+<button data-section="chartSection">◩ Live Chart</button>
+<button data-section="analysisSection">◈ Technical Analysis</button>
+<button class="admin-only" data-section="smartAnalysisSection">🧠 AI Smart Analysis</button>
+<button data-section="classicSection">▣ Classic Trade</button>
+<button data-section="snrSection">◈ SNR</button>
+<button data-section="trendLineSection">📈 Trend Line</button>
+<button class="admin-only" data-section="signalSection">⚡ Signal Lab</button>
+<button data-section="ictSection">🎯 ICT Signals</button>
+<button class="admin-only" data-section="signalsSection">🚨 Signals</button>
+<button data-section="mtfSection">◫ Multi-Timeframe</button>
+<button data-section="calendarSection">◷ Economic Calendar</button>
+<button data-section="sessionsSection">◉ Market Sessions</button>
+<button data-section="historySection">▤ Signal History</button>
+<button data-section="activeSessionsSection">◉ Aktiv Seanslar</button>
+<button class="admin-only" data-section="mt5Section">◉ MetaTrader 5</button>
+<form action="/eurusd" class="nav-external-form" id="eurUsdPageForm" method="get"><button class="nav-external" id="eurUsdPageBtn" type="submit">💱 EURUSD</button></form>
+</div>
+<div class="sidebar-bottom">
+<div class="sx-pro-card">
+<div><span class="sx-pro-kicker">SIGNALX PRO</span><b>AI + AUTO TRADING</b><small>Advanced signals and premium tools</small></div>
+<a class="sx-pro-btn" href="https://t.me/Shohrux_Ravshanov" id="telegramGoPro" rel="noopener" target="_blank">✈ GO PRO</a>
+</div>
+<div class="tiny">Pivot + Key Levels engine<br/>Live data via backend API</div>
 </div>
 </aside>
 <main class="main">
-  <div class="topbar"><button type="button" class="sx-mobile-menu" id="sxMobileMenu" aria-label="Menu" aria-expanded="false">☰</button>
-  <div class="sx-title-wrap"><div><h1 id="pageTitle" class="title-shimmer">Market Overview</h1><p>Real-time market intelligence · AI signal terminal</p></div></div>
-  <div class="sx-top-actions">
-    <div class="sx-ticker-strip" aria-label="Market ticker">
-      <div class="sx-ticker"><b>GOLD</b><span id="sxTickerGold">XAU/USD</span><strong>LIVE</strong></div>
-      <div class="sx-ticker"><b>EUR/USD</b><span>FOREX</span><strong>LIVE</strong></div>
-      <div class="sx-ticker"><b>BTC/USD</b><span>CRYPTO</span><strong>LIVE</strong></div>
-    </div>
-    <div class="tools"><div class="health"><span class="dot"></span><span class="pill" id="mode">Checking…</span></div><span class="pill" id="plan">Guest</span><button class="btn primary auth-top" id="authBtn">Kirish</button></div></div>
-
-  <section class="section active" id="overview">
-    <div class="signalx-visual-hero" aria-hidden="true">
-      <img class="v3-hero-bull" src="assets/hero/trading-bull.png" alt="" loading="lazy">
-      <img class="v3-hero-bear" src="assets/hero/trading-bear.png" alt="" loading="lazy">
-      <div class="sx-hero-copy"><span>GLOBAL MARKETS • REAL-TIME</span><strong>TRADE SMARTER<br>WITH AI.</strong><em>Real-time analysis · Accurate signals · Better decisions</em></div>
-      <div class="sx-hero-orbit"><i></i><b></b><span></span></div>
-      <div class="sx-hero-tag">POWERED BY AI<br><small>GLOBAL MARKETS • REAL-TIME</small></div>
-    </div>
-    <div class="dashboard">
-      <div>
-        <div class="card"><div class="hero"><div><div class="symbol">XAU/USD</div><div class="sub" id="tfLabel">5 MIN</div><div class="countdown-box"><div class="countdown-label">Candle closes</div><div class="countdown" id="countdown">—</div><div class="close-time" id="closeTime">Close time: —</div></div></div><div><div class="price" id="price">—</div><div class="change" id="change">—</div></div></div>
-          <div class="history-note"><span id="historyInfo">Tarix yuklanmoqda…</span><span>Real market history</span></div><div class="tfbar" id="timeframes"><button class="tf" data-interval="1min">1M</button><button class="tf active" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div>
-          <div class="chart" id="chart"></div></div>
-        <div class="card admin-only"><div class="section-head"><div><h3>Signal Engine</h3><div class="mini">Har bir timeframe uchun alohida signal</div></div><div><span class="pill" id="bias">—</span> <button class="btn" id="refreshSignalEngine" type="button">↻ Yangilash</button></div></div><div class="signal-box"><div class="signal-main wait" id="signalMain">WAIT</div><div class="mini" id="signalReason">—</div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Entry</small><b id="entry">—</b></div><div class="metric"><small>SL</small><b id="sl">—</b></div><div class="metric"><small>TP1</small><b id="tp1">—</b></div><div class="metric"><small>TP2</small><b id="tp2">—</b></div></div></div><div id="signalEngineGrid" class="advanced-grid" style="margin-top:12px"></div><div style="margin-top:10px"><button class="btn primary" id="saveSignal" type="button">Signalni saqlash</button></div></div>
-      </div>
-      <aside>
-        <div class="card"><div class="section-head"><h3>Pivot / Key Levels</h3><span class="pill" id="pivotFilter">5 MIN</span></div><div class="tfbar pivot-tfbar" id="pivotTfBar"><button class="tf" data-pivot-interval="1min">1M</button><button class="tf active" data-pivot-interval="5min">5M</button><button class="tf" data-pivot-interval="15min">15M</button><button class="tf" data-pivot-interval="30min">30M</button><button class="tf" data-pivot-interval="1h">1H</button><button class="tf" data-pivot-interval="4h">4H</button><button class="tf" data-pivot-interval="1day">1D</button></div><div class="levels" id="levels"></div><div class="mini" id="pivotSource" style="margin-top:8px">Selected timeframe Pivot</div></div>
-        <div class="card"><div class="section-head"><h3>Performance</h3><button class="btn" id="refreshStats">↻</button></div><div class="grid2"><div class="metric"><small>Total</small><b id="totalSignals">0</b></div><div class="metric"><small>Completed</small><b id="completedSignals">0</b></div><div class="metric"><small>Wins</small><b id="wins">0</b></div><div class="metric"><small>Losses</small><b id="losses">0</b></div></div><div class="metric" style="margin-top:8px"><small>Winrate (TP HIT / TP HIT + SL HIT)</small><b id="winrate">0%</b></div></div>
-        <div class="card admin-only"><div class="section-head"><div><h3>AI Fallback Network</h3><div class="mini">AI faqat signal tasdig‘ida chaqiriladi · oddiy refresh AI request yubormaydi</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" id="aiAutoMode" type="button">AUTO</button><button class="btn" id="aiAllOn" type="button">ALL ON</button><button class="btn" id="aiAllOff" type="button">ALL OFF</button><button class="btn" id="refreshAIProviders" type="button">↻</button></div></div><div id="aiProvidersGrid" class="component-grid" style="margin-top:10px"></div></div>
-        <div class="card"><div class="section-head"><h3>Market Sessions</h3><span class="pill" id="sessionClock">—</span></div><div class="sessions" id="sessions"></div></div>
-      </aside>
-    </div>
-  </section>
-
-  <section class="section" id="chartSection"><div class="card"><div class="section-head"><h2>Live Chart</h2><span class="pill" id="chartStatus">—</span></div><div class="tfbar"><button class="tf" data-interval="1min">1M</button><button class="tf" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div><div class="chart" id="chart2"></div></div></section>
-  <section class="section admin-only" id="signalSection"><div class="card"><div class="section-head"><div><h2>Signal Lab</h2><div class="mini">ICT + SNR + SNR Malaysia + Order Block + FVG + Liquidity + Trend Lines + BOS/CHOCH + Internal Structure</div></div><button class="btn primary" id="refreshAdvanced">↻ Barcha timeframe signal</button></div><div class="tfbar"><button class="tf" data-signal-interval="1min">1M</button><button class="tf active" data-signal-interval="5min">5M</button><button class="tf" data-signal-interval="15min">15M</button><button class="tf" data-signal-interval="30min">30M</button><button class="tf" data-signal-interval="1h">1H</button><button class="tf" data-signal-interval="4h">4H</button><button class="tf" data-signal-interval="1day">1D</button></div><div class="mini" id="advancedStatus">Tanlangan timeframe signali va barcha timeframe signal kartalari alohida hisoblanadi.</div><div class="advanced-grid" id="advancedGrid" style="margin-top:12px"></div></div></section>
+<div class="topbar"><button aria-expanded="false" aria-label="Menu" class="sx-mobile-menu" id="sxMobileMenu" type="button">☰</button>
+<div class="sx-title-wrap"><div><h1 class="title-shimmer" id="pageTitle">Market Overview</h1><p>Real-time market intelligence · AI signal terminal</p></div></div>
+<div class="sx-top-actions">
+<div aria-label="Market ticker" class="sx-ticker-strip">
+<div class="sx-ticker"><b>GOLD</b><span id="sxTickerGold">XAU/USD</span><strong>LIVE</strong></div>
+<div class="sx-ticker"><b>EUR/USD</b><span>FOREX</span><strong>LIVE</strong></div>
+<div class="sx-ticker"><b>BTC/USD</b><span>CRYPTO</span><strong>LIVE</strong></div>
+</div>
+<div class="tools"><div class="health"><span class="dot"></span><span class="pill" id="mode">Checking…</span></div><span class="pill" id="plan">Guest</span><button class="btn primary auth-top" id="authBtn">Kirish</button></div></div>
+<section class="section active" id="overview">
+<div aria-hidden="true" class="signalx-visual-hero">
+<div class="sx-hero-copy"><span>WELCOME TO</span><strong>SignalX</strong><em>AI POWERED TRADING TERMINAL</em></div>
+<div class="sx-hero-orbit"><i></i><b></b><span></span></div>
+<div class="sx-hero-tag">TRADE SMARTER<br/><small>DISCIPLINE TODAY • PROFIT TOMORROW</small></div>
+</div>
+<div class="dashboard">
+<div>
+<div class="card"><div class="hero"><div><div class="symbol">XAU/USD</div><div class="sub" id="tfLabel">5 MIN</div><div class="countdown-box"><div class="countdown-label">Candle closes</div><div class="countdown" id="countdown">—</div><div class="close-time" id="closeTime">Close time: —</div></div></div><div><div class="price" id="price">—</div><div class="change" id="change">—</div></div></div>
+<div class="history-note"><span id="historyInfo">Tarix yuklanmoqda…</span><span>XAUUSD real market history</span></div><div class="tfbar" id="timeframes"><button class="tf" data-interval="1min">1M</button><button class="tf active" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div>
+<div class="chart" id="chart"></div></div>
+<div class="card admin-only"><div class="section-head"><div><h3>Signal Engine</h3><div class="mini">Har bir timeframe uchun alohida signal</div></div><div><span class="pill" id="bias">—</span> <button class="btn" id="refreshSignalEngine" type="button">↻ Yangilash</button></div></div><div class="signal-box"><div class="signal-main wait" id="signalMain">WAIT</div><div class="mini" id="signalReason">—</div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Entry</small><b id="entry">—</b></div><div class="metric"><small>SL</small><b id="sl">—</b></div><div class="metric"><small>TP1</small><b id="tp1">—</b></div><div class="metric"><small>TP2</small><b id="tp2">—</b></div></div></div><div class="advanced-grid" id="signalEngineGrid" style="margin-top:12px"></div><div style="margin-top:10px"><button class="btn primary" id="saveSignal" type="button">Signalni saqlash</button></div></div>
+</div>
+<aside>
+<div class="card"><div class="section-head"><h3>Pivot / Key Levels</h3><span class="pill" id="pivotFilter">5 MIN</span></div><div class="tfbar pivot-tfbar" id="pivotTfBar"><button class="tf" data-pivot-interval="1min">1M</button><button class="tf active" data-pivot-interval="5min">5M</button><button class="tf" data-pivot-interval="15min">15M</button><button class="tf" data-pivot-interval="30min">30M</button><button class="tf" data-pivot-interval="1h">1H</button><button class="tf" data-pivot-interval="4h">4H</button><button class="tf" data-pivot-interval="1day">1D</button></div><div class="levels" id="levels"></div><div class="mini" id="pivotSource" style="margin-top:8px">Selected timeframe Pivot</div></div>
+<div class="card"><div class="section-head"><h3>Performance</h3><button class="btn" id="refreshStats">↻</button></div><div class="grid2"><div class="metric"><small>Total</small><b id="totalSignals">0</b></div><div class="metric"><small>Completed</small><b id="completedSignals">0</b></div><div class="metric"><small>Wins</small><b id="wins">0</b></div><div class="metric"><small>Losses</small><b id="losses">0</b></div></div><div class="metric" style="margin-top:8px"><small>Winrate (TP HIT / TP HIT + SL HIT)</small><b id="winrate">0%</b></div></div>
+<div class="card admin-only"><div class="section-head"><div><h3>AI Fallback Network</h3><div class="mini">AI faqat signal tasdig‘ida chaqiriladi · oddiy refresh AI request yubormaydi</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" id="aiAutoMode" type="button">AUTO</button><button class="btn" id="aiAllOn" type="button">ALL ON</button><button class="btn" id="aiAllOff" type="button">ALL OFF</button><button class="btn" id="refreshAIProviders" type="button">↻</button></div></div><div class="component-grid" id="aiProvidersGrid" style="margin-top:10px"></div></div>
+<div class="card"><div class="section-head"><h3>Market Sessions</h3><span class="pill" id="sessionClock">—</span></div><div class="sessions" id="sessions"></div></div>
+</aside>
+</div>
+</section>
+<section class="section" id="chartSection"><div class="card"><div class="section-head"><h2>Live Chart</h2><span class="pill" id="chartStatus">—</span></div><div class="tfbar"><button class="tf" data-interval="1min">1M</button><button class="tf" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div><div class="chart" id="chart2"></div></div></section>
+<section class="section admin-only" id="signalSection"><div class="card"><div class="section-head"><div><h2>Signal Lab</h2><div class="mini">ICT + SNR + SNR Malaysia + Order Block + FVG + Liquidity + Trend Lines + BOS/CHOCH + Internal Structure</div></div><button class="btn primary" id="refreshAdvanced">↻ Barcha timeframe signal</button></div><div class="tfbar"><button class="tf" data-signal-interval="1min">1M</button><button class="tf active" data-signal-interval="5min">5M</button><button class="tf" data-signal-interval="15min">15M</button><button class="tf" data-signal-interval="30min">30M</button><button class="tf" data-signal-interval="1h">1H</button><button class="tf" data-signal-interval="4h">4H</button><button class="tf" data-signal-interval="1day">1D</button></div><div class="mini" id="advancedStatus">Tanlangan timeframe signali va barcha timeframe signal kartalari alohida hisoblanadi.</div><div class="advanced-grid" id="advancedGrid" style="margin-top:12px"></div></div></section>
 <section class="section" id="analysisSection"><div class="card"><div class="section-head"><h2>Technical Analysis</h2><span class="pill" id="taState">TradingView LIVE</span></div><div id="tvTechnicalWidget" style="min-height:520px;border:1px solid var(--line);border-radius:10px;overflow:hidden"></div><div class="grid4" style="margin-top:10px"><div class="metric"><small>RSI</small><b id="rsi">—</b></div><div class="metric"><small>RSI State</small><b id="rsiState">—</b></div><div class="metric"><small>ATR</small><b id="atr">—</b></div><div class="metric"><small>Trend</small><b id="taTrend">—</b></div></div><p class="mini" id="taSummary">TradingView Technical Analysis widget + canonical TradingView candle calculation.</p></div></section>
-  
-  <section class="section admin-only" id="smartAnalysisSection"><div class="card"><div class="section-head"><div><h2>AI Smart Analysis</h2><div class="mini">AI tasdiqlash faqat Auto Trading signalida ishlaydi · oddiy refresh AI request yubormaydi</div></div><button class="btn primary" id="refreshSmartAnalysis">↻ Yangilash</button></div><div class="sx-ai-stage"><div class="sx-ai-visual"><img src="assets/ai/ai-avatar.png" alt="SignalX AI" loading="lazy"><img class="sx-ai-core" src="assets/ai/ai-core.gif" alt="AI core" loading="lazy"></div><div class="sx-ai-copy"><div class="sx-ai-state">SCANNING MARKET <span class="sx-live-dot"></span></div><div class="mini">MTF · S/R · TREND · RISK/REWARD</div></div></div><div class="grid4" style="margin-top:12px"><div class="metric"><small>AI Bias</small><b id="smartBias">—</b></div><div class="metric"><small>Confidence</small><b id="smartConfidence">—</b></div><div class="metric"><small>Signal</small><b id="smartSignal">—</b></div><div class="metric"><small>Mode</small><b id="smartMode">—</b></div></div><div class="signal-box" style="margin-top:12px"><div class="mini" id="smartSummary">AI Smart Analysis hisoblanmoqda…</div><div class="mini" id="smartAdvice" style="margin-top:8px">—</div></div></div></section>
+<section class="section admin-only" id="smartAnalysisSection"><div class="card"><div class="section-head"><div><h2>AI Smart Analysis</h2><div class="mini">AI tasdiqlash faqat Auto Trading signalida ishlaydi · oddiy refresh AI request yubormaydi</div></div><button class="btn primary" id="refreshSmartAnalysis">↻ Yangilash</button></div><div class="sx-ai-stage"><div class="sx-ai-visual"><img alt="SignalX AI" loading="lazy" src="assets/ai/ai-avatar.png"/><img alt="AI core" class="sx-ai-core" loading="lazy" src="assets/ai/ai-core.gif"/></div><div class="sx-ai-copy"><div class="sx-ai-state">SCANNING MARKET <span class="sx-live-dot"></span></div><div class="mini">MTF · S/R · TREND · RISK/REWARD</div></div></div><div class="grid4" style="margin-top:12px"><div class="metric"><small>AI Bias</small><b id="smartBias">—</b></div><div class="metric"><small>Confidence</small><b id="smartConfidence">—</b></div><div class="metric"><small>Signal</small><b id="smartSignal">—</b></div><div class="metric"><small>Mode</small><b id="smartMode">—</b></div></div><div class="signal-box" style="margin-top:12px"><div class="mini" id="smartSummary">AI Smart Analysis hisoblanmoqda…</div><div class="mini" id="smartAdvice" style="margin-top:8px">—</div></div></div></section>
 <section class="section" id="classicSection"><div class="card"><div class="section-head"><div><h2>Classic Trade</h2><div class="mini">Classic · Trend + SNR + Pivot + RSI + MACD + EMA + Candlestick</div></div><button class="btn primary" id="refreshClassic">↻ Yangilash</button></div><div class="tfbar"><button class="tf" data-classic-interval="1min">1M</button><button class="tf active" data-classic-interval="5min">5M</button><button class="tf" data-classic-interval="15min">15M</button><button class="tf" data-classic-interval="30min">30M</button><button class="tf" data-classic-interval="1h">1H</button><button class="tf" data-classic-interval="4h">4H</button><button class="tf" data-classic-interval="1day">1D</button></div><div class="signal-box" style="margin-top:12px"><div class="section-head"><div><div class="mini" id="classicSymbol">XAU/USD · 5 MIN</div><div class="signal-main wait" id="classicSignal">WAIT</div></div><span class="pill" id="classicConfidence">—</span></div><div class="mini" id="classicReason">Classic Trade hisoblanmoqda…</div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Entry</small><b id="classicEntry">—</b></div><div class="metric"><small>SL</small><b id="classicSL">—</b></div><div class="metric"><small>TP1</small><b id="classicTP1">—</b></div><div class="metric"><small>TP2</small><b id="classicTP2">—</b></div></div></div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Trend / EMA</small><b id="classicTrend">—</b><div class="mini" id="classicEma">—</div></div><div class="metric"><small>SNR</small><b id="classicSNR">—</b><div class="mini" id="classicPivot">—</div></div><div class="metric"><small>RSI</small><b id="classicRSI">—</b><div class="mini" id="classicRSIState">—</div></div><div class="metric"><small>MACD / Pattern</small><b id="classicMACD">—</b><div class="mini" id="classicPattern">—</div></div></div></div></section>
-
-  <section class="section" id="snrSection"><div class="card"><div class="section-head"><div><h2>SNR</h2><div class="mini">Support & Resistance · avtomatik zona, kuch, retest va breakout</div></div><button class="btn primary" id="refreshSNR">↻ Yangilash</button></div><div class="tfbar"><button class="tf" data-snr-interval="1min">1M</button><button class="tf active" data-snr-interval="5min">5M</button><button class="tf" data-snr-interval="15min">15M</button><button class="tf" data-snr-interval="30min">30M</button><button class="tf" data-snr-interval="1h">1H</button><button class="tf" data-snr-interval="4h">4H</button><button class="tf" data-snr-interval="1day">1D</button></div><div class="grid4"><div class="metric"><small>Current Price</small><b id="snrPrice">—</b></div><div class="metric"><small>Market Position</small><b id="snrPosition">—</b></div><div class="metric"><small>SNR Signal</small><b id="snrSignal">WAIT</b></div><div class="metric"><small>Confidence</small><b id="snrConfidence">—</b></div></div><div class="grid2" style="margin-top:12px"><div class="advanced-card"><div class="advanced-head"><div><div class="mini">SUPPORT ZONE</div><div class="advanced-signal buy" id="snrSupportZone">—</div></div><span class="pill" id="snrSupportStrength">—</span></div><div class="component-grid"><div class="component"><small>Zone</small><b id="snrSupportRange">—</b></div><div class="component"><small>Retests</small><b id="snrSupportRetests">—</b></div><div class="component"><small>Distance</small><b id="snrSupportDistance">—</b></div><div class="component"><small>Status</small><b id="snrSupportStatus">—</b></div></div></div><div class="advanced-card"><div class="advanced-head"><div><div class="mini">RESISTANCE ZONE</div><div class="advanced-signal sell" id="snrResistanceZone">—</div></div><span class="pill" id="snrResistanceStrength">—</span></div><div class="component-grid"><div class="component"><small>Zone</small><b id="snrResistanceRange">—</b></div><div class="component"><small>Retests</small><b id="snrResistanceRetests">—</b></div><div class="component"><small>Distance</small><b id="snrResistanceDistance">—</b></div><div class="component"><small>Status</small><b id="snrResistanceStatus">—</b></div></div></div></div><div class="signal-box" style="margin-top:12px"><div class="section-head"><h3>SNR Analysis</h3><span class="pill" id="snrMethod">—</span></div><div class="mini" id="snrReason">SNR hisoblanmoqda…</div></div></div></section>
+<section class="section" id="snrSection"><div class="card"><div class="section-head"><div><h2>SNR</h2><div class="mini">Support &amp; Resistance · avtomatik zona, kuch, retest va breakout</div></div><button class="btn primary" id="refreshSNR">↻ Yangilash</button></div><div class="tfbar"><button class="tf" data-snr-interval="1min">1M</button><button class="tf active" data-snr-interval="5min">5M</button><button class="tf" data-snr-interval="15min">15M</button><button class="tf" data-snr-interval="30min">30M</button><button class="tf" data-snr-interval="1h">1H</button><button class="tf" data-snr-interval="4h">4H</button><button class="tf" data-snr-interval="1day">1D</button></div><div class="grid4"><div class="metric"><small>Current Price</small><b id="snrPrice">—</b></div><div class="metric"><small>Market Position</small><b id="snrPosition">—</b></div><div class="metric"><small>SNR Signal</small><b id="snrSignal">WAIT</b></div><div class="metric"><small>Confidence</small><b id="snrConfidence">—</b></div></div><div class="grid2" style="margin-top:12px"><div class="advanced-card"><div class="advanced-head"><div><div class="mini">SUPPORT ZONE</div><div class="advanced-signal buy" id="snrSupportZone">—</div></div><span class="pill" id="snrSupportStrength">—</span></div><div class="component-grid"><div class="component"><small>Zone</small><b id="snrSupportRange">—</b></div><div class="component"><small>Retests</small><b id="snrSupportRetests">—</b></div><div class="component"><small>Distance</small><b id="snrSupportDistance">—</b></div><div class="component"><small>Status</small><b id="snrSupportStatus">—</b></div></div></div><div class="advanced-card"><div class="advanced-head"><div><div class="mini">RESISTANCE ZONE</div><div class="advanced-signal sell" id="snrResistanceZone">—</div></div><span class="pill" id="snrResistanceStrength">—</span></div><div class="component-grid"><div class="component"><small>Zone</small><b id="snrResistanceRange">—</b></div><div class="component"><small>Retests</small><b id="snrResistanceRetests">—</b></div><div class="component"><small>Distance</small><b id="snrResistanceDistance">—</b></div><div class="component"><small>Status</small><b id="snrResistanceStatus">—</b></div></div></div></div><div class="signal-box" style="margin-top:12px"><div class="section-head"><h3>SNR Analysis</h3><span class="pill" id="snrMethod">—</span></div><div class="mini" id="snrReason">SNR hisoblanmoqda…</div></div></div></section>
 <section class="section" id="trendLineSection">
-  <div class="card">
-    <div class="section-head"><div><h2>Auto Trend Line</h2><div class="mini">M5 · M15 · M30 · H1 · H4 · D1 · Swing High/Low → 2–3+ touch → breakout → retest → confirmation</div></div><button class="btn primary" id="refreshTrendLines">↻ Yangilash</button></div>
-    <div class="tfbar" id="trendLineTfBar">
-      <button class="tf active" data-trend-interval="5min">M5</button><button class="tf" data-trend-interval="15min">M15</button><button class="tf" data-trend-interval="30min">M30</button><button class="tf" data-trend-interval="1h">H1</button><button class="tf" data-trend-interval="4h">H4</button><button class="tf" data-trend-interval="1day">D1</button>
-    </div>
-    <div class="mini" id="trendLineStatus">Har bir timeframe o‘z trend line va signalini alohida hisoblaydi.</div>
-    <div class="card" style="margin-top:12px;padding:0;overflow:hidden"><div class="section-head" style="padding:12px 14px;margin:0"><div><h3>XAUUSDm — Auto Trend Line + Fibonacci</h3><div class="mini">Exness MT5 · XAUUSDm · tanlangan timeframe</div></div><span class="pill" id="trendChartTf">M5</span></div><div id="tvTrendChart" style="height:560px;width:100%;border-top:1px solid var(--line);overflow:hidden;position:relative"></div></div>
-    <div class="grid4" style="margin-top:12px">
-      <div class="metric"><small>Trend</small><b id="tlTrend">—</b></div>
-      <div class="metric"><small>Touches</small><b id="tlTouches">—</b></div>
-      <div class="metric"><small>Trend Power</small><b id="tlPower">—</b></div>
-      <div class="metric"><small>Breakout / Retest</small><b id="tlBreakRetest">—</b></div>
-    </div>
-    <div class="signal-box" style="margin-top:10px"><div class="section-head"><div><div class="mini">FINAL FILTERED SIGNAL</div><div class="signal-main wait" id="tlSignal">WAIT</div></div><span class="pill" id="tlFinalConfidence">—</span></div><div class="mini" id="tlReason">—</div></div>
-    <div class="card" style="margin-top:12px"><div class="section-head"><div><h3>Auto Fibonacci</h3><div class="mini">Market Structure → valid Swing → impulse → Fibonacci</div></div><span class="pill" id="fibSignal">WAIT</span></div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Direction</small><b id="fibDirection">—</b></div><div class="metric"><small>Swing Low</small><b id="fibLow">—</b></div><div class="metric"><small>Swing High</small><b id="fibHigh">—</b></div><div class="metric"><small>Key Level</small><b id="fibLevel">—</b></div></div><div class="grid4" style="margin-top:10px"><div class="metric"><small>0.382</small><b id="fib382">—</b></div><div class="metric"><small>0.500</small><b id="fib500">—</b></div><div class="metric"><small>0.618</small><b id="fib618">—</b></div><div class="metric"><small>0.786</small><b id="fib786">—</b></div></div><div class="grid2" style="margin-top:10px"><div class="metric"><small>Price Action</small><b id="fibPA">—</b></div><div class="metric"><small>RSI</small><b id="fibRSI">—</b></div></div><div class="grid2" style="margin-top:10px"><div class="metric"><small>Extension 1.272</small><b id="fib1272">—</b></div><div class="metric"><small>Extension 1.618</small><b id="fib1618">—</b></div></div><div class="mini" style="margin-top:8px" id="fibReason">—</div></div>
-  </div>
-  <div class="card" style="margin-top:12px">
-    <div class="section-head"><div><h3>Multi-Timeframe Trend Line Matrix</h3><div class="mini">Trend Line → SNR → ICT → OB → FVG → Liquidity → Structure → AI</div></div><span class="pill" id="trendMatrixFinal">—</span></div>
-    <div class="advanced-grid" id="trendLineMatrix"></div>
-  </div>
+<div class="card">
+<div class="section-head"><div><h2>Auto Trend Line</h2><div class="mini">M5 · M15 · M30 · H1 · H4 · D1 · Swing High/Low → 2–3+ touch → breakout → retest → confirmation</div></div><button class="btn primary" id="refreshTrendLines">↻ Yangilash</button></div>
+<div class="tfbar" id="trendLineTfBar">
+<button class="tf active" data-trend-interval="5min">M5</button><button class="tf" data-trend-interval="15min">M15</button><button class="tf" data-trend-interval="30min">M30</button><button class="tf" data-trend-interval="1h">H1</button><button class="tf" data-trend-interval="4h">H4</button><button class="tf" data-trend-interval="1day">D1</button>
+</div>
+<div class="mini" id="trendLineStatus">Har bir timeframe o‘z trend line va signalini alohida hisoblaydi.</div>
+<div class="card" style="margin-top:12px;padding:0;overflow:hidden"><div class="section-head" style="padding:12px 14px;margin:0"><div><h3>XAUUSDm — Auto Trend Line + Fibonacci</h3><div class="mini">Exness MT5 · XAUUSDm · tanlangan timeframe</div></div><span class="pill" id="trendChartTf">M5</span></div><div id="tvTrendChart" style="height:560px;width:100%;border-top:1px solid var(--line);overflow:hidden;position:relative"></div></div>
+<div class="grid4" style="margin-top:12px">
+<div class="metric"><small>Trend</small><b id="tlTrend">—</b></div>
+<div class="metric"><small>Touches</small><b id="tlTouches">—</b></div>
+<div class="metric"><small>Trend Power</small><b id="tlPower">—</b></div>
+<div class="metric"><small>Breakout / Retest</small><b id="tlBreakRetest">—</b></div>
+</div>
+<div class="signal-box" style="margin-top:10px"><div class="section-head"><div><div class="mini">FINAL FILTERED SIGNAL</div><div class="signal-main wait" id="tlSignal">WAIT</div></div><span class="pill" id="tlFinalConfidence">—</span></div><div class="mini" id="tlReason">—</div></div>
+<div class="card" style="margin-top:12px"><div class="section-head"><div><h3>Auto Fibonacci</h3><div class="mini">Market Structure → valid Swing → impulse → Fibonacci</div></div><span class="pill" id="fibSignal">WAIT</span></div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Direction</small><b id="fibDirection">—</b></div><div class="metric"><small>Swing Low</small><b id="fibLow">—</b></div><div class="metric"><small>Swing High</small><b id="fibHigh">—</b></div><div class="metric"><small>Key Level</small><b id="fibLevel">—</b></div></div><div class="grid4" style="margin-top:10px"><div class="metric"><small>0.382</small><b id="fib382">—</b></div><div class="metric"><small>0.500</small><b id="fib500">—</b></div><div class="metric"><small>0.618</small><b id="fib618">—</b></div><div class="metric"><small>0.786</small><b id="fib786">—</b></div></div><div class="grid2" style="margin-top:10px"><div class="metric"><small>Price Action</small><b id="fibPA">—</b></div><div class="metric"><small>RSI</small><b id="fibRSI">—</b></div></div><div class="grid2" style="margin-top:10px"><div class="metric"><small>Extension 1.272</small><b id="fib1272">—</b></div><div class="metric"><small>Extension 1.618</small><b id="fib1618">—</b></div></div><div class="mini" id="fibReason" style="margin-top:8px">—</div></div>
+</div>
+<div class="card" style="margin-top:12px">
+<div class="section-head"><div><h3>Multi-Timeframe Trend Line Matrix</h3><div class="mini">Trend Line → SNR → ICT → OB → FVG → Liquidity → Structure → AI</div></div><span class="pill" id="trendMatrixFinal">—</span></div>
+<div class="advanced-grid" id="trendLineMatrix"></div>
+</div>
 </section>
 <section class="section" id="mtfSection"><div class="card"><div class="section-head"><h2>Multi-Timeframe Analysis</h2><span class="pill" id="mtfOverall">—</span></div><div class="grid4" id="mtfGrid"></div></div></section>
 <section class="section" id="ictSection">
-    <div class="card">
-      <div class="section-head">
-        <div><h2>ICT Signals</h2><div class="mini">XAUUSD · M30 Bias → Liquidity Sweep → M5 MSS → Displacement → FVG → Entry</div></div>
-        <button class="btn primary" id="refreshICT">↻ Yangilash</button>
-      </div>
-      <div class="signal-box" style="margin-top:12px">
-        <div class="section-head">
-          <div><div class="mini" id="ictSymbol">XAU/USD · M30 → M5</div><div class="signal-main wait" id="ictSignal">WAIT</div></div>
-          <span class="pill" id="ictConfidence">0%</span>
-        </div>
-        <div class="mini" id="ictReason">ICT engine hisoblanmoqda…</div>
-        <div class="grid4" style="margin-top:10px">
-          <div class="metric"><small>Entry</small><b id="ictEntry">—</b></div>
-          <div class="metric"><small>SL</small><b id="ictSL">—</b></div>
-          <div class="metric"><small>TP1</small><b id="ictTP1">—</b></div>
-          <div class="metric"><small>TP2</small><b id="ictTP2">—</b></div>
-        </div>
-      </div>
-      <div class="grid4" style="margin-top:10px">
-        <div class="metric"><small>M30 Bias</small><b id="ictBias">—</b><div class="mini" id="ictLiquidity">Liquidity —</div></div>
-        <div class="metric"><small>Premium / Discount</small><b id="ictPD">—</b><div class="mini" id="ictEquilibrium">EQ —</div></div>
-        <div class="metric"><small>M5 MSS</small><b id="ictMSS">—</b><div class="mini" id="ictMSSLevel">Level —</div></div>
-        <div class="metric"><small>Risk / Reward</small><b id="ictRR">—</b><div class="mini">M30 → M5 model</div></div>
-      </div>
-      <div class="grid2" style="margin-top:12px">
-        <div class="advanced-card"><div class="advanced-head"><div><div class="mini">M30 PD ARRAYS</div><div class="advanced-signal wait" id="ictM30FVG">—</div></div><span class="pill" id="ictM30OB">OB —</span></div><div class="component-grid"><div class="component"><small>FVG</small><b id="ictM30FVGRange">—</b></div><div class="component"><small>Order Block</small><b id="ictM30OBRange">—</b></div><div class="component"><small>EMA20 / EMA50</small><b id="ictM30EMA">—</b></div><div class="component"><small>Draw</small><b id="ictDraw">—</b></div></div></div>
-        <div class="advanced-card"><div class="advanced-head"><div><div class="mini">M5 CONFIRMATION</div><div class="advanced-signal wait" id="ictM5FVG">—</div></div><span class="pill" id="ictDisp">Displacement —</span></div><div class="component-grid"><div class="component"><small>FVG</small><b id="ictM5FVGRange">—</b></div><div class="component"><small>MSS</small><b id="ictM5MSS">—</b></div><div class="component"><small>ATR Ratio</small><b id="ictDispRatio">—</b></div><div class="component"><small>Liquidity</small><b id="ictLiqLevel">—</b></div></div></div>
-      </div>
-      <div class="card" style="margin-top:12px"><div class="section-head"><div><h3>ICT Confluence</h3><div class="mini">85+ = HIGH CONFIDENCE filter; this is a score, not a win-rate guarantee.</div></div><span class="pill" id="ictScore">0 / 100</span></div><div class="component-grid" id="ictChecks"></div></div>
-      <div class="mini" style="margin-top:10px" id="ictStatus">Real-time M30 and M5 candle calculation.</div>
-    </div>
-  </section>
-
-<section class="section admin-only" id="signalsSection">
-  <div class="card">
-    <div class="section-head"><h2>Signals — Auto Entry</h2><span class="pill" id="autoSignalUpdated">LIVE</span></div>
-    <div class="mini" style="margin-bottom:10px">Signal Lab’da <b>84% va undan yuqori</b> confidence chiqqan BUY/SELL signallar avtomatik <b>paper entry</b> qilinadi. Entry, TP, SL, ochilgan vaqt, yopilgan vaqt, davomiylik va natija doimiy tarixda saqlanadi. Bu brokerga real order yubormaydi.</div>
-    <div class="grid2" id="autoSignalsGrid"><div class="card">Live signal hisoblanmoqda…</div></div>
-  </div>
-</section>
-
-<section class="section" id="calendarSection"><div class="card"><div class="section-head"><h2>Economic Calendar</h2><span class="pill">TradingView LIVE · Global</span></div><div id="tvCalendarWidget" style="min-height:700px;border:1px solid var(--line);border-radius:10px;overflow:hidden"></div><div class="mini" style="margin-top:8px">Global economic events, currencies and impact levels are provided directly by TradingView. No user API key is required.</div></div></section>
-  <section class="section" id="activeSessionsSection"><div class="card"><div class="section-head"><div><h2>Aktiv seanslar</h2><div class="mini">Hisobingizga kirgan qurilmalar va oxirgi faollik</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="refreshActiveSessions" type="button">↻ Yangilash</button><button class="btn danger" id="revokeOtherSessions" type="button">Boshqa seanslarni yopish</button></div></div><div class="grid2" id="activeSessionsGrid"><div class="mini">Seanslar yuklanmoqda…</div></div></div></section>
-  <section class="section" id="sessionsSection"><div class="card"><div class="section-head"><h2>Market Sessions</h2><span class="pill" id="sessionClock2">—</span></div><div class="sessions" id="sessions2"></div></div></section>
-  <section class="section admin-only" id="mt5Section"><div class="card"><div class="section-head"><div><h2>MetaTrader 5</h2><div class="mini">Exness DEMO · MT5 EA/Bridge orqali xavfsiz ulanish</div></div><div><span class="pill" id="mt5Status">🔴 DISCONNECTED</span> <button class="btn" id="refreshMT5" type="button">↻ Yangilash</button></div></div><div class="grid2"><div><label class="mini">MT5 Login / Account number</label><input class="input" id="mt5Login" inputmode="numeric" placeholder="12345678" autocomplete="off"><label class="mini">MT5 Server</label><input class="input" id="mt5Server" placeholder="Exness-MT5..." autocomplete="off"><label class="mini">Trading Password</label><input class="input" id="mt5Password" type="password" placeholder="Trading password" autocomplete="off"><div class="mini" style="margin:4px 0 10px;color:var(--muted)">Parol serverda saqlanmaydi. Haqiqiy broker ulanishi MT5 terminalidagi EA/Bridge orqali tasdiqlanadi.</div><button class="btn primary" id="connectMT5" type="button">CONNECT MT5 DEMO</button></div><div><div class="grid2"><div class="metric"><small>Balance</small><b id="mt5Balance">—</b></div><div class="metric"><small>Equity</small><b id="mt5Equity">—</b></div><div class="metric"><small>Free Margin</small><b id="mt5FreeMargin">—</b></div><div class="metric"><small>Open Positions</small><b id="mt5Positions">0</b></div><div class="metric"><small>Heartbeat</small><b id="mt5Heartbeat">—</b><div class="mini" id="mt5LastError">—</div></div></div><div class="signal-box" style="margin-top:10px"><div class="section-head"><h3>AUTO TRADING</h3><span class="pill" id="mt5AutoState">🔴 OFF</span></div><div class="mini" id="mt5AutoInfo">OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.</div><div style="margin-top:10px"><label class="mini">Lot hajmi</label><input class="input" id="mt5Lot" type="number" min="0.01" max="100" step="0.01" value="0.01" placeholder="0.01"><div class="mini">Masalan: 0.01, 0.02, 0.10. Yangi auto orderlar shu lot bilan yuboriladi.</div></div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="saveMT5Lot" type="button">💾 Lotni saqlash</button><button class="btn" id="mt5AutoOn" type="button">🟢 AUTO ON</button><button class="btn danger" id="mt5AutoOff" type="button">🔴 AUTO OFF</button></div></div></div></div><div class="mini" style="margin-top:12px">Faqat DEMO rejim. Order faqat ≥84.99% + Strong Zone + AI tasdiq + MTF moslik shartlari bajarilganda navbatga qo‘yiladi.</div></div></div>
-<section class="section" id="historySection">
-  <div class="card">
-    <div class="section-head"><div><h2>Signal History</h2><div class="mini">Barcha saqlangan signal va trade natijalari · sana bo‘yicha saralash</div></div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <button class="btn history-period active" data-history-period="all" data-scope="full" type="button">Barchasi</button>
-        <button class="btn history-period" data-history-period="day" data-scope="full" type="button">Bugun</button>
-        <button class="btn history-period" data-history-period="month" data-scope="full" type="button">Shu oy</button>
-        <label class="history-date-wrap"><span>Sana</span><input class="history-date" id="historyDate" type="date"></label>
-        <button class="btn" id="clearHistoryDate" type="button">✕ Sana</button>
-        <button class="btn" id="refreshHistory" type="button">↻ Yangilash</button>
-      </div>
-    </div>
-    <div id="historySummary" class="grid4" style="margin-bottom:12px"></div>
-    <h3 style="margin:8px 0">Source statistics</h3><div id="historySourceStats" class="source-stats-grid"></div>
-    <h3 style="margin:8px 0">Timeframe statistics</h3><div id="historyTfStats" class="source-stats-grid"></div>
-    <div class="scroll"><table class="history"><thead><tr><th>Date</th><th>Time</th><th>Source</th><th>TF</th><th>Type</th><th>Setup</th><th>Entry</th><th>TP</th><th>SL</th><th>Result</th><th>Duration</th><th>Closed</th></tr></thead><tbody id="history"></tbody></table></div>
-  </div>
-</section>
-
-<div class="modal" id="authModal" aria-hidden="true">
-  <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="authTitle">
-    <div class="section-head">
-      <div><h2 id="authTitle">Kirish</h2><div class="mini">GOLD Trading SaaS hisobingiz</div></div>
-      <button class="btn" id="authClose" type="button">✕</button>
-    </div>
-    <form id="authForm">
-      <label class="mini" for="email">Login / Email</label>
-      <input class="input" id="email" type="text" autocomplete="username" placeholder="Login yoki elektron pochta">
-      <label class="mini" for="password" id="passwordLabel">Parol</label>
-      <input class="input" id="password" type="password" autocomplete="current-password" placeholder="Parol">
-      <button class="btn primary" id="authSubmit" type="submit" style="width:100%">Kirish</button>
-      <button class="btn" id="openRegisterDirect" type="button" style="width:100%;margin-top:8px">Ro‘yxatdan o‘tish</button>
-      <div class="link" id="authSwitch" role="button" tabindex="0">Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish</div>
-      <div class="mini" id="authMsg" style="margin-top:10px"></div>
-    </form>
-  </div>
+<div class="card">
+<div class="section-head">
+<div><h2>ICT Signals</h2><div class="mini">XAUUSD · M30 Bias → Liquidity Sweep → M5 MSS → Displacement → FVG → Entry</div></div>
+<button class="btn primary" id="refreshICT">↻ Yangilash</button>
 </div>
-
+<div class="signal-box" style="margin-top:12px">
+<div class="section-head">
+<div><div class="mini" id="ictSymbol">XAU/USD · M30 → M5</div><div class="signal-main wait" id="ictSignal">WAIT</div></div>
+<span class="pill" id="ictConfidence">0%</span>
+</div>
+<div class="mini" id="ictReason">ICT engine hisoblanmoqda…</div>
+<div class="grid4" style="margin-top:10px">
+<div class="metric"><small>Entry</small><b id="ictEntry">—</b></div>
+<div class="metric"><small>SL</small><b id="ictSL">—</b></div>
+<div class="metric"><small>TP1</small><b id="ictTP1">—</b></div>
+<div class="metric"><small>TP2</small><b id="ictTP2">—</b></div>
+</div>
+</div>
+<div class="grid4" style="margin-top:10px">
+<div class="metric"><small>M30 Bias</small><b id="ictBias">—</b><div class="mini" id="ictLiquidity">Liquidity —</div></div>
+<div class="metric"><small>Premium / Discount</small><b id="ictPD">—</b><div class="mini" id="ictEquilibrium">EQ —</div></div>
+<div class="metric"><small>M5 MSS</small><b id="ictMSS">—</b><div class="mini" id="ictMSSLevel">Level —</div></div>
+<div class="metric"><small>Risk / Reward</small><b id="ictRR">—</b><div class="mini">M30 → M5 model</div></div>
+</div>
+<div class="grid2" style="margin-top:12px">
+<div class="advanced-card"><div class="advanced-head"><div><div class="mini">M30 PD ARRAYS</div><div class="advanced-signal wait" id="ictM30FVG">—</div></div><span class="pill" id="ictM30OB">OB —</span></div><div class="component-grid"><div class="component"><small>FVG</small><b id="ictM30FVGRange">—</b></div><div class="component"><small>Order Block</small><b id="ictM30OBRange">—</b></div><div class="component"><small>EMA20 / EMA50</small><b id="ictM30EMA">—</b></div><div class="component"><small>Draw</small><b id="ictDraw">—</b></div></div></div>
+<div class="advanced-card"><div class="advanced-head"><div><div class="mini">M5 CONFIRMATION</div><div class="advanced-signal wait" id="ictM5FVG">—</div></div><span class="pill" id="ictDisp">Displacement —</span></div><div class="component-grid"><div class="component"><small>FVG</small><b id="ictM5FVGRange">—</b></div><div class="component"><small>MSS</small><b id="ictM5MSS">—</b></div><div class="component"><small>ATR Ratio</small><b id="ictDispRatio">—</b></div><div class="component"><small>Liquidity</small><b id="ictLiqLevel">—</b></div></div></div>
+</div>
+<div class="card" style="margin-top:12px"><div class="section-head"><div><h3>ICT Confluence</h3><div class="mini">85+ = HIGH CONFIDENCE filter; this is a score, not a win-rate guarantee.</div></div><span class="pill" id="ictScore">0 / 100</span></div><div class="component-grid" id="ictChecks"></div></div>
+<div class="mini" id="ictStatus" style="margin-top:10px">Real-time M30 and M5 candle calculation.</div>
+</div>
+</section>
+<section class="section admin-only" id="signalsSection">
+<div class="card">
+<div class="section-head"><h2>Signals — Auto Entry</h2><span class="pill" id="autoSignalUpdated">LIVE</span></div>
+<div class="mini" style="margin-bottom:10px">Signal Lab’da <b>84% va undan yuqori</b> confidence chiqqan BUY/SELL signallar avtomatik <b>paper entry</b> qilinadi. Entry, TP, SL, ochilgan vaqt, yopilgan vaqt, davomiylik va natija doimiy tarixda saqlanadi. Bu brokerga real order yubormaydi.</div>
+<div class="grid2" id="autoSignalsGrid"><div class="card">Live signal hisoblanmoqda…</div></div>
+</div>
+</section>
+<section class="section" id="calendarSection"><div class="card"><div class="section-head"><h2>Economic Calendar</h2><span class="pill">TradingView LIVE · Global</span></div><div id="tvCalendarWidget" style="min-height:700px;border:1px solid var(--line);border-radius:10px;overflow:hidden"></div><div class="mini" style="margin-top:8px">Global economic events, currencies and impact levels are provided directly by TradingView. No user API key is required.</div></div></section>
+<section class="section" id="activeSessionsSection"><div class="card"><div class="section-head"><div><h2>Aktiv seanslar</h2><div class="mini">Hisobingizga kirgan qurilmalar va oxirgi faollik</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="refreshActiveSessions" type="button">↻ Yangilash</button><button class="btn danger" id="revokeOtherSessions" type="button">Boshqa seanslarni yopish</button></div></div><div class="grid2" id="activeSessionsGrid"><div class="mini">Seanslar yuklanmoqda…</div></div></div></section>
+<section class="section" id="sessionsSection"><div class="card"><div class="section-head"><h2>Market Sessions</h2><span class="pill" id="sessionClock2">—</span></div><div class="sessions" id="sessions2"></div></div></section>
+<section class="section admin-only" id="mt5Section"><div class="card"><div class="section-head"><div><h2>MetaTrader 5</h2><div class="mini">Exness DEMO · MT5 EA/Bridge orqali xavfsiz ulanish</div></div><div><span class="pill" id="mt5Status">🔴 DISCONNECTED</span> <button class="btn" id="refreshMT5" type="button">↻ Yangilash</button></div></div><div class="grid2"><div><label class="mini">MT5 Login / Account number</label><input autocomplete="off" class="input" id="mt5Login" inputmode="numeric" placeholder="12345678"/><label class="mini">MT5 Server</label><input autocomplete="off" class="input" id="mt5Server" placeholder="Exness-MT5..."/><label class="mini">Trading Password</label><input autocomplete="off" class="input" id="mt5Password" placeholder="Trading password" type="password"/><div class="mini" style="margin:4px 0 10px;color:var(--muted)">Parol serverda saqlanmaydi. Haqiqiy broker ulanishi MT5 terminalidagi EA/Bridge orqali tasdiqlanadi.</div><button class="btn primary" id="connectMT5" type="button">CONNECT MT5 DEMO</button></div><div><div class="grid2"><div class="metric"><small>Balance</small><b id="mt5Balance">—</b></div><div class="metric"><small>Equity</small><b id="mt5Equity">—</b></div><div class="metric"><small>Free Margin</small><b id="mt5FreeMargin">—</b></div><div class="metric"><small>Open Positions</small><b id="mt5Positions">0</b></div><div class="metric"><small>Heartbeat</small><b id="mt5Heartbeat">—</b><div class="mini" id="mt5LastError">—</div></div></div><div class="signal-box" style="margin-top:10px"><div class="section-head"><h3>AUTO TRADING</h3><span class="pill" id="mt5AutoState">🔴 OFF</span></div><div class="mini" id="mt5AutoInfo">OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.</div><div style="margin-top:10px"><label class="mini">Lot hajmi</label><input class="input" id="mt5Lot" max="100" min="0.01" placeholder="0.01" step="0.01" type="number" value="0.01"/><div class="mini">Masalan: 0.01, 0.02, 0.10. Yangi auto orderlar shu lot bilan yuboriladi.</div></div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="saveMT5Lot" type="button">💾 Lotni saqlash</button><button class="btn" id="mt5AutoOn" type="button">🟢 AUTO ON</button><button class="btn danger" id="mt5AutoOff" type="button">🔴 AUTO OFF</button></div></div></div></div><div class="mini" style="margin-top:12px">Faqat DEMO rejim. Order faqat ≥84.99% + Strong Zone + AI tasdiq + MTF moslik shartlari bajarilganda navbatga qo‘yiladi.</div></div></section></div>
+<section class="section" id="historySection">
+<div class="card">
+<div class="section-head"><div><h2>Signal History</h2><div class="mini">Barcha saqlangan signal va trade natijalari · sana bo‘yicha saralash</div></div>
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+<button class="btn history-period active" data-history-period="all" data-scope="full" type="button">Barchasi</button>
+<button class="btn history-period" data-history-period="day" data-scope="full" type="button">Bugun</button>
+<button class="btn history-period" data-history-period="month" data-scope="full" type="button">Shu oy</button>
+<label class="history-date-wrap"><span>Sana</span><input class="history-date" id="historyDate" type="date"/></label>
+<button class="btn" id="clearHistoryDate" type="button">✕ Sana</button>
+<button class="btn" id="refreshHistory" type="button">↻ Yangilash</button>
+</div>
+</div>
+<div class="grid4" id="historySummary" style="margin-bottom:12px"></div>
+<h3 style="margin:8px 0">Source statistics</h3><div class="source-stats-grid" id="historySourceStats"></div>
+<h3 style="margin:8px 0">Timeframe statistics</h3><div class="source-stats-grid" id="historyTfStats"></div>
+<div class="scroll"><table class="history"><thead><tr><th>Date</th><th>Time</th><th>Source</th><th>TF</th><th>Type</th><th>Setup</th><th>Entry</th><th>TP</th><th>SL</th><th>Result</th><th>Duration</th><th>Closed</th></tr></thead><tbody id="history"></tbody></table></div>
+</div>
+</section>
+<div aria-hidden="true" class="modal" id="authModal">
+<div aria-labelledby="authTitle" aria-modal="true" class="modal-card" role="dialog">
+<div class="section-head">
+<div><h2 id="authTitle">Kirish</h2><div class="mini">GOLD Trading SaaS hisobingiz</div></div>
+<button class="btn" id="authClose" type="button">✕</button>
+</div>
+<form id="authForm">
+<label class="mini" for="email">Login / Email</label>
+<input autocomplete="username" class="input" id="email" placeholder="Login yoki elektron pochta" type="text"/>
+<label class="mini" for="password" id="passwordLabel">Parol</label>
+<input autocomplete="current-password" class="input" id="password" placeholder="Parol" type="password"/>
+<button class="btn primary" id="authSubmit" style="width:100%" type="submit">Kirish</button>
+<button class="btn" id="openRegisterDirect" style="width:100%;margin-top:8px" type="button">Ro‘yxatdan o‘tish</button>
+<div class="link" id="authSwitch" role="button" tabindex="0">Hisobingiz yo‘qmi? Ro‘yxatdan o‘tish</div>
+<div class="mini" id="authMsg" style="margin-top:10px"></div>
+</form>
+</div>
+</div>
 <script src="config.js?v=20260908f"></script>
 <script src="app.js?v=20260912-auth-sessions-4"></script>
-
 <script>
 /* Telegram GO PRO remains configurable. Set window.SIGNALX_TELEGRAM_URL in config.js/env deployment. */
 (function(){
@@ -832,4 +708,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
   }
 })();
 </script>
-</body></html>
+</main></div></body></html>
+<style>
+.gold-photo-bg{animation:none!important;transform:none!important;will-change:auto!important;background-position:center center!important;}
+</style>
