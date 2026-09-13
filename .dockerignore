@@ -1,0 +1,11 @@
+.git
+__pycache__
+*.pyc
+*.pyo
+*.db
+.env
+.venv
+node_modules
+*.bat
+test_*.py
+README.md

@@ -1,0 +1,17 @@
+{
+  "name": "gold-trading-market-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node.js realtime market gateway for GOLD Trading SaaS",
+  "main": "market-gateway.js",
+  "scripts": {
+    "start": "node market-gateway.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "dotenv": "^16.4.5"
+  }
+}
