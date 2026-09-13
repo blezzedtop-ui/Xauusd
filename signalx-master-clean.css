@@ -474,3 +474,59 @@ body:before{
 .persistent-site-banner img{display:block!important;width:100%!important;height:100%!important;object-fit:cover!important;}
 @media(max-width:1050px){.persistent-site-banner{margin-bottom:10px!important;}}
 @media(max-width:620px){.persistent-site-banner{margin-bottom:8px!important;}}
+
+
+/* SIGNALX PRO — premium sidebar CTA */
+.nav > .sx-pro-card-sidebar{
+  position:relative!important;
+  margin:9px 0 4px!important;
+  padding:10px!important;
+  min-height:96px!important;
+  box-sizing:border-box!important;
+  overflow:hidden!important;
+  border:1px solid rgba(62,190,255,.48)!important;
+  border-radius:14px!important;
+  background:
+    radial-gradient(circle at 10% 15%,rgba(24,214,255,.18),transparent 32%),
+    radial-gradient(circle at 92% 85%,rgba(159,64,255,.24),transparent 40%),
+    linear-gradient(145deg,rgba(7,28,62,.94),rgba(22,8,54,.92))!important;
+  box-shadow:
+    0 0 24px rgba(0,151,255,.16),
+    0 0 42px rgba(125,58,255,.08),
+    inset 0 1px 0 rgba(255,255,255,.10),
+    inset 0 -18px 30px rgba(0,0,0,.18)!important;
+}
+.nav > .sx-pro-card-sidebar:before{
+  content:""!important;
+  position:absolute!important;
+  inset:-40% -20%!important;
+  background:linear-gradient(115deg,transparent 30%,rgba(74,218,255,.13) 47%,transparent 58%)!important;
+  transform:translateX(-45%) rotate(8deg)!important;
+  animation:sxProSweep 5s ease-in-out infinite!important;
+  pointer-events:none!important;
+}
+.nav > .sx-pro-card-sidebar:after{
+  content:""!important;
+  position:absolute!important;
+  width:72px!important;height:72px!important;
+  right:-30px!important;bottom:-38px!important;
+  border-radius:50%!important;
+  border:1px solid rgba(138,77,255,.32)!important;
+  box-shadow:0 0 22px rgba(121,64,255,.18),inset 0 0 20px rgba(39,191,255,.08)!important;
+  pointer-events:none!important;
+}
+.sx-pro-head{position:relative!important;z-index:2!important;display:flex!important;align-items:center!important;gap:8px!important;min-width:0!important}
+.sx-pro-icon{width:27px!important;height:27px!important;flex:0 0 27px!important;display:grid!important;place-items:center!important;border-radius:9px!important;color:#fff!important;font-size:15px!important;background:linear-gradient(145deg,#168dff,#7d43ff)!important;border:1px solid rgba(113,224,255,.72)!important;box-shadow:0 0 16px rgba(33,174,255,.25),inset 0 1px rgba(255,255,255,.28)!important}
+.sx-pro-copy{min-width:0!important;display:flex!important;flex-direction:column!important;line-height:1!important}
+.nav > .sx-pro-card-sidebar .sx-pro-kicker{font-size:8px!important;letter-spacing:.13em!important;color:#a9d9ff!important;white-space:nowrap!important}
+.nav > .sx-pro-card-sidebar .sx-pro-kicker span{color:#d47cff!important;text-shadow:0 0 10px rgba(194,89,255,.45)!important}
+.nav > .sx-pro-card-sidebar b{display:block!important;margin-top:3px!important;font-size:10px!important;line-height:1.05!important;color:#fff!important;letter-spacing:.01em!important;white-space:nowrap!important}
+.nav > .sx-pro-card-sidebar small{display:block!important;margin-top:4px!important;font-size:7.5px!important;line-height:1.05!important;color:#9eb5d2!important;white-space:nowrap!important}
+.sx-pro-live{margin-left:auto!important;align-self:flex-start!important;padding:4px 6px!important;border-radius:999px!important;font-size:7px!important;letter-spacing:.08em!important;color:#70f5c5!important;background:rgba(8,45,52,.72)!important;border:1px solid rgba(31,229,164,.28)!important;white-space:nowrap!important}
+.sx-pro-live i{display:inline-block!important;width:5px!important;height:5px!important;border-radius:50%!important;background:#1fe5a4!important;box-shadow:0 0 8px #1fe5a4!important;margin-right:3px!important;vertical-align:1px!important}
+.nav > .sx-pro-card-sidebar .sx-pro-btn{position:relative!important;z-index:2!important;display:flex!important;align-items:center!important;justify-content:center!important;gap:6px!important;width:100%!important;height:28px!important;min-height:28px!important;margin-top:8px!important;padding:4px 8px!important;box-sizing:border-box!important;border-radius:9px!important;text-decoration:none!important;color:#fff!important;font-size:9px!important;font-weight:800!important;letter-spacing:.04em!important;background:linear-gradient(105deg,#087dff,#4e56ff 52%,#9b35ff)!important;border:1px solid rgba(106,225,255,.62)!important;box-shadow:0 0 18px rgba(37,137,255,.22),0 0 20px rgba(150,52,255,.12),inset 0 1px rgba(255,255,255,.22)!important;transition:transform .18s ease,filter .18s ease,box-shadow .18s ease!important}
+.nav > .sx-pro-card-sidebar .sx-pro-btn span{font-size:11px!important}
+.nav > .sx-pro-card-sidebar .sx-pro-btn em{font-style:normal!important;font-size:16px!important;line-height:8px!important;margin-left:auto!important;opacity:.9!important}
+.nav > .sx-pro-card-sidebar .sx-pro-btn:hover{transform:translateY(-1px)!important;filter:brightness(1.1)!important;box-shadow:0 0 24px rgba(37,153,255,.34),0 0 28px rgba(150,52,255,.18),inset 0 1px rgba(255,255,255,.26)!important}
+@keyframes sxProSweep{0%,100%{transform:translateX(-55%) rotate(8deg);opacity:.35}50%{transform:translateX(55%) rotate(8deg);opacity:.8}}
+@media(prefers-reduced-motion:reduce){.nav > .sx-pro-card-sidebar:before{animation:none!important}}
