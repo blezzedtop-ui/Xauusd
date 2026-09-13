@@ -870,3 +870,85 @@ body:after{content:""!important;position:fixed!important;inset:0!important;z-ind
 /* Remove our decorative scanner/background layers from the chart shell only. */
 .chart:before,.chart:after{display:none!important;content:none!important;}
 .chart{background:#080c14!important;background-image:none!important;}
+
+
+/* FINAL SIDEBAR SYNC: identical compact navigation and PRO card at the end. */
+@media(min-width:1101px){
+  .app{grid-template-columns:250px minmax(0,1fr)!important;}
+  .sidebar{width:250px!important;min-width:250px!important;padding:10px 10px 12px!important;}
+  .sidebar .brand{margin-bottom:8px!important;padding-bottom:9px!important;}
+  .sidebar .nav{display:flex!important;flex-direction:column!important;gap:3px!important;overflow:visible!important;}
+  .sidebar .nav > button,
+  .sidebar .nav > .nav-external-form,
+  .sidebar .nav > .nav-external,
+  .sidebar .nav > .sx-pro-card-sidebar{
+    flex:0 0 auto!important;
+  }
+  .sidebar .nav > button,
+  .sidebar .nav > .nav-external-form button,
+  .sidebar .nav > .nav-external{
+    width:100%!important;
+    min-height:34px!important;
+    height:34px!important;
+    padding:6px 10px!important;
+    margin:0!important;
+    border-radius:9px!important;
+    line-height:1!important;
+    font-size:11px!important;
+  }
+  .sidebar .nav > .sx-pro-card-sidebar{
+    width:100%!important;
+    margin:4px 0 0!important;
+    padding:9px!important;
+    border-radius:11px!important;
+  }
+  .sidebar .nav > .sx-pro-card-sidebar .sx-pro-btn{min-height:29px!important;height:29px!important;padding:5px 8px!important;font-size:11px!important;}
+  .sidebar .nav > .sx-pro-card-sidebar small{font-size:9px!important;line-height:1.2!important;}
+  .sidebar-bottom{display:none!important;}
+}
+@media(max-width:1100px){
+  .sidebar .nav{gap:4px!important;}
+  .sidebar .nav > .sx-pro-card-sidebar{margin:4px 0 2px!important;}
+}
+
+
+/* FINAL SIDEBAR CONSISTENCY PASS — identical on XAUUSD and EURUSD. */
+@media(min-width:1101px){
+  .app{grid-template-columns:250px minmax(0,1fr)!important;}
+  .sidebar{width:250px!important;min-width:250px!important;height:100vh!important;max-height:100vh!important;overflow-y:auto!important;overflow-x:hidden!important;padding:9px 9px 10px!important;}
+  .sidebar .brand{display:flex!important;align-items:center!important;gap:8px!important;min-height:54px!important;margin:0 0 7px!important;padding:4px 8px 8px!important;}
+  .sidebar .nav{display:flex!important;flex-direction:column!important;gap:2px!important;overflow:visible!important;padding:0!important;margin:0!important;}
+  .sidebar .nav > button,
+  .sidebar .nav > .nav-external-form button,
+  .sidebar .nav > .nav-external{
+    width:100%!important;
+    height:31px!important;
+    min-height:31px!important;
+    padding:5px 9px!important;
+    margin:0!important;
+    border-radius:8px!important;
+    font-size:11px!important;
+    line-height:1!important;
+    white-space:nowrap!important;
+  }
+  .sidebar .nav > .nav-external-form{margin:0!important;padding:0!important;}
+  .sidebar .nav > .sx-pro-card-sidebar{
+    width:100%!important;
+    margin:5px 0 2px!important;
+    padding:8px!important;
+    border-radius:10px!important;
+  }
+  .sidebar .nav > .sx-pro-card-sidebar .sx-pro-kicker{font-size:8px!important;letter-spacing:.16em!important;}
+  .sidebar .nav > .sx-pro-card-sidebar b{font-size:11px!important;line-height:1.15!important;display:block!important;margin-top:2px!important;}
+  .sidebar .nav > .sx-pro-card-sidebar small{font-size:8px!important;line-height:1.15!important;margin-top:3px!important;display:block!important;}
+  .sidebar .nav > .sx-pro-card-sidebar .sx-pro-btn{height:27px!important;min-height:27px!important;padding:4px 8px!important;font-size:10px!important;margin-top:6px!important;}
+  .sidebar-bottom{display:none!important;}
+}
+@media(max-width:1100px){
+  .sidebar .nav{gap:3px!important;}
+  .sidebar .nav > button,
+  .sidebar .nav > .nav-external-form button,
+  .sidebar .nav > .nav-external{min-height:34px!important;height:34px!important;padding:6px 9px!important;}
+  .sidebar .nav > .sx-pro-card-sidebar{margin:4px 0 2px!important;}
+  .sidebar-bottom{display:none!important;}
+}
