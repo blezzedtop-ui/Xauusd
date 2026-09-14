@@ -76,10 +76,15 @@ bool EnsureSymbol(string symbol){
    return true;
 }
 
-void AppendMarketState(string &body, string symbol, ENUM_TIMEFRAMES &tfs[], int n, bool &firstMarket)
+void AppendMarketState(string &body, string symbol, ENUM_TIMEFRAMES &tfs[], int n, bool &firstMarket){
    if(!EnsureSymbol(symbol)) return;
    if(!firstMarket) body += ","; firstMarket=false;
-   body += "\"" + JsonEscape(symbol) + "\":{";
+   string marketKey = symbol;
+   string upperMarket = symbol;
+   StringToUpper(upperMarket);
+   if(StringFind(upperMarket,"XAUUSD")>=0) marketKey="XAU/USD";
+   else if(StringFind(upperMarket,"EURUSD")>=0) marketKey="EUR/USD";
+   body += "\"" + JsonEscape(marketKey) + "\":{";
    body += "\"connected\":true";
    body += ",\"account\":\"" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + "\"";
    body += ",\"server\":\"" + JsonEscape(AccountInfoString(ACCOUNT_SERVER)) + "\"";
@@ -151,10 +156,14 @@ void SendReport(string order_id,string action,string status,string symbol,string
    string out; Http("POST",Url("/api/v1/mt5/report?token="+BridgeToken),rb,out);
 }
 
-void OnInit(){
+int OnInit(){
    Print("[MT5 BRIDGE] STARTED symbol=",_Symbol," ApiBase=",ApiBase," PollSeconds=",PollSeconds," Lot=",DoubleToString(DefaultLot,2));
    Print("[MT5 BRIDGE] If WebRequest is blocked, add this exact URL in Tools -> Options -> Expert Advisors: ",ApiBase);
-   EventSetTimer(MathMax(1,PollSeconds));
+   if(!EventSetTimer(MathMax(1,PollSeconds))) {
+      Print("[MT5 BRIDGE] EventSetTimer failed. Error=",GetLastError());
+      return(INIT_FAILED);
+   }
+   return(INIT_SUCCEEDED);
 }
 void OnDeinit(const int reason){ EventKillTimer(); Print("[MT5 BRIDGE] STOPPED reason=",reason); }
 

@@ -3740,10 +3740,18 @@ def _mt5_is_connected_now() -> bool:
     return age is not None and age <= MT5_HEARTBEAT_TIMEOUT
 
 def _mt5_market_key(symbol: str | None) -> str:
-    key = clean_symbol(symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL)
-    if key in {"XAUUSD", "XAU/USD"}: return "XAU/USD"
-    if key in {"EURUSD", "EUR/USD"}: return "EUR/USD"
-    return key
+    """Canonicalize broker symbols to a strict transport market key.
+
+    Handles suffix variants such as XAUUSDm/EURUSDm and separator variants
+    without ever collapsing XAUUSD and EURUSD into the same bucket.
+    """
+    raw = str(symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL).strip().upper()
+    compact = raw.replace("/", "").replace("-", "").replace("_", "")
+    if compact.startswith("XAUUSD"):
+        return "XAU/USD"
+    if compact.startswith("EURUSD"):
+        return "EUR/USD"
+    return raw.replace("-", "/")
 
 def _mt5_market_state(symbol: str | None) -> dict[str, Any]:
     mk = _mt5_market_key(symbol)
