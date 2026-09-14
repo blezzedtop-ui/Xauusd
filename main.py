@@ -570,11 +570,11 @@ ADVANCED_CACHE_TTL = float(os.getenv("ADVANCED_CACHE_TTL", "5"))
 MTF_CACHE_TTL = float(os.getenv("MTF_CACHE_TTL", "10"))
 LIVE_PRICE_CACHE_TTL = float(os.getenv("LIVE_PRICE_CACHE_TTL", "1.5"))
 AUTO_ENTRY_ENABLED = os.getenv("AUTO_ENTRY_ENABLED", "true").lower() == "true"
-AUTO_ENTRY_THRESHOLD = 84.99
+AUTO_ENTRY_THRESHOLD = 0.0  # disabled: AUTO TRADE forwards every eligible non-Book/OpenAI signal
 AUTO_ENTRY_DUPLICATE_MINUTES = int(os.getenv("AUTO_ENTRY_DUPLICATE_MINUTES", "5"))
-AUTO_ENTRY_MIN_ZONE = float(os.getenv("AUTO_ENTRY_MIN_ZONE", "88"))
-AUTO_ENTRY_MIN_AI_AGREEMENT = float(os.getenv("AUTO_ENTRY_MIN_AI_AGREEMENT", "75"))
-AUTO_ENTRY_REQUIRE_MTF = os.getenv("AUTO_ENTRY_REQUIRE_MTF", "true").lower() == "true"
+AUTO_ENTRY_MIN_ZONE = 0.0  # disabled: zone-quality filter removed from AUTO TRADE
+AUTO_ENTRY_MIN_AI_AGREEMENT = 0.0  # disabled: AI-agreement filter removed from AUTO TRADE
+AUTO_ENTRY_REQUIRE_MTF = False  # disabled: MTF confirmation is not required for AUTO TRADE
 
 
 def db() -> Session:
@@ -3443,113 +3443,202 @@ async def advanced_signals(symbol: str, authorization: str | None = Header(defau
 
 
 @app.post("/api/v1/signals/auto-record")
-async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    """Forward every BUY/SELL signal source except Book + OpenAI into the MT5 queue.
+
+    Dual mode is global: when MT5_AUTO_DUAL is ON, one call processes XAU/USD and EUR/USD
+    together, so opening either site page is enough to keep both symbols eligible.
+    Book + OpenAI is intentionally excluded from the MT5 queue.
+    """
     require_admin(authorization, session)
-    """Auto-enter only ultra-conservative setups using confidence >=84.99%, strong zones, AI confirmation, and MTF alignment."""
     user = current_user(authorization, session)
-    key = clean_symbol(symbol)
-    # First close any previously opened auto trades using fresh TradingView candles.
-    await refresh_signal_outcomes(session, user.id, limit=500)
+    selected_interval = validate_interval(interval)
+    requested = clean_symbol(symbol)
+    symbols = ["XAU/USD", "EUR/USD"] if MT5_AUTO_DUAL else [requested]
     if not AUTO_ENTRY_ENABLED:
-        return {"enabled": False, "threshold": AUTO_ENTRY_THRESHOLD, "count": 0, "saved_timeframes": [], "mode": "paper"}
+        return {"enabled": False, "count": 0, "queued": 0, "symbols": symbols, "excluded_sources": ["Book + OpenAI"], "mode": "disabled"}
 
-    result = await build_advanced_signals(key, news_blocked=False)
     now = datetime.now(timezone.utc)
-    created = []
-    for tf, item in result.get("timeframes", {}).items():
-        direction = item.get("signal")
-        confidence = float(item.get("confidence") or 0)
-        entry = item.get("entry")
-        sl = item.get("stop_loss")
-        tp = item.get("take_profit") or []
-        zone_quality = float(item.get("zone_quality") or 0)
-        if direction not in ("BUY", "SELL") or confidence < AUTO_ENTRY_THRESHOLD or entry is None or sl is None or not tp:
-            continue
-        if zone_quality < AUTO_ENTRY_MIN_ZONE or item.get("quality_grade") not in {"A+","A"}:
-            continue
-        if AUTO_ENTRY_REQUIRE_MTF:
-            tf_order=["1min","5min","15min","30min","1h","4h","1day"]
-            idx=tf_order.index(tf) if tf in tf_order else -1
-            higher=[result.get("timeframes",{}).get(x,{}) for x in tf_order[idx+1:]] if idx>=0 else []
-            if higher and any(h.get("signal") != direction for h in higher):
+    excluded = {"book + openai", "book/openai", "book-openai", "book openai"}
+    created_history = []
+    queued = []
+    seen_queue_keys = set()
+
+    async def load_symbol_candidates(key: str) -> list[dict[str, Any]]:
+        candidates: list[dict[str, Any]] = []
+        # 1) Signal Lab / Signals: use the full seven-timeframe engine.
+        advanced = await build_advanced_signals(key, news_blocked=False)
+        for tf, item in (advanced.get("timeframes") or {}).items():
+            candidates.append({"source": "Signal Lab", "interval": tf, "item": item, "response": advanced})
+            candidates.append({"source": "Signals", "interval": tf, "item": item, "response": advanced})
+
+        # 2) Shared selected-timeframe candles power the other signal modules.
+        candles, mode, warning = await get_candles(key, selected_interval, 260)
+        closed = candles[:-1] if len(candles) > 1 else candles
+        if len(closed) < 40:
+            return candidates
+        candle_time = closed[-1].get("time")
+
+        try:
+            ref = closed[-2] if len(closed) > 1 else closed[-1]
+            price = float(closed[-1]["close"])
+            levels = calculate_pivot_levels(float(ref["high"]), float(ref["low"]), float(ref["close"]), price)
+            technical = build_key_level_signal(closed, levels, news_blocked=False)
+            candidates.append({"source": "Technical Analysis", "interval": selected_interval, "item": technical, "response": {"mode": mode, "warning": warning, "candle_time": candle_time}})
+        except Exception:
+            pass
+
+        try:
+            classic = _classic_trade(closed, calculate_pivot_levels(float(closed[-2]["high"]), float(closed[-2]["low"]), float(closed[-2]["close"]), float(closed[-1]["close"])))
+            candidates.append({"source": "Classic Trade", "interval": selected_interval, "item": classic, "response": {"mode": mode, "warning": warning, "candle_time": candle_time}})
+        except Exception:
+            pass
+
+        try:
+            snr = _snr_zone_analysis(closed)
+            candidates.append({"source": "SNR", "interval": selected_interval, "item": snr, "response": {"mode": mode, "warning": warning, "candle_time": candle_time}})
+        except Exception:
+            pass
+
+        try:
+            trend = _trendline_analysis(closed)
+            fib = _fibonacci_analysis(closed)
+            candidates.append({"source": "Auto Trend Line", "interval": selected_interval, "item": {**trend, "take_profit": [v for v in [fib.get("extension_targets", {}).get("1.272"), fib.get("extension_targets", {}).get("1.618")] if v is not None]}, "response": {"mode": mode, "warning": warning, "candle_time": candle_time, "fibonacci": fib}})
+        except Exception:
+            pass
+
+        # 3) ICT Signals is its own source and is intentionally independent of Book + OpenAI.
+        try:
+            c30, _, _ = await get_candles(key, "30min", 260)
+            c5 = candles
+            ict = build_ict_m30_m5(c30, c5)
+            ict_ct = c5[-2].get("time") if len(c5) > 1 else c5[-1].get("time")
+            candidates.append({"source": "ICT Signals", "interval": "30min", "item": ict, "response": {"mode": "tradingview", "candle_time": ict_ct}})
+        except Exception:
+            pass
+
+        # 4) AI Smart Analysis uses the existing non-Book signal layer. It is included here,
+        # but the dedicated Book + OpenAI endpoint is never called by auto trading.
+        try:
+            mtf = await multi_timeframe(key)
+            smart = {
+                "signal": technical.get("signal", "WAIT"),
+                "confidence": technical.get("confidence", 0),
+                "entry": technical.get("entry"),
+                "stop_loss": technical.get("stop_loss"),
+                "take_profit": technical.get("take_profit", []),
+                "reason": f"Technical signal + MTF {mtf.get('overall', 'MIXED')}",
+            }
+            if smart["signal"] in {"BUY", "SELL"}:
+                candidates.append({"source": "AI Smart Analysis", "interval": selected_interval, "item": smart, "response": {"mode": "confirmation-only", "multi_timeframe": mtf, "candle_time": candle_time}})
+        except Exception:
+            pass
+        return candidates
+
+    async def process_symbol(key: str):
+        nonlocal created_history, queued
+        candidates = await load_symbol_candidates(key)
+        for candidate in candidates:
+            source = str(candidate["source"]).strip()
+            if source.lower() in excluded:
+                continue
+            item = candidate.get("item") or {}
+            direction = str(item.get("signal") or item.get("direction") or "WAIT").upper()
+            if direction not in {"BUY", "SELL"}:
+                continue
+            entry = item.get("entry")
+            sl = item.get("stop_loss")
+            tp = item.get("take_profit") or []
+            confidence = float(item.get("confidence") or item.get("trend_power") or 0)
+            # No quality/confirmation gates are applied here. The only execution
+            # requirement is that the signal module provides executable entry +
+            # risk/target levels. Book + OpenAI is excluded above by source name.
+            if entry is None or sl is None or not tp:
+                continue
+            candle_time = str(item.get("candle_time") or (candidate.get("response") or {}).get("candle_time") or "")
+            # Dedupe the same source/timeframe/candle/direction. Different sources may still
+            # produce separate queue items, because the user requested all non-Book signals.
+            fingerprint = (key, source, candidate["interval"], candle_time, direction)
+            if fingerprint in seen_queue_keys:
+                continue
+            seen_queue_keys.add(fingerprint)
+
+            # Do not create repeat orders for the same module/timeframe while the previous
+            # auto trade is still open, and do not spam the queue every browser refresh.
+            recent_open = session.scalars(select(SignalHistory).where(
+                SignalHistory.user_id == user.id,
+                SignalHistory.symbol == key,
+                SignalHistory.interval == candidate["interval"],
+                SignalHistory.source == source,
+                SignalHistory.outcome == "OPEN",
+            ).order_by(SignalHistory.created_at.desc())).first()
+            if recent_open:
+                continue
+            recent = session.scalars(select(SignalHistory).where(
+                SignalHistory.user_id == user.id,
+                SignalHistory.symbol == key,
+                SignalHistory.interval == candidate["interval"],
+                SignalHistory.source == source,
+                SignalHistory.candle_time == candle_time,
+                SignalHistory.direction == direction,
+            ).order_by(SignalHistory.created_at.desc())).first()
+            if recent:
                 continue
 
-        # AI is called only for a deterministic Auto Trading candidate that
-        # already passed confidence, Strong Zone and MTF gates.
-        candle_key = item.get("candle_time") or item.get("evaluated_at")
-        ai_check = await ai_validate_module_signal("Auto Trading", key, tf, candle_key, item)
-        item = merge_ai_validation(item, ai_check)
-        direction = item.get("signal")
-        confidence = float(item.get("confidence") or 0)
-        ai_conf = float(ai_check.get("confidence") or 0)
-        ai_agreement = float(ai_check.get("agreement") or 0)
-        ai_signal = str(ai_check.get("signal") or "WAIT").upper()
-        risk_flags = ai_check.get("risk_flags") if isinstance(ai_check.get("risk_flags"), list) else []
-        if direction not in ("BUY","SELL") or confidence < AUTO_ENTRY_THRESHOLD:
-            continue
-        if ai_signal != direction or ai_agreement < AUTO_ENTRY_MIN_AI_AGREEMENT or ai_conf < AUTO_ENTRY_THRESHOLD or risk_flags:
-            continue
+            payload = {
+                "source": source,
+                "mode": "all-signals-except-book-openai",
+                "signal": item,
+                "entry": float(entry),
+                "stop_loss": float(sl),
+                "take_profit": [float(x) for x in tp],
+                "confidence_at_entry": confidence,
+                "candle_time": candle_time,
+                "auto_entry": True,
+            }
+            row = SignalHistory(
+                user_id=user.id, symbol=key, interval=candidate["interval"], direction=direction,
+                headline=f"AUTO {source} {direction} · {candidate['interval'].upper()} · {confidence:.1f}%",
+                price=float(entry), payload=json.dumps(payload, ensure_ascii=False), outcome="OPEN",
+                created_at=now, source=source, candle_time=candle_time
+            )
+            session.add(row)
+            created_history.append({"source": source, "symbol": key, "interval": candidate["interval"], "direction": direction, "confidence": confidence})
 
-        # One open auto-trade per timeframe. A new trade is allowed after the previous
-        # one is closed, even if the direction is unchanged.
-        recent_open = session.scalars(select(SignalHistory).where(
-            SignalHistory.user_id == user.id,
-            SignalHistory.symbol == key,
-            SignalHistory.interval == tf,
-            SignalHistory.outcome == "OPEN",
-        ).order_by(SignalHistory.created_at.desc())).first()
-        if recent_open:
-            continue
+            if MT5_AUTO_TRADING:
+                order_id = secrets.token_hex(8)
+                MT5_ORDER_ATTEMPTS[order_id] = 0
+                order = {
+                    "id": order_id,
+                    "symbol": key,
+                    "interval": candidate["interval"],
+                    "direction": direction,
+                    "entry": float(entry),
+                    "sl": float(sl),
+                    "tp": [float(x) for x in tp],
+                    "volume": MT5_LOT_SIZE,
+                    "source": source,
+                    "confidence": confidence,
+                    "created_at": now.isoformat(),
+                }
+                MT5_ORDER_QUEUE.append(order)
+                queued.append(order)
 
-        # Avoid duplicate entries from repeated browser polling on the same candle.
-        recent = session.scalars(select(SignalHistory).where(
-            SignalHistory.user_id == user.id,
-            SignalHistory.symbol == key,
-            SignalHistory.interval == tf,
-        ).order_by(SignalHistory.created_at.desc())).first()
-        if recent:
-            rcreated = recent.created_at
-            if rcreated.tzinfo is None:
-                rcreated = rcreated.replace(tzinfo=timezone.utc)
-            if (now - rcreated).total_seconds() < AUTO_ENTRY_DUPLICATE_MINUTES * 60:
-                continue
-
-        trade_payload = {
-            "trade_status": "OPEN",
-            "entry": float(entry),
-            "stop_loss": float(sl),
-            "take_profit": [float(x) for x in tp],
-            "signal": item,
-            "mode": "paper_auto_entry",
-            "source": f"TradingView OANDA:{'EURUSD' if key == 'EUR/USD' else 'XAUUSD'} candle series",
-            "auto_entry": True,
-            "confidence_threshold": AUTO_ENTRY_THRESHOLD,
-            "confidence_at_entry": confidence,
-            "ai_confidence": ai_conf,
-            "ai_agreement": ai_agreement,
-            "risk_reward": rr,
-            "setup_strength": zone_quality,
-            "setup_grade": "STRONG" if float(item.get("zone_quality") or confidence) >= 82 else "GOOD",
-            "strong_setup": float(item.get("zone_quality") or confidence) >= 82,
-            "entry_time": now.isoformat(),
-        }
-        if MT5_AUTO_TRADING:
-            order_id = secrets.token_hex(8)
-            MT5_ORDER_ATTEMPTS[order_id] = 0
-            MT5_ORDER_QUEUE.append({"id": order_id, "symbol": key, "interval": tf, "direction": direction, "entry": float(entry), "sl": float(sl), "tp": [float(x) for x in tp], "volume": MT5_LOT_SIZE, "created_at": now.isoformat()})
-        row = SignalHistory(
-            user_id=user.id, symbol=key, interval=tf, direction=direction,
-            headline=f"AUTO ENTRY {direction} • {tf.upper()} • {confidence:.1f}%",
-            price=float(entry), payload=json.dumps({"setup": {"entry": float(entry), "stop_loss": float(sl), "take_profit": [float(x) for x in tp]}, **trade_payload}, ensure_ascii=False),
-            outcome="OPEN", created_at=now
-        )
-        session.add(row)
-        created.append({"interval": tf, "direction": direction, "confidence": confidence, "entry": float(entry), "sl": float(sl), "tp": [float(x) for x in tp]})
-
-    if created:
+    await asyncio.gather(*(process_symbol(k) for k in symbols))
+    if created_history:
         session.commit()
     rows = await refresh_signal_outcomes(session, user.id, limit=500)
-    return {"enabled": True, "threshold": AUTO_ENTRY_THRESHOLD, "saved_timeframes": [x["interval"] for x in created], "trades": created, "count": len(created), "history_count": len(rows), "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "paper_auto_entry"}
+    return {
+        "enabled": True,
+        "symbols": symbols,
+        "count": len(created_history),
+        "queued": len(queued),
+        "history_count": len(rows),
+        "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
+        "forward_mode": "ALL SIGNALS EXCEPT BOOK + OPENAI · NO CONFIDENCE/ZONE/AI/MTF FILTERS",
+        "excluded_sources": ["Book + OpenAI"],
+        "items": created_history,
+    }
 
 
 MT5_CANDLE_MAX_AGE = int(os.getenv("MT5_CANDLE_MAX_AGE", "20"))
