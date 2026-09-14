@@ -271,6 +271,15 @@ void ExecuteOrder(string order_id,string dir,string requested_symbol,string orde
 
    string req=UpperCopy(requested_symbol);
    string mkt=UpperCopy(order_market);
+   // Canonicalize symbol/market labels so XAU/USD and XAUUSD are treated alike.
+   StringReplace(req,"/","");
+   StringReplace(req,"-","");
+   StringReplace(req,"_","");
+   StringReplace(req," ","");
+   StringReplace(mkt,"/","");
+   StringReplace(mkt,"-","");
+   StringReplace(mkt,"_","");
+   StringReplace(mkt," ","");
 
    bool symbolOk=((expectedMarket=="XAU/USD" && StringFind(req,"XAUUSD")>=0) ||
                   (expectedMarket=="EUR/USD" && StringFind(req,"EURUSD")>=0));
