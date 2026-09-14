@@ -314,8 +314,8 @@ TRADINGVIEW_WS_URL = os.getenv("TRADINGVIEW_WS_URL", "wss://data.tradingview.com
 TRADINGVIEW_BARS = max(80, min(int(os.getenv("TRADINGVIEW_BARS", "260")), 500))
 TRADINGVIEW_TIMEOUT = float(os.getenv("TRADINGVIEW_TIMEOUT", "10"))
 MT5_BRIDGE_TOKEN = os.getenv("MT5_BRIDGE_TOKEN", "change-this-mt5-bridge-token").strip()
-MT5_AUTO_TRADING = os.getenv("MT5_AUTO_TRADING", "false").lower() == "true"
-MT5_AUTO_DUAL = os.getenv("MT5_AUTO_DUAL", "false").lower() == "true"
+MT5_AUTO_TRADING = os.getenv("MT5_AUTO_TRADING", "true").lower() == "true"
+MT5_AUTO_DUAL = os.getenv("MT5_AUTO_DUAL", "true").lower() == "true"
 MT5_LOT_SIZE = float(os.getenv("MT5_DEFAULT_LOT", "0.01"))
 MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "symbol": None, "candles": {}, "markets": {}}
 MT5_ORDER_QUEUE: list[dict[str, Any]] = []
@@ -3653,8 +3653,6 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 SignalHistory.candle_time == candle_time,
                 SignalHistory.direction == direction,
             ).order_by(SignalHistory.id.desc())).first()
-            if recent:
-                continue
 
             payload = {
                 "source": source,
@@ -3667,34 +3665,46 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 "candle_time": candle_time,
                 "auto_entry": True,
             }
-            row = SignalHistory(
-                user_id=user.id, symbol=key, interval=candidate["interval"], direction=direction,
-                headline=f"AUTO {source} {direction} · {candidate['interval'].upper()} · {confidence:.1f}%",
-                price=float(entry), payload=json.dumps(payload, ensure_ascii=False), outcome="OPEN",
-                created_at=now, source=source, candle_time=candle_time
-            )
-            session.add(row)
-            created_history.append({"source": source, "symbol": key, "interval": candidate["interval"], "direction": direction, "confidence": confidence})
+            if recent is None:
+                row = SignalHistory(
+                    user_id=user.id, symbol=key, interval=candidate["interval"], direction=direction,
+                    headline=f"AUTO {source} {direction} · {candidate['interval'].upper()} · {confidence:.1f}%",
+                    price=float(entry), payload=json.dumps(payload, ensure_ascii=False), outcome="OPEN",
+                    created_at=now, source=source, candle_time=candle_time
+                )
+                session.add(row)
+                created_history.append({"source": source, "symbol": key, "interval": candidate["interval"], "direction": direction, "confidence": confidence})
 
             if MT5_AUTO_TRADING:
-                order_id = secrets.token_hex(8)
-                MT5_ORDER_ATTEMPTS[order_id] = 0
-                order = {
-                    "id": order_id,
-                    "symbol": key,
-                    "market": _mt5_market_key(key),
-                    "interval": candidate["interval"],
-                    "direction": direction,
-                    "entry": float(entry),
-                    "sl": float(sl),
-                    "tp": [float(x) for x in tp],
-                    "volume": MT5_LOT_SIZE,
-                    "source": source,
-                    "confidence": confidence,
-                    "created_at": now.isoformat(),
-                }
-                MT5_ORDER_QUEUE.append(order)
-                queued.append(order)
+                queue_fingerprint = (key, source, candidate["interval"], candle_time, direction)
+                already_queued = any(
+                    (str(q.get("symbol")) == key and
+                     str(q.get("source")) == source and
+                     str(q.get("interval")) == candidate["interval"] and
+                     str(q.get("candle_time")) == candle_time and
+                     str(q.get("direction")) == direction)
+                    for q in MT5_ORDER_QUEUE
+                )
+                if not already_queued:
+                    order_id = secrets.token_hex(8)
+                    MT5_ORDER_ATTEMPTS[order_id] = 0
+                    order = {
+                        "id": order_id,
+                        "symbol": key,
+                        "market": _mt5_market_key(key),
+                        "interval": candidate["interval"],
+                        "direction": direction,
+                        "entry": float(entry),
+                        "sl": float(sl),
+                        "tp": [float(x) for x in tp],
+                        "volume": MT5_LOT_SIZE,
+                        "source": source,
+                        "confidence": confidence,
+                        "candle_time": candle_time,
+                        "created_at": now.isoformat(),
+                    }
+                    MT5_ORDER_QUEUE.append(order)
+                    queued.append(order)
 
     await asyncio.gather(*(process_symbol(k) for k in symbols))
     if created_history:

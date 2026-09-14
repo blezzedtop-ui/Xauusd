@@ -156,14 +156,10 @@ void SendReport(string order_id,string action,string status,string symbol,string
    string out; Http("POST",Url("/api/v1/mt5/report?token="+BridgeToken),rb,out);
 }
 
-int OnInit(){
+void OnInit(){
    Print("[MT5 BRIDGE] STARTED symbol=",_Symbol," ApiBase=",ApiBase," PollSeconds=",PollSeconds," Lot=",DoubleToString(DefaultLot,2));
    Print("[MT5 BRIDGE] If WebRequest is blocked, add this exact URL in Tools -> Options -> Expert Advisors: ",ApiBase);
-   if(!EventSetTimer(MathMax(1,PollSeconds))) {
-      Print("[MT5 BRIDGE] EventSetTimer failed. Error=",GetLastError());
-      return(INIT_FAILED);
-   }
-   return(INIT_SUCCEEDED);
+   EventSetTimer(MathMax(1,PollSeconds));
 }
 void OnDeinit(const int reason){ EventKillTimer(); Print("[MT5 BRIDGE] STOPPED reason=",reason); }
 
