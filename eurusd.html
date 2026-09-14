@@ -702,6 +702,16 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
   .overview-ai-card .ai-sig-reason { font-size: .9rem; }
 }
 </style>
+<style id="signalx-history-final-fix">
+/* History stays as its own full-width page section; table scrolls without collapsing the layout. */
+#historySection{width:100%;grid-column:1 / -1;display:none;}
+#historySection.active{display:block;}
+#historySection>.card{width:100%;max-width:none;}
+#historySection .scroll{width:100%;overflow-x:auto;overflow-y:visible;}
+#historySection .history{width:max-content;min-width:1180px;}
+#historySection .history th,#historySection .history td{vertical-align:middle;}
+@media(max-width:700px){#historySection .card{overflow:visible;}#historySection .scroll{max-width:100%;touch-action:pan-x pan-y;-webkit-overflow-scrolling:touch;}#historySection .history{min-width:1180px;}}
+</style>
 </head>
 <body>
 <div class="gold-3d-orb"></div>

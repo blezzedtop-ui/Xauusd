@@ -314,8 +314,8 @@ TRADINGVIEW_WS_URL = os.getenv("TRADINGVIEW_WS_URL", "wss://data.tradingview.com
 TRADINGVIEW_BARS = max(80, min(int(os.getenv("TRADINGVIEW_BARS", "260")), 500))
 TRADINGVIEW_TIMEOUT = float(os.getenv("TRADINGVIEW_TIMEOUT", "10"))
 MT5_BRIDGE_TOKEN = os.getenv("MT5_BRIDGE_TOKEN", "change-this-mt5-bridge-token").strip()
-MT5_AUTO_TRADING = os.getenv("MT5_AUTO_TRADING", "true").lower() == "true"
-MT5_AUTO_DUAL = os.getenv("MT5_AUTO_DUAL", "true").lower() == "true"
+MT5_AUTO_TRADING = os.getenv("MT5_AUTO_TRADING", "false").lower() == "true"
+MT5_AUTO_DUAL = os.getenv("MT5_AUTO_DUAL", "false").lower() == "true"
 MT5_LOT_SIZE = float(os.getenv("MT5_DEFAULT_LOT", "0.01"))
 MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "symbol": None, "candles": {}, "markets": {}}
 MT5_ORDER_QUEUE: list[dict[str, Any]] = []
@@ -927,6 +927,47 @@ class MarketDataError(RuntimeError):
 def clean_symbol(symbol: str) -> str:
     return symbol.strip().upper().replace("-", "/")
 
+def history_pip_size(symbol: str) -> float:
+    """Return the user-facing pip size for history distance display.
+    XAUUSD uses 0.01 price units per pip; major FX pairs use 0.0001.
+    """
+    key = clean_symbol(symbol).replace('/', '')
+    if key.startswith('XAU'):
+        return 0.01
+    if key.endswith('JPY'):
+        return 0.01
+    return 0.0001
+
+def history_level_pips(symbol: str, entry: float | None, tp: Any, sl: float | None) -> tuple[float | None, float | None, float | None]:
+    """Calculate per-signal TP/SL pip distances, isolated by symbol.
+    tp_pips is the distance to the furthest TP; tp_pips_total is the sum of
+    distances from Entry to every TP target; sl_pips is the Entry→SL distance.
+    """
+    try:
+        e = float(entry) if entry is not None else None
+    except (TypeError, ValueError):
+        e = None
+    pip = history_pip_size(symbol)
+    if e is None or pip <= 0:
+        return None, None, None
+    raw = tp if isinstance(tp, list) else ([] if tp in (None, '') else [tp])
+    tps = []
+    for value in raw:
+        try:
+            tps.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    tp_distances = [abs(v - e) / pip for v in tps]
+    tp_farthest = max(tp_distances) if tp_distances else None
+    tp_total = sum(tp_distances) if tp_distances else None
+    try:
+        sl_pips = abs(float(sl) - e) / pip if sl is not None else None
+    except (TypeError, ValueError):
+        sl_pips = None
+    return (round(tp_farthest, 2) if tp_farthest is not None else None,
+            round(tp_total, 2) if tp_total is not None else None,
+            round(sl_pips, 2) if sl_pips is not None else None)
+
 def realmarket_symbol(symbol: str) -> str:
     return clean_symbol(symbol).replace("/", "")
 
@@ -1465,7 +1506,7 @@ async def _fetch_tradingview_candles_once(symbol: str, interval: str, limit: int
     except Exception as exc: raise MarketDataError(f"TradingView WebSocket unavailable: {type(exc).__name__}: {exc}")
 
 
-async def fetch_tradingview_candles(symbol: str, interval: str, limit: int = TRADINGVIEW_BARS) -> list[dict[str, Any]]:
+async def fetch_tradingview_candles(symbol: str, interval: str, limit: int = TRADINGVIEW_BARS, allow_stale: bool = True) -> list[dict[str, Any]]:
     """Shared TradingView/OANDA cache with single-flight locking and one retry."""
     symbol = clean_symbol(symbol)
     interval = validate_interval(interval)
@@ -1493,12 +1534,13 @@ async def fetch_tradingview_candles(symbol: str, interval: str, limit: int = TRA
                 if attempt == 0:
                     await asyncio.sleep(0.25)
         if not bars:
-            stale = TV_CANDLE_CACHE.get(key)
-            if stale and stale[1]:
-                return stale[1][-limit:]
+            if allow_stale:
+                stale = TV_CANDLE_CACHE.get(key)
+                if stale and stale[1]:
+                    return stale[1][-limit:]
             if last_exc:
                 raise last_exc
-            raise MarketDataError("TradingView returned no OHLC bars")
+            raise MarketDataError("TradingView returned no fresh OHLC bars")
         bars = sorted({int(b["time"]): b for b in bars}.values(), key=lambda x: x["time"])
         TV_CANDLE_CACHE[key] = (asyncio.get_running_loop().time(), bars[-TRADINGVIEW_BARS:])
         return TV_CANDLE_CACHE[key][1][-limit:]
@@ -1618,9 +1660,17 @@ def merge_live_price_into_candles(candles: list[dict[str, Any]], interval: str, 
 
 
 async def get_candles(symbol: str, interval: str, limit: int) -> tuple[list[dict[str, Any]], str, str | None]:
+    """Fresh TradingView candles for the exact symbol/timeframe. No stale fallback.
+
+    Signal and auto-trade paths use the active/live chart bar so Entry/SL/TP are
+    derived from the current chart series rather than a previously cached snapshot.
+    """
+    key = clean_symbol(symbol)
     interval = validate_interval(interval)
-    data, _, _ = await get_chart_history(symbol, interval, max(31, min(limit, 260)))
-    return data[-limit:], "tradingview", f"TradingView {tv_symbol_for(symbol)} chart series"
+    data = await fetch_tradingview_candles(key, interval, max(31, min(limit, 260)), allow_stale=False)
+    if not data:
+        raise MarketDataError(f"TradingView {tv_symbol_for(key)} returned no fresh candles")
+    return data[-limit:], "tradingview-live", f"TradingView {tv_symbol_for(key)} live chart series"
 
 
 async def get_pivot_reference(symbol: str) -> tuple[dict[str, float], str | None]:
@@ -2773,9 +2823,9 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
     async def one(tf: str):
         try:
             candles_data,mode,warning=await get_candles(symbol,tf,260)
-            closed_candles=candles_data[:-1] if len(candles_data)>1 else candles_data
-            item=build_advanced_signal(closed_candles,tf,news_blocked=news_blocked)
-            candle_time=closed_candles[-1].get("time")
+            analysis_candles=candles_data
+            item=build_advanced_signal(analysis_candles,tf,news_blocked=news_blocked)
+            candle_time=analysis_candles[-1].get("time")
             ai=await ai_validate_module_signal("Signal Lab",symbol,tf,candle_time,item)
             item=merge_ai_validation(item,ai)
             item["candle_time"]=candle_time
@@ -3078,7 +3128,7 @@ async def get_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> 
     symbol = clean_symbol(symbol)
     interval = validate_interval(interval)
     try:
-        candles_data = await fetch_tradingview_candles(symbol, interval, 220)
+        candles_data, _, _ = await get_candles(symbol, interval, 220)
         if len(candles_data) < 35:
             raise MarketDataError("TradingView candles yetarli emas")
         levels, _ = await calculate_pivot_for_interval(symbol, interval)
@@ -3147,7 +3197,7 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 1
             .order_by(SignalHistory.created_at.asc()).limit(limit)
         ))
 
-    cache: dict[str, list[dict[str, Any]]] = {}
+    cache: dict[tuple[str, str], list[dict[str, Any]]] = {}
     changed = False
     for row in rows:
         try:
@@ -3155,14 +3205,13 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 1
         except Exception:
             payload = {}
         setup = payload.get("setup") or {}
-        # Backward compatibility with advanced payloads.
-        if not setup:
-            adv = payload.get("advanced") or payload.get("signal") or {}
-            setup = {
-                "entry": adv.get("entry", row.price),
-                "stop_loss": adv.get("stop_loss"),
-                "take_profit": adv.get("take_profit", []),
-            }
+        # Support current auto-record schema, legacy advanced schema and signal-module schema.
+        adv = payload.get("advanced") or payload.get("signal") or {}
+        setup = {
+            "entry": setup.get("entry", adv.get("entry", payload.get("entry", row.price))),
+            "stop_loss": setup.get("stop_loss", adv.get("stop_loss", payload.get("stop_loss", payload.get("sl")))),
+            "take_profit": setup.get("take_profit", adv.get("take_profit", payload.get("take_profit", payload.get("tp", [])))),
+        }
         entry = setup.get("entry", row.price)
         sl = setup.get("stop_loss")
         tps = setup.get("take_profit") or []
@@ -3176,13 +3225,14 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 1
             continue
 
         tf = validate_interval(row.interval)
-        if tf not in cache:
+        cache_key = (clean_symbol(row.symbol), tf)
+        if cache_key not in cache:
             try:
                 candles, _, _ = await get_candles(row.symbol, tf, 260)
-                cache[tf] = candles
+                cache[cache_key] = candles
             except Exception:
-                cache[tf] = []
-        candles = cache[tf]
+                cache[cache_key] = []
+        candles = cache[cache_key]
         if not candles:
             continue
 
@@ -3442,6 +3492,34 @@ async def advanced_signals(symbol: str, authorization: str | None = Header(defau
     return result
 
 
+def _normalize_auto_trade_levels(item: dict[str, Any], candles: list[dict[str, Any]], direction: str) -> tuple[float, float, list[float], bool]:
+    """Validate/repair Entry/SL/TP against the current live TradingView chart."""
+    if not candles:
+        raise MarketDataError("No live candles available for auto-trade levels")
+    current=float(candles[-1]["close"])
+    avg_range=sum(abs(float(c["high"])-float(c["low"])) for c in candles[-20:])/max(1,min(20,len(candles)))
+    atr_now=max(avg_range,current*0.00015)
+    try: entry=float(item.get("entry")) if item.get("entry") is not None else current
+    except Exception: entry=current
+    repaired=False
+    if entry<=0 or abs(entry-current)>max(atr_now*2.5,current*0.0025):
+        entry=current; repaired=True
+    try: sl=float(item.get("stop_loss")) if item.get("stop_loss") is not None else None
+    except Exception: sl=None
+    try: tps=[float(v) for v in (item.get("take_profit") or []) if v is not None]
+    except Exception: tps=[]
+    lows=[float(c["low"]) for c in candles[-5:]]; highs=[float(c["high"]) for c in candles[-5:]]
+    buf=max(atr_now*1.15,entry*0.0005)
+    if direction=="BUY":
+        if sl is None or not (0<sl<entry): sl=min(lows)-buf; repaired=True
+        risk=max(entry-sl,buf)
+        if not tps or not all(v>entry for v in tps): tps=[entry+risk*1.5,entry+risk*2.5]; repaired=True
+    else:
+        if sl is None or not sl>entry: sl=max(highs)+buf; repaired=True
+        risk=max(sl-entry,buf)
+        if not tps or not all(v<entry for v in tps): tps=[entry-risk*1.5,entry-risk*2.5]; repaired=True
+    return round(entry,4),round(sl,4),[round(v,4) for v in tps[:2]],repaired
+
 @app.post("/api/v1/signals/auto-record")
 async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     """Forward every BUY/SELL signal source except Book + OpenAI into the MT5 queue.
@@ -3474,35 +3552,35 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
 
         # 2) Shared selected-timeframe candles power the other signal modules.
         candles, mode, warning = await get_candles(key, selected_interval, 260)
-        closed = candles[:-1] if len(candles) > 1 else candles
-        if len(closed) < 40:
+        analysis_candles = candles
+        if len(analysis_candles) < 40:
             return candidates
-        candle_time = closed[-1].get("time")
+        candle_time = analysis_candles[-1].get("time")
 
         try:
-            ref = closed[-2] if len(closed) > 1 else closed[-1]
-            price = float(closed[-1]["close"])
+            ref = analysis_candles[-2] if len(analysis_candles) > 1 else analysis_candles[-1]
+            price = float(analysis_candles[-1]["close"])
             levels = calculate_pivot_levels(float(ref["high"]), float(ref["low"]), float(ref["close"]), price)
-            technical = build_key_level_signal(closed, levels, news_blocked=False)
+            technical = build_key_level_signal(analysis_candles, levels, news_blocked=False)
             candidates.append({"source": "Technical Analysis", "interval": selected_interval, "item": technical, "response": {"mode": mode, "warning": warning, "candle_time": candle_time}})
         except Exception:
             pass
 
         try:
-            classic = _classic_trade(closed, calculate_pivot_levels(float(closed[-2]["high"]), float(closed[-2]["low"]), float(closed[-2]["close"]), float(closed[-1]["close"])))
+            classic = _classic_trade(analysis_candles, calculate_pivot_levels(float(analysis_candles[-2]["high"]), float(analysis_candles[-2]["low"]), float(analysis_candles[-2]["close"]), float(analysis_candles[-1]["close"])))
             candidates.append({"source": "Classic Trade", "interval": selected_interval, "item": classic, "response": {"mode": mode, "warning": warning, "candle_time": candle_time}})
         except Exception:
             pass
 
         try:
-            snr = _snr_zone_analysis(closed)
+            snr = _snr_zone_analysis(analysis_candles)
             candidates.append({"source": "SNR", "interval": selected_interval, "item": snr, "response": {"mode": mode, "warning": warning, "candle_time": candle_time}})
         except Exception:
             pass
 
         try:
-            trend = _trendline_analysis(closed)
-            fib = _fibonacci_analysis(closed)
+            trend = _trendline_analysis(analysis_candles)
+            fib = _fibonacci_analysis(analysis_candles)
             candidates.append({"source": "Auto Trend Line", "interval": selected_interval, "item": {**trend, "take_profit": [v for v in [fib.get("extension_targets", {}).get("1.272"), fib.get("extension_targets", {}).get("1.618")] if v is not None]}, "response": {"mode": mode, "warning": warning, "candle_time": candle_time, "fibonacci": fib}})
         except Exception:
             pass
@@ -3546,42 +3624,35 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             direction = str(item.get("signal") or item.get("direction") or "WAIT").upper()
             if direction not in {"BUY", "SELL"}:
                 continue
-            entry = item.get("entry")
-            sl = item.get("stop_loss")
-            tp = item.get("take_profit") or []
             confidence = float(item.get("confidence") or item.get("trend_power") or 0)
-            # No quality/confirmation gates are applied here. The only execution
-            # requirement is that the signal module provides executable entry +
-            # risk/target levels. Book + OpenAI is excluded above by source name.
-            if entry is None or sl is None or not tp:
+            # AUTO TRADE accepts every non-Book/OpenAI BUY/SELL. Quality gates are disabled.
+            # Levels are revalidated against fresh candles for the exact symbol/timeframe
+            # so no stale or cross-symbol Entry/SL/TP can reach MT5.
+            current_candles = (await get_candles(key, candidate["interval"], 260))[0]
+            try:
+                entry, sl, tp, repaired = _normalize_auto_trade_levels(item, current_candles, direction)
+            except Exception:
                 continue
-            candle_time = str(item.get("candle_time") or (candidate.get("response") or {}).get("candle_time") or "")
-            # Dedupe the same source/timeframe/candle/direction. Different sources may still
-            # produce separate queue items, because the user requested all non-Book signals.
+            candle_time = str(current_candles[-1].get("time"))
+            item = dict(item)
+            item.update({
+                "entry": entry, "stop_loss": sl, "take_profit": tp,
+                "current_price": float(current_candles[-1]["close"]),
+                "candle_time": candle_time, "live_levels_verified": True,
+                "levels_repaired_from_live_chart": bool(repaired),
+            })
             fingerprint = (key, source, candidate["interval"], candle_time, direction)
             if fingerprint in seen_queue_keys:
                 continue
             seen_queue_keys.add(fingerprint)
-
-            # Do not create repeat orders for the same module/timeframe while the previous
-            # auto trade is still open, and do not spam the queue every browser refresh.
-            recent_open = session.scalars(select(SignalHistory).where(
-                SignalHistory.user_id == user.id,
-                SignalHistory.symbol == key,
-                SignalHistory.interval == candidate["interval"],
-                SignalHistory.source == source,
-                SignalHistory.outcome == "OPEN",
-            ).order_by(SignalHistory.created_at.desc())).first()
-            if recent_open:
-                continue
             recent = session.scalars(select(SignalHistory).where(
                 SignalHistory.user_id == user.id,
+                SignalHistory.source == source,
                 SignalHistory.symbol == key,
                 SignalHistory.interval == candidate["interval"],
-                SignalHistory.source == source,
                 SignalHistory.candle_time == candle_time,
                 SignalHistory.direction == direction,
-            ).order_by(SignalHistory.created_at.desc())).first()
+            ).order_by(SignalHistory.id.desc())).first()
             if recent:
                 continue
 
@@ -3611,7 +3682,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 order = {
                     "id": order_id,
                     "symbol": key,
-                    "route_symbol": key,
+                    "market": _mt5_market_key(key),
                     "interval": candidate["interval"],
                     "direction": direction,
                     "entry": float(entry),
@@ -3669,12 +3740,9 @@ def _mt5_is_connected_now() -> bool:
     return age is not None and age <= MT5_HEARTBEAT_TIMEOUT
 
 def _mt5_market_key(symbol: str | None) -> str:
-    # Normalize broker-specific symbols (XAUUSDm/XAUUSDc/XAUUSDr, EURUSDm, etc.)
-    # to the canonical symbols used by the web UI and signal engine.
     key = clean_symbol(symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL)
-    compact = key.replace("/", "")
-    if compact.startswith("XAUUSD"): return "XAU/USD"
-    if compact.startswith("EURUSD"): return "EUR/USD"
+    if key in {"XAUUSD", "XAU/USD"}: return "XAU/USD"
+    if key in {"EURUSD", "EUR/USD"}: return "EUR/USD"
     return key
 
 def _mt5_market_state(symbol: str | None) -> dict[str, Any]:
@@ -3744,9 +3812,8 @@ async def ai_signals_live(symbol: str, interval: str = DEFAULT_INTERVAL, authori
     candles_data, mode, warning = await get_candles(key, interval, 260)
     if len(candles_data) < 40:
         raise MarketDataError(f"{interval} uchun real signal hisoblashga candle yetarli emas")
-    closed=candles_data[:-1] if len(candles_data)>1 else candles_data
-    item=build_advanced_signal(closed, interval, news_blocked=False)
-    candle_time=closed[-1].get("time") if closed else None
+    item=build_advanced_signal(candles_data, interval, news_blocked=False)
+    candle_time=candles_data[-1].get("time") if candles_data else None
     ai=await ai_validate_module_signal("AI Signals", key, interval, candle_time, item)
     item=merge_ai_validation(item, ai)
     item["candle_time"]=candle_time
@@ -3838,33 +3905,54 @@ class ModuleSignalBody(BaseModel):
 
 @app.post("/api/v1/signals/record-module")
 async def record_module_signal(body: ModuleSignalBody, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    """Persist a module signal using fresh candles for the exact symbol/timeframe.
+
+    Client-supplied Entry/SL/TP are treated as hints only; the server revalidates them
+    against the current TradingView chart so history cannot store cross-symbol or stale
+    levels.
+    """
     user = current_user(authorization, session)
     direction = str(body.direction or "WAIT").upper()
     source = str(body.source or "Signals")[:40]
     interval = validate_interval(body.interval)
     symbol = clean_symbol(body.symbol)
     if direction not in {"BUY", "SELL"}:
-        return {"saved": False, "reason": "WAIT", "history_count": session.scalar(select(SignalHistory).where(SignalHistory.user_id == user.id).order_by(SignalHistory.id.desc()).limit(1).with_only_columns(SignalHistory.id)) or 0}
-    # One record per module/timeframe/candle/direction. Refreshing the dashboard must not spam history.
+        return {"saved": False, "reason": "WAIT"}
+
+    try:
+        live_candles, _, _ = await get_candles(symbol, interval, 260)
+        entry, sl, tp, repaired = _normalize_auto_trade_levels({
+            "entry": body.entry, "stop_loss": body.stop_loss, "take_profit": body.take_profit
+        }, live_candles, direction)
+    except Exception as exc:
+        return {"saved": False, "reason": f"LIVE_LEVELS_UNAVAILABLE: {exc}"}
+    live_candle_time = str(live_candles[-1].get("time"))
+
+    # One record per module/timeframe/live candle/direction.
     q = select(SignalHistory).where(
         SignalHistory.user_id == user.id,
         SignalHistory.source == source,
         SignalHistory.symbol == symbol,
         SignalHistory.interval == interval,
         SignalHistory.direction == direction,
-        SignalHistory.candle_time == body.candle_time
+        SignalHistory.candle_time == live_candle_time
     ).order_by(SignalHistory.id.desc())
     existing = session.scalar(q)
     if existing:
         return {"saved": False, "duplicate": True, "id": existing.id}
+
     payload = dict(body.payload or {})
     setup_strength, setup_grade, strong_setup = _setup_strength_from_payload(payload, body.confidence)
     payload.update({
         "source": source,
+        "symbol": symbol,
+        "interval": interval,
         "confidence_at_entry": body.confidence,
-        "setup": {"entry": body.entry, "stop_loss": body.stop_loss, "take_profit": body.take_profit},
+        "setup": {"entry": entry, "stop_loss": sl, "take_profit": tp},
         "signal": {"direction": direction, "confidence": body.confidence},
-        "candle_time": body.candle_time,
+        "candle_time": live_candle_time,
+        "live_levels_verified": True,
+        "levels_repaired_from_live_chart": bool(repaired),
         "setup_strength": setup_strength,
         "setup_grade": setup_grade,
         "strong_setup": strong_setup,
@@ -3872,17 +3960,21 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     row = SignalHistory(
         user_id=user.id, symbol=symbol, interval=interval, direction=direction,
         headline=(body.headline or f"{source} · {direction}")[:255],
-        price=float(body.entry or 0), payload=json.dumps(payload, ensure_ascii=False),
+        price=float(entry), payload=json.dumps(payload, ensure_ascii=False),
         outcome="OPEN", created_at=datetime.now(timezone.utc),
-        source=source, candle_time=body.candle_time
+        source=source, candle_time=live_candle_time
     )
     session.add(row); session.commit(); session.refresh(row)
-    return {"saved": True, "id": row.id, "source": source, "outcome": row.outcome}
+    return {"saved": True, "id": row.id, "source": source, "outcome": row.outcome,
+            "symbol": symbol, "entry": entry, "stop_loss": sl, "take_profit": tp, "candle_time": live_candle_time}
 
 @app.get("/api/v1/signals/analytics")
-async def signal_analytics(period: str = Query("all"), date: str | None = Query(None), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def signal_analytics(period: str = Query("all"), date: str | None = Query(None), symbol: str = Query(""), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
-    rows = await refresh_signal_outcomes(session, user.id)
+    requested_symbol = clean_symbol(symbol) if symbol else ""
+    rows = await refresh_signal_outcomes(session, user.id, limit=500)
+    if requested_symbol:
+        rows = [r for r in rows if clean_symbol(r.symbol) == requested_symbol]
     rows = filter_history_rows(rows, period, date)
     wins = sum(1 for r in rows if r.outcome == "TP HIT")
     losses = sum(1 for r in rows if r.outcome == "SL HIT")
@@ -3890,29 +3982,51 @@ async def signal_analytics(period: str = Query("all"), date: str | None = Query(
     winrate = round((wins / completed) * 100, 2) if completed else 0.0
     by_tf: dict[str, dict[str, Any]] = {}
     by_source: dict[str, dict[str, Any]] = {}
-    for r in rows:
-        item = by_tf.setdefault(r.interval, {"total_signals":0,"completed_trades":0,"wins":0,"losses":0,"open":0,"ambiguous":0,"winrate":0.0})
-        src = getattr(r, "source", None) or "Signals"
-        src_item = by_source.setdefault(src, {"total_signals":0,"completed_trades":0,"wins":0,"losses":0,"open":0,"ambiguous":0,"winrate":0.0})
-        src_item["total_signals"] += 1
-        item["total_signals"] += 1
-        if r.outcome == "TP HIT":
-            item["wins"] += 1
-            src_item["wins"] += 1
-        elif r.outcome == "SL HIT":
-            item["losses"] += 1
-            src_item["losses"] += 1
-        elif r.outcome == "AMBIGUOUS":
-            item["ambiguous"] += 1
-            src_item["ambiguous"] += 1
-        elif r.outcome == "OPEN":
-            item["open"] += 1
-            src_item["open"] += 1
+    by_date: dict[str, dict[str, Any]] = {}
+
+    def bucket() -> dict[str, Any]:
+        return {"total_signals":0,"completed_trades":0,"wins":0,"losses":0,"open":0,"ambiguous":0,"winrate":0.0}
+
+    def finish(item: dict[str, Any]) -> None:
         item["completed_trades"] = item["wins"] + item["losses"]
-        src_item["completed_trades"] = src_item["wins"] + src_item["losses"]
         item["winrate"] = round(item["wins"] / item["completed_trades"] * 100, 2) if item["completed_trades"] else 0.0
-        src_item["winrate"] = round(src_item["wins"] / src_item["completed_trades"] * 100, 2) if src_item["completed_trades"] else 0.0
-    return {"total_signals": len(rows), "completed_trades": completed, "wins": wins, "losses": losses, "winrate": winrate, "open": sum(1 for r in rows if r.outcome == "OPEN"), "ambiguous": sum(1 for r in rows if r.outcome == "AMBIGUOUS"), "by_timeframe": by_tf, "by_source": by_source}
+
+    for r in rows:
+        item = by_tf.setdefault(r.interval, bucket())
+        src = getattr(r, "source", None) or "Signals"
+        src_item = by_source.setdefault(src, bucket())
+        dt = r.created_at
+        if dt is None:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        day_key = dt.astimezone(HISTORY_LOCAL_TZ).date().isoformat()
+        day_item = by_date.setdefault(day_key, bucket())
+
+        for target in (item, src_item, day_item):
+            target["total_signals"] += 1
+            if r.outcome == "TP HIT":
+                target["wins"] += 1
+            elif r.outcome == "SL HIT":
+                target["losses"] += 1
+            elif r.outcome == "AMBIGUOUS":
+                target["ambiguous"] += 1
+            elif r.outcome == "OPEN":
+                target["open"] += 1
+            finish(target)
+
+    return {
+        "total_signals": len(rows),
+        "completed_trades": completed,
+        "wins": wins,
+        "losses": losses,
+        "winrate": winrate,
+        "open": sum(1 for r in rows if r.outcome == "OPEN"),
+        "ambiguous": sum(1 for r in rows if r.outcome == "AMBIGUOUS"),
+        "by_timeframe": by_tf,
+        "by_source": by_source,
+        "by_date": dict(sorted(by_date.items(), reverse=True)),
+    }
 
 
 @app.post("/api/v1/signals/save")
@@ -3925,9 +4039,16 @@ async def save_signal(symbol: str, interval: str = DEFAULT_INTERVAL, authorizati
 
 
 @app.get("/api/v1/signals/history")
-async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Query("all"), date: str | None = Query(None), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Query("all"), date: str | None = Query(None), symbol: str = Query(""), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
-    rows = await refresh_signal_outcomes(session, user.id, limit=200)
+    requested_symbol = clean_symbol(symbol) if symbol else ""
+    # Always isolate history by the currently requested trading symbol.
+    if requested_symbol:
+        rows = list(session.scalars(select(SignalHistory).where(SignalHistory.user_id == user.id, SignalHistory.symbol == requested_symbol).order_by(SignalHistory.created_at.asc()).limit(500)))
+        await refresh_signal_outcomes(session, user.id, limit=500)
+        rows = list(session.scalars(select(SignalHistory).where(SignalHistory.user_id == user.id, SignalHistory.symbol == requested_symbol).order_by(SignalHistory.created_at.asc()).limit(500)))
+    else:
+        rows = await refresh_signal_outcomes(session, user.id, limit=500)
     rows = filter_history_rows(rows, period, date)
     rows = rows[-limit:][::-1]
     items = []
@@ -3935,7 +4056,21 @@ async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Que
         payload = {}
         try: payload = json.loads(r.payload)
         except Exception: pass
-        setup = payload.get("setup", {})
+        setup = payload.get("setup") or {}
+        # Current auto-trade records keep execution levels at the payload root; older records keep them under setup/advanced.
+        if not setup:
+            adv = payload.get("advanced") or payload.get("signal") or {}
+            setup = {
+                "entry": adv.get("entry", payload.get("entry", r.price)),
+                "stop_loss": adv.get("stop_loss", payload.get("stop_loss", payload.get("sl"))),
+                "take_profit": adv.get("take_profit", payload.get("take_profit", payload.get("tp", []))),
+            }
+        else:
+            setup = {
+                "entry": setup.get("entry", payload.get("entry", r.price)),
+                "stop_loss": setup.get("stop_loss", payload.get("stop_loss", payload.get("sl"))),
+                "take_profit": setup.get("take_profit", payload.get("take_profit", payload.get("tp", []))),
+            }
         result = payload.get("result", {}) or {}
         created_at = r.created_at if r.created_at.tzinfo else r.created_at.replace(tzinfo=timezone.utc)
         closed_at = r.closed_at if r.closed_at and r.closed_at.tzinfo else (r.closed_at.replace(tzinfo=timezone.utc) if r.closed_at else None)
@@ -3943,7 +4078,11 @@ async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Que
         if duration_seconds is None and closed_at:
             duration_seconds = max(0, int((closed_at - created_at).total_seconds()))
         setup_strength, setup_grade, strong_setup = _setup_strength_from_payload(payload, payload.get("confidence_at_entry", payload.get("signal",{}).get("confidence")))
-        items.append({"id": r.id, "symbol": r.symbol, "interval": r.interval, "source": getattr(r, "source", None) or "Signals", "candle_time": getattr(r, "candle_time", None), "direction": r.direction, "entry": setup.get("entry", r.price), "tp": setup.get("take_profit", []), "sl": setup.get("stop_loss"), "headline": r.headline, "price": r.price, "outcome": r.outcome, "result_price": result.get("price"), "duration_seconds": duration_seconds, "duration_minutes": round(duration_seconds/60,2) if duration_seconds is not None else None, "auto_entry": bool(payload.get("auto_entry")), "confidence": payload.get("confidence_at_entry", payload.get("signal",{}).get("confidence")), "setup_strength": payload.get("setup_strength", setup_strength), "setup_grade": payload.get("setup_grade", setup_grade), "strong_setup": bool(payload.get("strong_setup", strong_setup)), "created_at": created_at.isoformat(), "closed_at": closed_at.isoformat() if closed_at else None})
+        entry_value = setup.get("entry", r.price)
+        tp_value = setup.get("take_profit", [])
+        sl_value = setup.get("stop_loss")
+        tp_pips, tp_pips_total, sl_pips = history_level_pips(r.symbol, entry_value, tp_value, sl_value)
+        items.append({"id": r.id, "symbol": r.symbol, "interval": r.interval, "source": getattr(r, "source", None) or "Signals", "candle_time": getattr(r, "candle_time", None), "direction": r.direction, "entry": entry_value, "tp": tp_value, "sl": sl_value, "tp_pips": tp_pips, "tp_pips_total": tp_pips_total, "sl_pips": sl_pips, "pip_size": history_pip_size(r.symbol), "headline": r.headline, "price": r.price, "outcome": r.outcome, "result_price": result.get("price"), "duration_seconds": duration_seconds, "duration_minutes": round(duration_seconds/60,2) if duration_seconds is not None else None, "auto_entry": bool(payload.get("auto_entry")), "confidence": payload.get("confidence_at_entry", payload.get("signal",{}).get("confidence")), "setup_strength": payload.get("setup_strength", setup_strength), "setup_grade": payload.get("setup_grade", setup_grade), "strong_setup": bool(payload.get("strong_setup", strong_setup)), "created_at": created_at.isoformat(), "closed_at": closed_at.isoformat() if closed_at else None})
     return {"items": items}
 
 
@@ -4068,25 +4207,36 @@ async def mt5_auto_dual(enabled: bool = Query(...), authorization: str | None = 
     return {"ok": True, "auto_dual": MT5_AUTO_DUAL, "symbols": ["XAU/USD", "EUR/USD"] if MT5_AUTO_DUAL else ["current"], "demo_only": True}
 
 @app.get("/api/v1/mt5/poll")
-async def mt5_poll(token: str = Query(...)) -> dict[str, Any]:
+async def mt5_poll(token: str = Query(...), market: str = Query(...)) -> dict[str, Any]:
+    """Return ONLY orders for the requested canonical market.
+
+    The bridge must poll XAU/USD and EUR/USD separately. This is a hard transport
+    boundary in addition to the order payload's symbol field, so an EURUSD order
+    cannot be delivered to the XAUUSD poll and vice versa.
+    """
     if not secrets.compare_digest(token, MT5_BRIDGE_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid MT5 bridge token")
+    requested_market = _mt5_market_key(market)
+    if requested_market not in {"XAU/USD", "EUR/USD"}:
+        raise HTTPException(status_code=400, detail="Unsupported MT5 market")
     MT5_BRIDGE_STATE["last_seen"] = datetime.now(timezone.utc).isoformat()
     if not MT5_AUTO_TRADING or not MT5_ORDER_QUEUE:
-        return {"ok": True, "orders": []}
-    # Claim a small batch without deleting it. The EA reports success/failure; failed
-    # orders are re-queued up to three times so a transient MT5/WebRequest error does
-    # not silently lose a signal.
+        return {"ok": True, "market": requested_market, "orders": []}
+    # Claim a small batch for THIS market only. The EA reports success/failure; failed
+    # orders are released for limited retry by /mt5/report.
     orders = []
     for item in MT5_ORDER_QUEUE:
         if item.get("claimed"):
+            continue
+        item_market = _mt5_market_key(item.get("market") or item.get("symbol"))
+        if item_market != requested_market:
             continue
         item["claimed"] = True
         MT5_ORDER_ATTEMPTS[item["id"]] = MT5_ORDER_ATTEMPTS.get(item["id"], 0) + 1
         orders.append(item)
         if len(orders) >= 10:
             break
-    return {"ok": True, "orders": orders}
+    return {"ok": True, "market": requested_market, "orders": orders}
 
 @app.post("/api/v1/mt5/state")
 async def mt5_state(body: MT5StateBody, token: str = Query(...)) -> dict[str, Any]:
@@ -4116,28 +4266,8 @@ async def mt5_state(body: MT5StateBody, token: str = Query(...)) -> dict[str, An
             }
             MT5_BRIDGE_STATE.setdefault("markets", {})[key] = snapshot
             saved.append(key)
-        # Keep the global heartbeat AND account metrics fresh. The UI can request
-        # either canonical XAU/USD or EUR/USD, so the canonical market snapshot
-        # must be available through _mt5_market_state().
-        primary = None
-        if "XAU/USD" in (MT5_BRIDGE_STATE.get("markets") or {}):
-            primary = MT5_BRIDGE_STATE["markets"]["XAU/USD"]
-        elif saved:
-            primary = MT5_BRIDGE_STATE["markets"].get(saved[0])
-        primary = primary or {}
-        MT5_BRIDGE_STATE.update({
-            "connected": bool(body.connected),
-            "login": body.login or primary.get("account"),
-            "server": body.server or primary.get("server"),
-            "balance": primary.get("balance", body.balance),
-            "equity": primary.get("equity", body.equity),
-            "free_margin": primary.get("free_margin", body.free_margin),
-            "margin": primary.get("margin", body.margin),
-            "positions": primary.get("positions", body.positions),
-            "last_seen": now_iso,
-            "last_error": body.error or primary.get("last_error", ""),
-            "symbol": saved[0] if saved else body.symbol or None,
-        })
+        # Keep global heartbeat fresh while preserving the per-symbol snapshots.
+        MT5_BRIDGE_STATE.update({"connected": bool(body.connected), "login": body.login or None, "server": body.server or None, "last_seen": now_iso, "last_error": body.error or "", "symbol": saved[0] if saved else body.symbol or None})
         return {"ok": True, "symbols": saved}
     key = _mt5_market_key(body.symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL)
     snapshot = {"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": now_iso, "last_error": body.error or "", "symbol": key, "candles": body.candles or {}}

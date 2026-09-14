@@ -1,5 +1,5 @@
 #property strict
-#property version "1.2"
+#property version "1.3"
 #property description "XAUUSD + EURUSD Railway <-> Exness MT5 DEMO bridge"
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -10,15 +10,29 @@ input int PollSeconds=2;
 input int StateSeconds=5;
 input double DefaultLot=0.01;
 input string TradeSymbol=""; // Optional legacy override; leave empty for dual-symbol routing
-input string XAUTradeSymbol="XAUUSDm"; // Exness XAUUSD symbol
-input string EURTradeSymbol="EURUSDm"; // Exness EURUSD symbol
+input string XAUTradeSymbol="XAUUSDm"; // Preferred XAUUSD broker symbol with suffix
+input string XAUTradeSymbolNoSuffix="XAUUSD"; // XAUUSD broker symbol without suffix
+input string EURTradeSymbol="EURUSDm"; // Preferred EURUSD broker symbol with suffix
+input string EURTradeSymbolNoSuffix="EURUSD"; // EURUSD broker symbol without suffix
 
 string Url(string path){ return ApiBase+path; }
 datetime g_last_state=0;
 string JsonEscape(string s){ StringReplace(s,"\\","\\\\"); StringReplace(s,"\"","\\\""); return s; }
 string ExecSymbol(){ string s=TradeSymbol; if(StringLen(s)==0) s=_Symbol; return s; }
-string XAUStateSymbol(){ return XAUTradeSymbol; }
-string EURStateSymbol(){ return EURTradeSymbol; }
+string FindAvailableVariant(string preferred,string noSuffix,string base){
+   if(StringLen(preferred)>0 && SymbolInfoDouble(preferred,SYMBOL_BID)>0) return preferred;
+   if(StringLen(noSuffix)>0 && SymbolInfoDouble(noSuffix,SYMBOL_BID)>0) return noSuffix;
+   string needle=base; StringToUpper(needle);
+   int total=SymbolsTotal(false);
+   for(int i=0;i<total;i++){
+      string name=SymbolName(i,false);
+      string up=name; StringToUpper(up);
+      if(StringFind(up,needle)>=0 && SymbolInfoDouble(name,SYMBOL_BID)>0) return name;
+   }
+   return preferred;
+}
+string XAUStateSymbol(){ return FindAvailableVariant(XAUTradeSymbol,XAUTradeSymbolNoSuffix,"XAUUSD"); }
+string EURStateSymbol(){ return FindAvailableVariant(EURTradeSymbol,EURTradeSymbolNoSuffix,"EURUSD"); }
 string TFKey(ENUM_TIMEFRAMES tf){
    if(tf==PERIOD_M1) return "1min";
    if(tf==PERIOD_M5) return "5min";
@@ -59,10 +73,10 @@ bool EnsureSymbol(string symbol){
    if(SymbolInfoDouble(symbol,SYMBOL_BID)<=0){
       if(!SymbolSelect(symbol,true)) return false;
    }
-   return (SymbolInfoDouble(symbol,SYMBOL_BID)>0 || SymbolInfoDouble(symbol,SYMBOL_ASK)>0);
+   return true;
 }
 
-void AppendMarketState(string &body, string symbol, ENUM_TIMEFRAMES &tfs[], int n, bool &firstMarket){
+void AppendMarketState(string &body, string symbol, ENUM_TIMEFRAMES &tfs[], int n, bool &firstMarket)
    if(!EnsureSymbol(symbol)) return;
    if(!firstMarket) body += ","; firstMarket=false;
    body += "\"" + JsonEscape(symbol) + "\":{";
@@ -86,7 +100,8 @@ void ReportState(){
    ENUM_TIMEFRAMES tfs[6]={PERIOD_M5,PERIOD_M15,PERIOD_M30,PERIOD_H1,PERIOD_H4,PERIOD_D1};
    string body="{";
    body += "\"connected\":true";
-   body += ",\"symbol\":\"XAUUSDm\"";
+   // The top-level payload represents both markets; never label it as XAUUSD or EURUSD.
+   body += ",\"symbol\":\"DUAL\"";
    body += ",\"login\":\"" + IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN)) + "\"";
    body += ",\"server\":\"" + JsonEscape(AccountInfoString(ACCOUNT_SERVER)) + "\"";
    body += ",\"balance\":" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE),2);
@@ -130,67 +145,6 @@ double ExtractFirstTP(string json,int from_pos){
    return StringToDouble(StringSubstr(json,s,e-s));
 }
 
-double NormalizePrice(string symbol,double price){
-   int digits=(int)SymbolInfoInteger(symbol,SYMBOL_DIGITS);
-   return NormalizeDouble(price,digits);
-}
-
-double MinStopDistance(string symbol){
-   long stops=(long)SymbolInfoInteger(symbol,SYMBOL_TRADE_STOPS_LEVEL);
-   long freeze=(long)SymbolInfoInteger(symbol,SYMBOL_TRADE_FREEZE_LEVEL);
-   long level=MathMax(stops,freeze);
-   double point=SymbolInfoDouble(symbol,SYMBOL_POINT);
-   double spread=MathAbs(SymbolInfoDouble(symbol,SYMBOL_ASK)-SymbolInfoDouble(symbol,SYMBOL_BID));
-   // Add a small safety buffer above the broker's minimum distance.
-   return MathMax(point*(double)(level+5),spread*1.5);
-}
-
-bool PrepareStops(string symbol,string dir,double &sl,double &tp){
-   double bid=SymbolInfoDouble(symbol,SYMBOL_BID);
-   double ask=SymbolInfoDouble(symbol,SYMBOL_ASK);
-   if(bid<=0 || ask<=0) return false;
-   double entry=(dir=="BUY" ? ask : bid);
-   double minDist=MinStopDistance(symbol);
-   double risk=MathAbs(entry-sl);
-   double target=MathAbs(tp-entry);
-   // Some signal modules can emit levels from the wrong symbol/side. Keep the
-   // signal when valid; otherwise rebuild a conservative market-relative SL/TP.
-   bool valid=false;
-   if(dir=="BUY") valid=(sl>0 && tp>0 && sl<entry-minDist && tp>entry+minDist);
-   else if(dir=="SELL") valid=(sl>0 && tp>0 && sl>entry+minDist && tp<entry-minDist);
-   if(!valid){
-      double point=SymbolInfoDouble(symbol,SYMBOL_POINT);
-      double fallback=MathMax(entry*0.0025,minDist*3.0);
-      if(point>0) fallback=MathMax(fallback,point*20.0);
-      risk=fallback;
-      if(dir=="BUY"){
-         sl=entry-risk;
-         tp=entry-risk*2.0;
-      }else{
-         sl=entry+risk;
-         tp=entry-risk*2.0;
-      }
-      Print("[MT5 BRIDGE] Invalid signal stops for ",symbol," ",dir," -> rebuilt SL/TP. Entry=",DoubleToString(entry,8));
-   }else{
-      // Revalidate the actual broker-side distance at execution time.
-      if(risk<minDist) risk=minDist*1.2;
-      if(target<minDist) target=minDist*1.2;
-      if(dir=="BUY"){
-         sl=MathMin(sl,entry-minDist);
-         tp=MathMax(tp,entry+minDist);
-      }else{
-         sl=MathMax(sl,entry+minDist);
-         tp=MathMin(tp,entry-minDist);
-      }
-   }
-   sl=NormalizePrice(symbol,sl);
-   tp=NormalizePrice(symbol,tp);
-   // Final directional check after rounding.
-   if(dir=="BUY") return (sl<entry-minDist && tp>entry+minDist);
-   if(dir=="SELL") return (sl>entry+minDist && tp<entry-minDist);
-   return false;
-}
-
 void SendReport(string order_id,string action,string status,string symbol,string message){
    string rb=StringFormat("{\"action\":\"%s\",\"ticket\":\"%s\",\"symbol\":\"%s\",\"status\":\"%s\",\"message\":\"%s\"}",
       JsonEscape(action),JsonEscape(order_id),JsonEscape(symbol),JsonEscape(status),JsonEscape(message));
@@ -204,48 +158,61 @@ void OnInit(){
 }
 void OnDeinit(const int reason){ EventKillTimer(); Print("[MT5 BRIDGE] STOPPED reason=",reason); }
 
-void OnTimer(){
-   if(g_last_state==0 || (TimeCurrent()-g_last_state)>=StateSeconds){ ReportState(); g_last_state=TimeCurrent(); }
-   string out; int code=Http("GET",Url("/api/v1/mt5/poll?token="+BridgeToken),"",out);
-   if(code!=200){ Print("[MT5 BRIDGE] POLL FAILED HTTP=",code," LastError=",GetLastError()); return; }
-   if(StringFind(out,"\"orders\":[]")>=0){ Print("[MT5 BRIDGE] POLL OK - no queued orders"); return; }
+bool PollMarket(string requestedMarket, string expectedSymbol){
+   string out;
+   int code=Http("GET",Url("/api/v1/mt5/poll?token="+BridgeToken+"&market="+requestedMarket),"",out);
+   if(code!=200){ Print("[MT5 BRIDGE] POLL FAILED market=",requestedMarket," HTTP=",code," LastError=",GetLastError()); return false; }
+   if(StringFind(out,"\"orders\":[]")>=0){ Print("[MT5 BRIDGE] POLL OK market=",requestedMarket," - no queued orders"); return true; }
 
    int pos=0;
    while((pos=StringFind(out,"\"id\":\"",pos))>=0){
       string order_id=ExtractString(out,"id",pos);
       string dir=ExtractString(out,"direction",pos);
       string requested_symbol=ExtractString(out,"symbol",pos);
+      string order_market=ExtractString(out,"market",pos);
       string source=ExtractString(out,"source",pos);
+      double entry=ExtractNumber(out,"entry",pos);
       double sl=ExtractNumber(out,"sl",pos);
       double tp=ExtractFirstTP(out,pos);
       double vol=ExtractNumber(out,"volume",pos); if(vol<=0) vol=DefaultLot;
-      // One EA instance routes both symbols. Never fall back to the chart symbol:
-      // an unknown/missing route must fail rather than accidentally send EURUSD to XAUUSD.
-      string req=requested_symbol; StringToUpper(req); StringReplace(req,"/",""); StringReplace(req,"-","");
-      string symbol="";
-      if(StringFind(req,"EURUSD")==0) symbol=EURStateSymbol();
-      else if(StringFind(req,"XAUUSD")==0) symbol=XAUStateSymbol();
 
+      // HARD SYMBOL BOUNDARY: server market filter + EA-side validation.
+      string req=requested_symbol; StringToUpper(req);
+      string marketCheck=order_market; StringToUpper(marketCheck);
+      string expected=expectedSymbol; StringToUpper(expected);
+      bool requestedIsEUR = (StringFind(requestedMarket,"EUR")>=0);
+      bool marketMatches = requestedIsEUR ? (StringFind(marketCheck,"EUR")>=0) : (StringFind(marketCheck,"XAU")>=0);
+      bool symbolMatches = requestedIsEUR ? (StringFind(req,"EURUSD")>=0) : (StringFind(req,"XAUUSD")>=0);
+      if(!marketMatches || !symbolMatches){
+         SendReport(order_id,dir,"ORDER_FAILED",expectedSymbol,"BLOCKED: cross-symbol order rejected by EA");
+         pos += MathMax(1,StringLen(order_id));
+         continue;
+      }
+
+      string execSymbol = requestedIsEUR
+         ? FindAvailableVariant(EURTradeSymbol,EURTradeSymbolNoSuffix,"EURUSD")
+         : FindAvailableVariant(XAUTradeSymbol,XAUTradeSymbolNoSuffix,"XAUUSD");
       bool ok=false;
-      if(StringLen(symbol)==0){
-         Print("[MT5 BRIDGE] ROUTING ERROR: unknown/missing order symbol=",requested_symbol," id=",order_id);
-         SendReport(order_id,dir,"ORDER_FAILED","", "Unknown or missing signal symbol; order NOT routed to chart symbol");
-      } else if(!EnsureSymbol(symbol)){
-         SendReport(order_id,dir,"ORDER_FAILED",symbol,"Symbol not available: "+symbol);
+      if(!EnsureSymbol(execSymbol)){
+         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,"Symbol not available (tried suffix and no-suffix variants)");
       } else {
          trade.SetAsyncMode(false);
-         Print("[MT5 BRIDGE] ROUTE ",requested_symbol," -> ",symbol," id=",order_id," dir=",dir);
          string comment="SignalX "+(source==""?"AUTO":source);
-         if((dir=="BUY" || dir=="SELL") && PrepareStops(symbol,dir,sl,tp)){
-            if(dir=="BUY") ok=trade.Buy(vol,symbol,0,sl,tp,comment);
-            else if(dir=="SELL") ok=trade.Sell(vol,symbol,0,sl,tp,comment);
-         }else{
-            Print("[MT5 BRIDGE] Invalid direction/stops; order skipped symbol=",symbol," dir=",dir);
-         }
+         if(dir=="BUY") ok=trade.Buy(vol,execSymbol,0,sl,tp,comment);
+         else if(dir=="SELL") ok=trade.Sell(vol,execSymbol,0,sl,tp,comment);
          string desc=trade.ResultRetcodeDescription();
-         if(ok) SendReport(order_id,dir,"ORDER_SENT",symbol,desc);
-         else SendReport(order_id,dir,"ORDER_FAILED",symbol,desc);
+         if(ok) SendReport(order_id,dir,"ORDER_SENT",execSymbol,desc);
+         else SendReport(order_id,dir,"ORDER_FAILED",execSymbol,desc);
       }
       pos += MathMax(1,StringLen(order_id));
    }
+   return true;
+}
+
+void OnTimer(){
+   if(g_last_state==0 || (TimeCurrent()-g_last_state)>=StateSeconds){ ReportState(); g_last_state=TimeCurrent(); }
+   // Separate transport polls guarantee EURUSD orders never reach XAUUSD execution
+   // and XAUUSD orders never reach EURUSD execution.
+   PollMarket("XAU/USD", XAUStateSymbol());
+   PollMarket("EUR/USD", EURStateSymbol());
 }
