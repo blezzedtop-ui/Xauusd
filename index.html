@@ -1475,3 +1475,63 @@ body:not(.sx-menu-open) .sidebar{pointer-events:auto!important;}
   window.addEventListener('orientationchange',function(){setTimeout(fixPhone,80);},{passive:true});
 })();
 </script>
+
+<style id="signalx-phone-final-clean-20260914">
+/* FINAL PHONE CLEANUP — desktop >=1101px intentionally untouched. */
+@media (max-width:1100px){
+  /* The dimmer is not needed on phones and must never block taps or darken the UI. */
+  #sxSidebarOverlay,.sx-sidebar-overlay{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+  html,body{overflow-x:hidden!important;overflow-y:auto!important;-webkit-text-size-adjust:100%!important;}
+  .app{display:block!important;min-width:0!important;}
+  .sidebar{position:fixed!important;left:0!important;top:0!important;bottom:0!important;width:min(300px,88vw)!important;height:100dvh!important;max-height:100dvh!important;transform:translate3d(-105%,0,0)!important;z-index:50000!important;pointer-events:none!important;opacity:1!important;filter:none!important;overflow-y:auto!important;overflow-x:hidden!important;background:rgba(5,10,18,.99)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+  body.sx-menu-open .sidebar{transform:translate3d(0,0,0)!important;pointer-events:auto!important;z-index:50000!important;}
+  .sidebar::before,.sidebar::after,.sidebar .nav button::before,.sidebar .nav button::after{display:none!important;content:none!important;animation:none!important;filter:none!important;}
+  .sidebar .nav{position:relative!important;z-index:2!important;display:flex!important;flex-direction:column!important;overflow-y:auto!important;overflow-x:hidden!important;}
+  .sidebar .nav button,.sidebar .nav-external,.sidebar .nav-external-form button{position:relative!important;z-index:3!important;display:flex!important;align-items:center!important;pointer-events:auto!important;touch-action:manipulation!important;opacity:1!important;filter:none!important;}
+  .sidebar .sx-nav-icon,.sidebar .sx-nav-icon svg{display:inline-flex!important;visibility:visible!important;opacity:1!important;filter:none!important;pointer-events:none!important;}
+  .sidebar .sx-nav-label,.sidebar .sx-nav-divider{visibility:visible!important;opacity:1!important;pointer-events:none!important;}
+  /* Horizontal scrolling belongs to the component that is actually wider than the phone. */
+  .main{width:100%!important;min-width:0!important;max-width:none!important;overflow-x:hidden!important;}
+  .section.active{width:100%!important;min-width:0!important;max-width:none!important;overflow:visible!important;}
+  .section.active>.card,.section.active>.advanced-card,.section.active>.signal-box{max-width:100%!important;overflow-x:auto!important;overflow-y:visible!important;-webkit-overflow-scrolling:touch!important;touch-action:pan-x pan-y!important;}
+  .section.active .scroll,.section.active .history-wrap,.section.active .table-wrap,.section.active .table-scroll,.section.active .levels,.section.active .sessions,.section.active .grid2,.section.active .grid4{max-width:100%!important;overflow-x:auto!important;overflow-y:visible!important;-webkit-overflow-scrolling:touch!important;touch-action:pan-x!important;}
+  .section.active table,.section.active .history{width:max-content!important;min-width:max-content!important;}
+  .section.active *::before,.section.active *::after{pointer-events:none!important;}
+  /* Keep the overview AI card readable on small screens. */
+  .overview-ai-card .ai-card-title h3,.overview-ai-card .ai-card-title h3{font-size:25px!important;line-height:1.15!important;font-weight:900!important;}
+  .overview-ai-card .ai-card-title .mini,.overview-ai-card .ai-card-title .mini{font-size:17px!important;line-height:1.45!important;font-weight:700!important;}
+  .overview-ai-card .ai-signal-badge{font-size:31px!important;line-height:1.05!important;font-weight:950!important;}
+  .overview-ai-card .ai-symbol-name{font-size:21px!important;font-weight:900!important;}
+  .overview-ai-card .ai-price-grid small{font-size:15px!important;font-weight:700!important;}
+  .overview-ai-card .ai-price-grid b{font-size:23px!important;font-weight:900!important;}
+  .overview-ai-card .ai-confidence-row{font-size:17px!important;font-weight:800!important;}
+  .overview-ai-card .ai-confidence-row b,.overview-ai-card .ai-extra-row b{font-size:24px!important;font-weight:900!important;}
+  .overview-ai-card .ai-extra-row{font-size:16px!important;font-weight:700!important;}
+  .overview-ai-card .ai-sig-reason{font-size:16px!important;line-height:1.55!important;font-weight:600!important;}
+  .overview-ai-card .ai-analysis-btn{font-size:17px!important;min-height:50px!important;font-weight:900!important;width:100%!important;}
+}
+@media (max-width:600px){
+  .sidebar{width:min(294px,89vw)!important;}
+  .main{padding:8px!important;}
+  .overview-ai-card{padding:17px!important;}
+  .overview-ai-card .ai-price-grid{grid-template-columns:repeat(2,minmax(130px,1fr))!important;gap:10px!important;}
+  .overview-ai-card .ai-price-grid>div{padding:10px!important;}
+  .overview-ai-card .ai-card-title h3{font-size:24px!important;}
+  .overview-ai-card .ai-card-title .mini{font-size:16px!important;}
+  .overview-ai-card .ai-signal-badge{font-size:30px!important;}
+  .overview-ai-card .ai-price-grid b{font-size:22px!important;}
+  .overview-ai-card .ai-confidence-row b{font-size:23px!important;}
+}
+</style>
+<script id="signalx-phone-final-clean-20260914">
+(function(){
+  function phoneFix(){
+    if(window.innerWidth>1100)return;
+    var ov=document.getElementById('sxSidebarOverlay');
+    if(ov){ov.style.display='none';ov.style.pointerEvents='none';ov.style.opacity='0';}
+    document.querySelectorAll('.sidebar .sx-nav-icon,.sidebar .sx-nav-icon svg').forEach(function(el){el.style.visibility='visible';el.style.opacity='1';});
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',phoneFix,{once:true});else phoneFix();
+  window.addEventListener('resize',phoneFix,{passive:true});
+})();
+</script>

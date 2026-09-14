@@ -695,14 +695,26 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
   // may block navigation or public market analysis. Authentication is only
   // required for saving signals/history.
   try{
-    mountTradingView('chart', interval);
-    loadChartHistory().catch(e=>{ $('change').textContent='Chart: '+e.message; });
+    const phoneStartup = window.innerWidth <= 1100;
+    const deferPhone = (fn, ms=900) => { if(!phoneStartup) return fn(); setTimeout(fn, ms); };
+    if(phoneStartup){
+      $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
+      $('change').textContent='Live chart loading…';
+      deferPhone(()=>{ if(document.visibilityState==='visible' && $('overview')?.classList.contains('active')) { mountTradingView('chart', interval); loadChartHistory().catch(()=>{}); } }, 1200);
+    } else {
+      mountTradingView('chart', interval);
+      loadChartHistory().catch(e=>{ $('change').textContent='Chart: '+e.message; });
+    }
     connectMarketStream();
     $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
     // Market source is intentionally fixed to the TradingView OANDA:XAUUSD series.
     $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
     // Never let one slow/failing module prevent the rest of the dashboard.
-    loadMain(true).catch(e=>{$('signalReason').textContent='Live analysis unavailable: '+(e.message||'server error')});
+    if(phoneStartup){
+      deferPhone(()=>{ loadMain(true).catch(e=>{$('signalReason').textContent='Live analysis unavailable: '+(e.message||'server error')}); }, 700);
+    } else {
+      loadMain(true).catch(e=>{$('signalReason').textContent='Live analysis unavailable: '+(e.message||'server error')});
+    }
     quoteHeartbeat().catch(()=>{});
     loadSessions().catch(()=>{}); if(window.innerWidth>1100 || $('mt5Section')?.classList.contains('active')) loadMT5Status().catch(()=>{});
     if(token){
@@ -738,7 +750,7 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
       if($('sessionsSection').classList.contains('active')) loadSessions().catch(()=>{});
       if($('trendLineSection').classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{});
       if(!phone || $('mt5Section').classList.contains('active')) loadMT5Status().catch(()=>{});
-      if(!phone || (IS_ADMIN && $('overview').classList.contains('active'))) loadAIProviders().then(()=>bindAIControls()).catch(()=>{});
+      if(!phone && IS_ADMIN && $('overview').classList.contains('active')) loadAIProviders().then(()=>bindAIControls()).catch(()=>{});
       if(token && $('historySection').classList.contains('active')) loadHistory().catch(()=>{});
     }, window.innerWidth<=1100 ? 60000 : 30000);
     setInterval(updateCountdown, window.innerWidth<=1100 ? 1000 : 250);
