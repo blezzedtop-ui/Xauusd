@@ -3611,6 +3611,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 order = {
                     "id": order_id,
                     "symbol": key,
+                    "route_symbol": key,
                     "interval": candidate["interval"],
                     "direction": direction,
                     "entry": float(entry),

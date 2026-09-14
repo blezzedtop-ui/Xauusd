@@ -62,7 +62,7 @@ bool EnsureSymbol(string symbol){
    return (SymbolInfoDouble(symbol,SYMBOL_BID)>0 || SymbolInfoDouble(symbol,SYMBOL_ASK)>0);
 }
 
-void AppendMarketState(string &body, string symbol, ENUM_TIMEFRAMES tfs[], int n, bool &firstMarket){
+void AppendMarketState(string &body, string symbol, ENUM_TIMEFRAMES &tfs[], int n, bool &firstMarket){
    if(!EnsureSymbol(symbol)) return;
    if(!firstMarket) body += ","; firstMarket=false;
    body += "\"" + JsonEscape(symbol) + "\":{";
@@ -219,18 +219,22 @@ void OnTimer(){
       double sl=ExtractNumber(out,"sl",pos);
       double tp=ExtractFirstTP(out,pos);
       double vol=ExtractNumber(out,"volume",pos); if(vol<=0) vol=DefaultLot;
-      // One EA instance routes both XAUUSD and EURUSD. Execution is NOT limited by chart symbol.
-      string req=requested_symbol; StringToUpper(req);
+      // One EA instance routes both symbols. Never fall back to the chart symbol:
+      // an unknown/missing route must fail rather than accidentally send EURUSD to XAUUSD.
+      string req=requested_symbol; StringToUpper(req); StringReplace(req,"/",""); StringReplace(req,"-","");
       string symbol="";
-      if(StringFind(req,"EURUSD")>=0) symbol=EURStateSymbol();
-      else if(StringFind(req,"XAUUSD")>=0) symbol=XAUStateSymbol();
-      else symbol=ExecSymbol();
+      if(StringFind(req,"EURUSD")==0) symbol=EURStateSymbol();
+      else if(StringFind(req,"XAUUSD")==0) symbol=XAUStateSymbol();
 
       bool ok=false;
-      if(!EnsureSymbol(symbol)){
+      if(StringLen(symbol)==0){
+         Print("[MT5 BRIDGE] ROUTING ERROR: unknown/missing order symbol=",requested_symbol," id=",order_id);
+         SendReport(order_id,dir,"ORDER_FAILED","", "Unknown or missing signal symbol; order NOT routed to chart symbol");
+      } else if(!EnsureSymbol(symbol)){
          SendReport(order_id,dir,"ORDER_FAILED",symbol,"Symbol not available: "+symbol);
       } else {
          trade.SetAsyncMode(false);
+         Print("[MT5 BRIDGE] ROUTE ",requested_symbol," -> ",symbol," id=",order_id," dir=",dir);
          string comment="SignalX "+(source==""?"AUTO":source);
          if((dir=="BUY" || dir=="SELL") && PrepareStops(symbol,dir,sl,tp)){
             if(dir=="BUY") ok=trade.Buy(vol,symbol,0,sl,tp,comment);
