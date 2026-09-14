@@ -3641,6 +3641,27 @@ async def live_signals(symbol: str, authorization: str | None = Header(default=N
     result = await build_advanced_signals(clean_symbol(symbol), news_blocked=False)
     return {**result, "mode": "live", "source": f"TradingView {tv_symbol_for(symbol)} chart series"}
 
+
+@app.get("/api/v1/ai-signals/live/{symbol:path}")
+async def ai_signals_live(symbol: str, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    """Live AI Signals endpoint: current market candle + quantitative engine + AI validation.
+    It intentionally calculates only the selected timeframe to keep the dedicated UI fast.
+    """
+    require_admin(authorization, session)
+    key=clean_symbol(symbol); interval=validate_interval(interval)
+    candles_data, mode, warning = await get_candles(key, interval, 260)
+    if len(candles_data) < 40:
+        raise MarketDataError(f"{interval} uchun real signal hisoblashga candle yetarli emas")
+    closed=candles_data[:-1] if len(candles_data)>1 else candles_data
+    item=build_advanced_signal(closed, interval, news_blocked=False)
+    candle_time=closed[-1].get("time") if closed else None
+    ai=await ai_validate_module_signal("AI Signals", key, interval, candle_time, item)
+    item=merge_ai_validation(item, ai)
+    item["candle_time"]=candle_time
+    item["mode"]=mode
+    item["warning"]=warning
+    return {"symbol":key,"interval":interval,"signal":item,"ai_validation":ai,"mode":"live","source":f"TradingView {tv_symbol_for(key)} live candle","generated_at":datetime.now(timezone.utc).isoformat()}
+
 @app.post("/api/v1/signals/save-advanced")
 async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)

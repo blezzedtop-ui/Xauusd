@@ -657,32 +657,49 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 </style>
 
 
-<style id="signalx-sidebar-icon-visibility-fix-20260913">
-/* ICON VISIBILITY FIX — desktop + mobile; no layout/design changes */
-.sidebar .nav > button > .sx-nav-icon,
-.sidebar .nav > .nav-external-form button > .sx-nav-icon,
-.sidebar .nav > .nav-external > .sx-nav-icon{
-  display:inline-flex!important; visibility:visible!important; opacity:1!important;
-  position:relative!important; z-index:20!important;
-  color:#dff9ff!important;
+<style id="signalx-mobile-v3-verified-fix-20260913">
+/* VERIFIED MOBILE PATCH — desktop >=1101px intentionally untouched. */
+@media (max-width:1100px){
+  .sidebar{z-index:20001!important;pointer-events:auto!important;filter:none!important;opacity:1!important;}
+  body.sx-menu-open .sidebar{transform:translate3d(0,0,0)!important;pointer-events:auto!important;}
+  .sx-sidebar-overlay{z-index:20000!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+  body:not(.sx-menu-open) .sx-sidebar-overlay{pointer-events:none!important;opacity:0!important;}
+  .sidebar .nav{position:relative!important;z-index:5!important;overflow-y:auto!important;overflow-x:hidden!important;}
+  .sidebar .nav button,.sidebar .nav-external,.sidebar .nav-external-form button{position:relative!important;z-index:6!important;pointer-events:auto!important;touch-action:manipulation!important;}
+  .sidebar .nav button > *, .sidebar .nav-external > *, .sidebar .nav-external-form button > *{pointer-events:none!important;}
+  .sidebar .sx-nav-icon,.sidebar .sx-nav-icon svg{display:inline-flex!important;visibility:visible!important;opacity:1!important;filter:none!important;}
+  .sidebar .sx-nav-icon svg{display:block!important;}
+
+  /* Make every active page itself the horizontal touch surface. */
+  .main{overflow-x:auto!important;overflow-y:visible!important;touch-action:pan-x pan-y!important;-webkit-overflow-scrolling:touch!important;}
+  .section.active{width:100%!important;min-width:0!important;max-width:none!important;overflow-x:auto!important;overflow-y:visible!important;touch-action:pan-x pan-y!important;-webkit-overflow-scrolling:touch!important;overscroll-behavior-x:contain!important;}
+  .section.active .scroll,.section.active .history-wrap,.section.active .table-wrap,.section.active .table-scroll,.section.active .levels,.section.active .sessions{overflow-x:auto!important;overflow-y:visible!important;touch-action:pan-x pan-y!important;-webkit-overflow-scrolling:touch!important;}
+  .section.active .scroll > *, .section.active .history-wrap > *, .section.active .table-wrap > *, .section.active .table-scroll > *{max-width:none!important;}
+  .section.active .table,.section.active table,.section.active .history{min-width:max-content!important;width:max-content!important;}
+  .section.active .card,.section.active .advanced-card,.section.active .signal-box{touch-action:pan-x pan-y!important;}
 }
-.sidebar .nav > button > .sx-nav-icon svg,
-.sidebar .nav > .nav-external-form button > .sx-nav-icon svg,
-.sidebar .nav > .nav-external > .sx-nav-icon svg{
-  display:block!important; visibility:visible!important; opacity:1!important;
-  width:18px!important; height:18px!important; min-width:18px!important; min-height:18px!important;
-  overflow:visible!important; fill:none!important; stroke:#dff9ff!important;
-  color:#dff9ff!important;
-}
-.sidebar .nav > button > .sx-nav-icon svg *,
-.sidebar .nav > .nav-external-form button > .sx-nav-icon svg *,
-.sidebar .nav > .nav-external > .sx-nav-icon svg *{
-  stroke:#dff9ff!important; fill:none!important; vector-effect:non-scaling-stroke!important;
-}
-@media(max-width:1100px){
-  .sidebar .nav > button > .sx-nav-icon,
-  .sidebar .nav > .nav-external-form button > .sx-nav-icon,
-  .sidebar .nav > .nav-external > .sx-nav-icon{z-index:30!important;}
+</style>
+
+<style id="signalx-ai-signals-page-20260914">
+.ai-signals-page h2{font-size:24px!important;letter-spacing:.01em}.ai-signals-page .ai-page-symbol{font-size:28px;font-weight:900;letter-spacing:.04em}.ai-signals-page .ai-page-signal{min-width:180px}.ai-signals-page .ai-page-signal .signal-main{font-size:38px!important;font-weight:950!important;line-height:1.05}.ai-signals-page .ai-page-mode{font-size:14px;font-weight:800;margin-top:8px;letter-spacing:.06em}.ai-page-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:18px}.ai-page-grid .metric small{font-size:13px!important}.ai-page-grid .metric b{font-size:23px!important}.ai-page-confidence{display:flex;justify-content:space-between;align-items:center;margin-top:18px;font-size:17px;font-weight:800}.ai-page-confidence strong{font-size:28px}.ai-page-meta{display:flex;gap:22px;flex-wrap:wrap;margin-top:14px;font-size:16px}.ai-page-meta b{font-size:18px}.ai-page-reason{font-size:16px;line-height:1.55;margin-top:16px;padding:14px;border:1px solid var(--line);border-radius:12px}.ai-page-action{font-size:16px!important;font-weight:900!important;min-height:48px;margin-top:16px}.ai-page-source{margin-top:12px}
+@media(max-width:600px){.ai-signals-page h2{font-size:22px!important}.ai-page-grid{grid-template-columns:repeat(2,minmax(150px,1fr));min-width:330px}.ai-signals-page .ai-page-symbol{font-size:24px}.ai-signals-page .ai-page-signal .signal-main{font-size:34px!important}.ai-page-grid .metric b{font-size:20px!important}.ai-page-meta{font-size:14px;gap:12px}.ai-page-meta b{font-size:16px}.ai-page-reason{font-size:15px}.ai-page-action{width:100%;font-size:14px!important}}
+</style>
+
+<style id="signalx-overview-ai-admin-live">
+/* Overview AI Signals: admin-only live card. Desktop/mobile safe. */
+.overview-ai-card .ai-card-title h3 { font-size: 1.35rem !important; line-height: 1.2 !important; }
+.overview-ai-card .ai-card-title .mini { font-size: 1rem !important; line-height: 1.45 !important; }
+.overview-ai-card .ai-signal-badge { font-size: 1.2rem !important; }
+.overview-ai-card .ai-price-grid small { font-size: .9rem !important; }
+.overview-ai-card .ai-price-grid b { font-size: 1.15rem !important; }
+.overview-ai-card .ai-confidence-row { font-size: 1rem !important; }
+.overview-ai-card .ai-confidence-row b, .overview-ai-card .ai-extra-row b { font-size: 1.05rem !important; }
+.overview-ai-card .ai-sig-reason { font-size: .98rem !important; line-height: 1.45 !important; }
+@media (max-width: 600px) {
+  .overview-ai-card .ai-card-title h3 { font-size: 1.18rem; }
+  .overview-ai-card .ai-card-title .mini { font-size: .92rem; }
+  .overview-ai-card .ai-price-grid b { font-size: 1.02rem; }
+  .overview-ai-card .ai-sig-reason { font-size: .9rem; }
 }
 </style>
 </head>
@@ -744,8 +761,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
       </aside>
     </div>
   </section>
-
-  <section class="section" id="chartSection"><div class="card"><div class="section-head"><h2>Live Chart</h2><span class="pill" id="chartStatus">—</span></div><div class="tfbar"><button class="tf" data-interval="1min">1M</button><button class="tf" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div><div class="chart" id="chart2"></div></div></section>
+<section class="section" id="chartSection"><div class="card"><div class="section-head"><h2>Live Chart</h2><span class="pill" id="chartStatus">—</span></div><div class="tfbar"><button class="tf" data-interval="1min">1M</button><button class="tf" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div><div class="chart" id="chart2"></div></div></section>
   <section class="section admin-only" id="signalEngineSection"><div class="card signal-engine-page"><div class="section-head"><div><h2>Signal Engine</h2><div class="mini">Har bir timeframe uchun alohida signal · quantitative engine</div></div><div><span class="pill" id="bias">—</span> <button class="btn" id="refreshSignalEngine" type="button">↻ Yangilash</button></div></div><div class="signal-box"><div class="signal-main wait" id="signalMain">WAIT</div><div class="mini" id="signalReason">—</div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Entry</small><b id="entry">—</b></div><div class="metric"><small>SL</small><b id="sl">—</b></div><div class="metric"><small>TP1</small><b id="tp1">—</b></div><div class="metric"><small>TP2</small><b id="tp2">—</b></div></div></div><div id="signalEngineGrid" class="advanced-grid" style="margin-top:12px"></div><div style="margin-top:10px"><button class="btn primary" id="saveSignal" type="button">Signalni saqlash</button></div></div></section>
 
   <section class="section admin-only" id="aiFallbackSection"><div class="section-head" style="margin-bottom:12px"><div><h2>AI Fallback Network</h2><div class="mini">AI providerlar va avtomatik fallback boshqaruvi</div></div><span class="pill">AI NETWORK</span></div><div class="card"><div class="section-head"><div><h3>AI Fallback Network</h3><div class="mini">AI faqat signal tasdig‘ida chaqiriladi · oddiy refresh AI request yubormaydi</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" id="aiAutoMode" type="button">AUTO</button><button class="btn" id="aiAllOn" type="button">ALL ON</button><button class="btn" id="aiAllOff" type="button">ALL OFF</button><button class="btn" id="refreshAIProviders" type="button">↻</button></div></div><div id="aiProvidersGrid" class="component-grid" style="margin-top:10px"></div></div></section>
@@ -1014,14 +1030,390 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 @media (prefers-reduced-motion:reduce){.sidebar,.sx-sidebar-overlay{transition:none!important;}}
 </style>
 
-<style id="signalx-phone-sidebar-click-fix-20260913">
-/* PHONE SIDEBAR STACKING FIX — overlay must stay behind the drawer */
-@media (max-width:1100px){
-  .sx-sidebar-overlay{z-index:10000!important;}
-  .app{position:relative!important;z-index:10001!important;}
-  .sidebar{z-index:10002!important;pointer-events:auto!important;}
-  .sidebar .nav,.sidebar .nav button,.sidebar .nav-external,.sidebar .nav-external-form{pointer-events:auto!important;}
+<style id="signalx-final-mobile-readability-click-fix-20260913">
+/* FINAL SAFE PATCH: visual/readability/click behavior only. Existing structure, auth roles and data logic stay intact. */
+
+/* Crisp UI typography: remove the heavy glow/stroke that makes prices and headings look blurred. */
+.app .section-head h2,
+.app .section-head h3,
+.app .card h2,
+.app .card h3,
+.app .metric small,
+.app .metric b,
+.app .mini,
+.app .tiny,
+.app .levels .row,
+.app .symbol,
+.app .topbar h1,
+.app .topbar p,
+.app .history-note,
+.app .countdown,
+.app .advanced-card .advanced-head .mini,
+.app .advanced-card .component small,
+.app .advanced-card .component b{
+  -webkit-text-stroke:0!important;
+  text-shadow:0 0 4px rgba(75,205,255,.16)!important;
+  filter:none!important;
 }
+.app .section-head h2,
+.app .section-head h3,
+.app .card h2,
+.app .card h3{
+  background:transparent!important;
+  -webkit-background-clip:border-box!important;
+  background-clip:border-box!important;
+  color:#f4f9ff!important;
+}
+.app .metric b{color:#f7fbff!important}
+.app .metric small{color:#c9d8ea!important}
+.app .piv,.app .wait{ -webkit-text-stroke:0!important; text-shadow:0 0 5px rgba(255,213,79,.30)!important; }
+.app .buy{ -webkit-text-stroke:0!important; text-shadow:0 0 5px rgba(40,242,164,.30)!important; }
+.app .sell{ -webkit-text-stroke:0!important; text-shadow:0 0 5px rgba(255,78,112,.30)!important; }
+
+/* No decorative glass layer is allowed to sit over text or controls. */
+.app .topbar,
+.app .card,
+.app .metric,
+.app .signal-box,
+.app .session,
+.app .advanced-card,
+.app .calendar-item{
+  isolation:isolate!important;
+}
+.app .topbar>* ,
+.app .card>* ,
+.app .metric>* ,
+.app .signal-box>* ,
+.app .session>* ,
+.app .advanced-card>* ,
+.app .calendar-item>*{
+  position:relative;
+  z-index:2;
+}
+.app .topbar .tools,
+.app .topbar .tools>* ,
+.app .topbar .sx-mobile-menu,
+.app .btn,
+.app .tf,
+.app .pill{
+  position:relative!important;
+  z-index:20!important;
+  pointer-events:auto!important;
+}
+
+/* Keep sidebar icons visible above every liquid/glass layer on desktop and mobile. */
+.sidebar .nav>button,
+.sidebar .nav>.nav-external-form button,
+.sidebar .nav>.nav-external{
+  isolation:isolate!important;
+  position:relative!important;
+}
+.sidebar .sx-nav-icon{
+  position:relative!important;
+  z-index:20!important;
+  display:inline-flex!important;
+  visibility:visible!important;
+  opacity:1!important;
+  color:#e9fbff!important;
+  filter:drop-shadow(0 0 5px rgba(68,214,255,.42))!important;
+}
+.sidebar .sx-nav-icon svg{
+  display:block!important;
+  visibility:visible!important;
+  opacity:1!important;
+  width:18px!important;
+  height:18px!important;
+  stroke:currentColor!important;
+  fill:none!important;
+  overflow:visible!important;
+}
+.sidebar .sx-nav-icon svg circle[fill="currentColor"],
+.sidebar .sx-nav-icon svg path[fill="currentColor"]{fill:currentColor!important}
+.sidebar .sx-nav-divider,.sidebar .sx-nav-label{position:relative!important;z-index:20!important}
+
+/* Phone: do not clip content that is wider than the screen. It can be swiped left/right. */
+@media(max-width:1100px){
+  html,body{overflow-x:hidden!important;overscroll-behavior-x:auto!important;}
+  .main{
+    overflow-x:auto!important;
+    overflow-y:visible!important;
+    -webkit-overflow-scrolling:touch!important;
+    scrollbar-width:none!important;
+  }
+  .main::-webkit-scrollbar{display:none!important}
+  .section{width:100%;min-width:0;overflow-x:auto!important;overflow-y:visible!important;-webkit-overflow-scrolling:touch!important;}
+  .section>.card,
+  .section>.advanced-card,
+  .section>.signal-box{
+    overflow-x:auto!important;
+    overflow-y:visible!important;
+    -webkit-overflow-scrolling:touch!important;
+  }
+  .section-head{min-width:0}
+  .tools{touch-action:pan-x!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch!important;}
+  .tfbar{touch-action:pan-x!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch!important;}
+  .history{min-width:850px!important}
+}
+
+/* iPhone-sized screens: keep cards readable without changing the page hierarchy. */
+@media(max-width:600px){
+  .main{overflow-x:auto!important;}
+  .section>.card,.section>.advanced-card,.section>.signal-box{max-width:none!important;}
+  .app .section-head h2,.app .section-head h3{font-size:14px!important;}
+  .app .metric b{font-size:15px!important;}
+}
+
+/* Prevent any transparent fixed layer from stealing taps from the top bar when the drawer is closed. */
+body:not(.sx-menu-open) .sx-sidebar-overlay{pointer-events:none!important;opacity:0!important;}
+body:not(.sx-menu-open) .sidebar{pointer-events:auto!important;}
 </style>
 
+<script id="signalx-final-button-guard-20260913">
+(function(){
+  function bind(){
+    const $=id=>document.getElementById(id);
+    const actions={
+      refreshSignalEngine:()=>typeof loadSignalEngine==='function'&&loadSignalEngine(),
+      refreshAIProviders:()=>typeof loadAIProviders==='function'&&loadAIProviders(),
+      refreshAdvanced:()=>typeof loadAdvancedSignals==='function'&&loadAdvancedSignals(),
+      refreshICT:()=>typeof loadICTSignals==='function'&&loadICTSignals(),
+      refreshClassic:()=>typeof loadClassicTrade==='function'&&loadClassicTrade(window.classicInterval||'5min'),
+      refreshSNR:()=>typeof loadSNR==='function'&&loadSNR(window.snrInterval||'5min'),
+      refreshStats:async()=>{if(typeof loadStats==='function')await loadStats();if(typeof loadHistory==='function')await loadHistory();},
+      refreshSmartAnalysis:()=>typeof loadSmartAnalysis==='function'&&loadSmartAnalysis(),
+      refreshAISignals:()=>typeof loadAISignals==='function'&&loadAISignals(),
+      getAIAnalysis:()=>typeof loadAISignals==='function'&&loadAISignals(),
+      refreshCalendar:()=>typeof loadCalendar==='function'&&loadCalendar(),
+      refreshHistory:async()=>{if(typeof loadStats==='function')await loadStats();if(typeof loadHistory==='function')await loadHistory();},
+      refreshTrendLines:()=>typeof loadTrendLines==='function'&&loadTrendLines(window.trendLineInterval||'5min'),
+      refreshMT5:()=>typeof loadMT5Status==='function'&&loadMT5Status(),
+      refreshActiveSessions:()=>typeof loadActiveSessions==='function'&&loadActiveSessions()
+    };
+    Object.keys(actions).forEach(id=>{
+      const b=$(id); if(!b||b.dataset.sxFinalGuard==='1')return;
+      b.dataset.sxFinalGuard='1';
+      b.addEventListener('click',async function(e){
+        e.preventDefault();e.stopImmediatePropagation();
+        if(b.disabled)return;
+        const old=b.innerHTML;b.disabled=true;
+        try{b.innerHTML='⟳ Ishlanmoqda…';await actions[id]();if(typeof showToast==='function')showToast('Yangilandi');}
+        catch(err){console.error('SignalX button',id,err);if(typeof showToast==='function')showToast(err?.message||'Server xatosi');}
+        finally{b.disabled=false;b.innerHTML=old;}
+      },true);
+    });
+
+    const auth=$('authBtn');
+    if(auth&&auth.dataset.sxFinalGuard!=='auth'){
+      auth.dataset.sxFinalGuard='auth';
+      auth.addEventListener('click',function(e){
+        e.preventDefault();e.stopImmediatePropagation();
+        if(String(auth.textContent||'').trim()==='Chiqish'){
+          if(typeof logoutUser==='function')logoutUser();return;
+        }
+        if(typeof setAuth==='function')setAuth('login');
+        $('authMsg')?.replaceChildren();
+        $('authModal')?.classList.add('show');
+        setTimeout(()=>$('email')?.focus(),50);
+      },true);
+    }
+
+    const reg=$('openRegisterDirect');
+    if(reg&&reg.dataset.sxFinalGuard!=='register'){
+      reg.dataset.sxFinalGuard='register';
+      reg.addEventListener('click',function(e){
+        e.preventDefault();e.stopImmediatePropagation();
+        if(typeof setAuth==='function')setAuth('register');
+        $('authModal')?.classList.add('show');
+        setTimeout(()=>$('email')?.focus(),50);
+      },true);
+    }
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
+  window.addEventListener('load',bind,{once:true});
+})();
+</script>
+
+
+<style id="signalx-phone-performance-v4-20260913">
+/* PHONE PERFORMANCE V4 — desktop is untouched. Keep visuals, remove GPU-heavy effects on small screens. */
+@media (max-width:1100px){
+  html,body{overscroll-behavior-x:auto!important;}
+  .topbar,.card,.advanced-card,.metric,.signal-box,.session,.calendar-item,.modal-card,.toast,.sidebar{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+  .topbar,.card,.advanced-card,.metric,.signal-box,.session,.calendar-item,.modal-card,.toast{box-shadow:0 8px 24px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.045)!important;}
+  .gold-photo-bg{filter:none!important;opacity:.16!important;will-change:auto!important;background-attachment:scroll!important;}
+  body:after{display:none!important;}
+  .signalx-visual-hero:before{display:none!important;}
+  .signalx-visual-hero:after{animation:none!important;}
+  .ai-visual-glow{filter:none!important;opacity:.55!important;}
+  .ai-signal-visual img{filter:none!important;}
+  .sidebar::before,.sidebar::after,.sidebar .nav button::before,.sidebar .nav button::after{animation:none!important;}
+  .title-shimmer{animation:none!important;background-position:center!important;}
+  .section.active,.section.active>.card,.section.active>.advanced-card,.section.active>.signal-box{scrollbar-width:none!important;}
+  .section.active::-webkit-scrollbar,.section.active>.card::-webkit-scrollbar,.section.active>.advanced-card::-webkit-scrollbar,.section.active>.signal-box::-webkit-scrollbar{display:none!important;}
+  .section.active .table-wrap,.section.active .table-scroll,.section.active .history-wrap,.section.active .scroll,.section.active .levels,.section.active .sessions{overflow-x:auto!important;overflow-y:visible!important;max-width:100%!important;-webkit-overflow-scrolling:touch!important;touch-action:pan-x pan-y!important;}
+  .section.active table{min-width:720px!important;}
+  .section.active .history{min-width:850px!important;}
+  .section.active *::before,.section.active *::after{pointer-events:none!important;}
+  .sidebar,.sidebar .nav,.sidebar .nav button,.sidebar .nav-external,.sidebar .sx-nav-icon,.sidebar .sx-nav-label{-webkit-tap-highlight-color:transparent!important;}
+}
+@media (max-width:600px){
+  .main{contain:layout paint!important;}
+  .section.active{contain:layout style!important;}
+  .topbar{box-shadow:0 6px 18px rgba(0,0,0,.24)!important;}
+  .card,.advanced-card,.metric,.signal-box,.session,.calendar-item{box-shadow:0 6px 18px rgba(0,0,0,.22)!important;}
+}
+</style>
+<script id="signalx-phone-performance-v4-20260913">
+(function(){
+  function phonePerf(){
+    if(window.innerWidth>1100)return;
+    document.querySelectorAll('.ai-signal-visual img').forEach(function(img){img.loading='lazy';img.decoding='async';});
+    document.querySelectorAll('.sidebar .sx-nav-icon svg').forEach(function(svg){svg.style.visibility='visible';svg.style.opacity='1';});
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',phonePerf,{once:true});else phonePerf();
+  window.addEventListener('resize',phonePerf,{passive:true});
+})();
+</script>
+
+<style id="signalx-phone-performance-v5">
+/* PHONE LIGHT MODE V5 — desktop >=1101px is untouched. */
+@media (max-width:1100px){
+  html,body{background:#05080d!important;}
+  body:before,body:after{display:none!important;background:none!important;animation:none!important;}
+  .gold-photo-bg{display:none!important;background-image:none!important;opacity:0!important;}
+  .signalx-visual-hero:before,.signalx-visual-hero:after{display:none!important;animation:none!important;}
+  .ai-visual-glow{display:none!important;filter:none!important;}
+  .ai-signal-visual img{display:none!important;filter:none!important;}
+  .sidebar{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;filter:none!important;opacity:1!important;box-shadow:0 8px 24px rgba(0,0,0,.28)!important;}
+  .sidebar::before,.sidebar::after,.sidebar .nav button::before,.sidebar .nav button::after{display:none!important;animation:none!important;filter:none!important;}
+  .sidebar .sx-nav-icon,.sidebar .sx-nav-icon svg{display:inline-flex!important;visibility:visible!important;opacity:1!important;filter:none!important;}
+  .topbar,.card,.advanced-card,.metric,.signal-box,.session,.calendar-item,.modal-card,.toast{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;box-shadow:0 4px 12px rgba(0,0,0,.20)!important;}
+  .title-shimmer{animation:none!important;background:none!important;color:#eef3f8!important;-webkit-text-fill-color:#eef3f8!important;}
+  .section.active *{animation:none!important;transition:none!important;}
+  .section.active *::before,.section.active *::after{pointer-events:none!important;}
+  .sx-sidebar-overlay{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;z-index:9000!important;}
+  .sidebar{z-index:10001!important;isolation:isolate!important;pointer-events:auto!important;}
+  body.sx-menu-open .sidebar{z-index:10002!important;pointer-events:auto!important;}
+  .sidebar .nav,.sidebar .nav button,.sidebar .nav-external-form,.sidebar .nav-external{pointer-events:auto!important;}
+  .section.active .scroll,.section.active .table-wrap,.section.active .table-scroll,.section.active .history-wrap{overflow-x:auto!important;overflow-y:visible!important;max-width:100%!important;-webkit-overflow-scrolling:touch!important;touch-action:pan-x!important;}
+  .section.active .history{min-width:850px!important;}
+  .section.active table{min-width:720px!important;}
+}
+@media (max-width:600px){
+  .app{min-height:100dvh!important;}
+  .main{contain:layout!important;}
+  .card,.advanced-card,.metric,.signal-box,.session,.calendar-item{box-shadow:0 3px 10px rgba(0,0,0,.18)!important;}
+  .chart{height:420px!important;}
+  .topbar{box-shadow:none!important;}
+}
+</style>
+<script id="signalx-phone-performance-v5">
+(function(){
+  if(window.innerWidth>1100) return;
+  function lightPhone(){
+    document.querySelectorAll('.sidebar .sx-nav-icon').forEach(function(el){el.style.visibility='visible';el.style.opacity='1';el.style.pointerEvents='auto';});
+    document.querySelectorAll('.sidebar .sx-nav-icon svg').forEach(function(el){el.style.visibility='visible';el.style.opacity='1';});
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',lightPhone,{once:true}); else lightPhone();
+})();
+</script>
 </body></html>
+
+<style id="signalx-phone-final-v2-20260913">
+/* PHONE-ONLY V2 PATCH — desktop (>=1101px) is intentionally untouched. */
+@media (max-width:1100px){
+  /* Drawer must always sit above the dimmer. */
+  .sx-sidebar-overlay{
+    z-index:9000!important;
+    background:rgba(1,5,12,.62)!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+  }
+  .sidebar{
+    z-index:10000!important;
+    isolation:isolate!important;
+    opacity:1!important;
+    filter:none!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+    pointer-events:auto!important;
+  }
+  body.sx-menu-open .sidebar{z-index:10001!important;pointer-events:auto!important;}
+  .sidebar::before,.sidebar::after{pointer-events:none!important;}
+  .sidebar .nav,
+  .sidebar .nav > button,
+  .sidebar .nav > .nav-external-form,
+  .sidebar .nav > .nav-external,
+  .sidebar .sx-nav-icon,
+  .sidebar .sx-nav-divider,
+  .sidebar .sx-nav-label{pointer-events:auto!important;}
+  .sidebar .nav > button,
+  .sidebar .nav > .nav-external-form button,
+  .sidebar .nav > .nav-external{
+    opacity:1!important;
+    filter:none!important;
+  }
+  .sidebar .sx-nav-icon,
+  .sidebar .sx-nav-icon svg{visibility:visible!important;opacity:1!important;filter:none!important;}
+
+  /* One horizontal touch surface for content that is wider than an iPhone. */
+  html,body{overflow-x:hidden!important;}
+  .main{
+    width:100%!important;min-width:0!important;
+    overflow-x:visible!important;
+    touch-action:pan-y!important;
+  }
+  .section.active{
+    width:100%!important;min-width:0!important;
+    overflow-x:auto!important;overflow-y:visible!important;
+    -webkit-overflow-scrolling:touch!important;
+    touch-action:pan-x pan-y!important;
+    overscroll-behavior-x:contain!important;
+    scrollbar-width:none!important;
+  }
+  .section.active::-webkit-scrollbar{display:none!important;}
+  .section.active > *{max-width:none!important;}
+  .section.active .scroll,
+  .section.active .history-wrap,
+  .section.active .table-wrap,
+  .section.active .table-scroll,
+  .section.active .levels,
+  .section.active .sessions,
+  .section.active .grid2,
+  .section.active .grid4{
+    touch-action:pan-x pan-y!important;
+  }
+  .history{min-width:850px!important;width:850px!important;}
+  .section.active .history-wrap,.section.active .scroll{overflow-x:auto!important;-webkit-overflow-scrolling:touch!important;}
+
+  /* Do not let decorative glass pseudo-layers intercept or blur text. */
+  .section.active .card::before,
+  .section.active .card::after,
+  .section.active .advanced-card::before,
+  .section.active .advanced-card::after,
+  .section.active .signal-box::before,
+  .section.active .signal-box::after,
+  .section.active .session::before,
+  .section.active .session::after{pointer-events:none!important;}
+}
+</style>
+<script id="signalx-phone-v2-guard-20260913">
+(function(){
+  function fixPhone(){
+    if(window.innerWidth>1100)return;
+    const sidebar=document.querySelector('.sidebar');
+    const overlay=document.getElementById('sxSidebarOverlay');
+    if(sidebar){sidebar.style.zIndex='10001';sidebar.style.pointerEvents='auto';}
+    if(overlay && !document.body.classList.contains('sx-menu-open')){
+      overlay.style.pointerEvents='none';overlay.style.opacity='0';
+    }
+    document.querySelectorAll('.sidebar .sx-nav-icon[data-icon]').forEach(function(el){
+      el.style.visibility='visible';el.style.opacity='1';
+      const svg=el.querySelector('svg'); if(svg){svg.style.visibility='visible';svg.style.opacity='1';}
+    });
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',fixPhone,{once:true});else fixPhone();
+  window.addEventListener('resize',fixPhone,{passive:true});
+  window.addEventListener('orientationchange',function(){setTimeout(fixPhone,80);},{passive:true});
+})();
+</script>
