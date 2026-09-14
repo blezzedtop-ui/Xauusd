@@ -4,8 +4,8 @@
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-input string ApiBase="https://YOUR-RAILWAY-DOMAIN";
-input string BridgeToken="CHANGE_ME";
+input string ApiBase="https://signalx.asia";
+input string BridgeToken="";
 input int PollSeconds=2;
 input int StateSeconds=5;
 input double DefaultLot=0.01;

@@ -4,8 +4,8 @@
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-input string ApiBase="https://YOUR-RAILWAY-DOMAIN";
-input string BridgeToken="CHANGE_ME";
+input string ApiBase="https://signalx.asia";
+input string BridgeToken="";
 input int PollSeconds=2;
 input int StateSeconds=5;
 input double DefaultLot=0.01;
@@ -59,7 +59,7 @@ bool EnsureSymbol(string symbol){
    if(SymbolInfoDouble(symbol,SYMBOL_BID)<=0){
       if(!SymbolSelect(symbol,true)) return false;
    }
-   return true;
+   return (SymbolInfoDouble(symbol,SYMBOL_BID)>0 || SymbolInfoDouble(symbol,SYMBOL_ASK)>0);
 }
 
 void AppendMarketState(string &body, string symbol, ENUM_TIMEFRAMES tfs[], int n, bool &firstMarket){
@@ -159,7 +159,7 @@ void OnTimer(){
       double tp=ExtractFirstTP(out,pos);
       double vol=ExtractNumber(out,"volume",pos); if(vol<=0) vol=DefaultLot;
       // One EA instance routes both XAUUSD and EURUSD. Execution is NOT limited by chart symbol.
-      string req=StringUpper(requested_symbol);
+      string req=requested_symbol; StringToUpper(req);
       string symbol="";
       if(StringFind(req,"EURUSD")>=0) symbol=EURStateSymbol();
       else if(StringFind(req,"XAUUSD")>=0) symbol=XAUStateSymbol();
