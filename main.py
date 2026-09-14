@@ -4088,6 +4088,7 @@ async def deploy_diagnostics() -> dict[str, Any]:
 async def api_health() -> dict[str, Any]:
     return {"ok": True, "service": "xauusd-trading", "timestamp": datetime.now(timezone.utc).isoformat()}
 
+@app.get("/eurusd.html")
 @app.get("/eurusd")
 @app.get("/eurusd/")
 @app.get("/EURUSD")
