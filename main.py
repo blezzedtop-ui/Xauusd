@@ -315,6 +315,7 @@ TRADINGVIEW_BARS = max(80, min(int(os.getenv("TRADINGVIEW_BARS", "260")), 500))
 TRADINGVIEW_TIMEOUT = float(os.getenv("TRADINGVIEW_TIMEOUT", "10"))
 MT5_BRIDGE_TOKEN = os.getenv("MT5_BRIDGE_TOKEN", "change-this-mt5-bridge-token").strip()
 MT5_AUTO_TRADING = os.getenv("MT5_AUTO_TRADING", "false").lower() == "true"
+MT5_AUTO_DUAL = os.getenv("MT5_AUTO_DUAL", "false").lower() == "true"
 MT5_LOT_SIZE = float(os.getenv("MT5_DEFAULT_LOT", "0.01"))
 MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "symbol": None, "candles": {}, "markets": {}}
 MT5_ORDER_QUEUE: list[dict[str, Any]] = []
@@ -3466,8 +3467,6 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
             continue
         if zone_quality < AUTO_ENTRY_MIN_ZONE or item.get("quality_grade") not in {"A+","A"}:
             continue
-        if ai_signal != direction or ai_agreement < AUTO_ENTRY_MIN_AI_AGREEMENT or ai_conf < AUTO_ENTRY_THRESHOLD or risk_flags:
-            continue
         if AUTO_ENTRY_REQUIRE_MTF:
             tf_order=["1min","5min","15min","30min","1h","4h","1day"]
             idx=tf_order.index(tf) if tf in tf_order else -1
@@ -3522,7 +3521,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, authorization: str |
             "take_profit": [float(x) for x in tp],
             "signal": item,
             "mode": "paper_auto_entry",
-            "source": "TradingView OANDA:XAUUSD candle series",
+            "source": f"TradingView OANDA:{'EURUSD' if key == 'EUR/USD' else 'XAUUSD'} candle series",
             "auto_entry": True,
             "confidence_threshold": AUTO_ENTRY_THRESHOLD,
             "confidence_at_entry": confidence,
@@ -3937,7 +3936,7 @@ async def mt5_status(symbol: str = DEFAULT_SYMBOL, authorization: str | None = H
     state["connected"] = connected_now
     state["heartbeat_age_sec"] = round(age, 1) if age is not None else None
     state["connection_state"] = "CONNECTED" if connected_now else ("STALE" if age is not None and age <= 60 else "DISCONNECTED")
-    return {"ok": True, "symbol": key, "auto_trading": MT5_AUTO_TRADING, "lot": MT5_LOT_SIZE, "state": state, "queue": len(MT5_ORDER_QUEUE), "demo_only": True, "heartbeat_timeout_sec": MT5_HEARTBEAT_TIMEOUT}
+    return {"ok": True, "symbol": key, "auto_trading": MT5_AUTO_TRADING, "auto_dual": MT5_AUTO_DUAL, "lot": MT5_LOT_SIZE, "state": state, "queue": len(MT5_ORDER_QUEUE), "demo_only": True, "heartbeat_timeout_sec": MT5_HEARTBEAT_TIMEOUT}
 
 @app.post("/api/v1/mt5/connect")
 async def mt5_connect(body: MT5ConnectBody, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
@@ -3967,6 +3966,13 @@ async def mt5_auto_trading(enabled: bool = Query(...), authorization: str | None
     global MT5_AUTO_TRADING
     MT5_AUTO_TRADING = bool(enabled)
     return {"ok": True, "auto_trading": MT5_AUTO_TRADING, "demo_only": True}
+
+@app.post("/api/v1/mt5/auto-dual")
+async def mt5_auto_dual(enabled: bool = Query(...), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    require_admin(authorization, session)
+    global MT5_AUTO_DUAL
+    MT5_AUTO_DUAL = bool(enabled)
+    return {"ok": True, "auto_dual": MT5_AUTO_DUAL, "symbols": ["XAU/USD", "EUR/USD"] if MT5_AUTO_DUAL else ["current"], "demo_only": True}
 
 @app.get("/api/v1/mt5/poll")
 async def mt5_poll(token: str = Query(...)) -> dict[str, Any]:

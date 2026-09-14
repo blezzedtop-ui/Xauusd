@@ -2,7 +2,7 @@
 <html lang="uz">
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>EURUSD — Trading SaaS</title>
+<title>EURUSD — Trading Terminal</title>
 <style>
 :root{--bg:#070a0f;--panel:#0d1219;--panel2:#101720;--line:#1c2632;--text:#eef3f8;--muted:#8d9aaa;--accent:#65a3ff;--green:#30d49a;--red:#ff6471;--gold:#f5c15d;--purple:#a98cff;--shadow:0 16px 40px rgba(0,0,0,.24)}
 *{box-sizing:border-box}html,body{margin:0;min-height:100%;background:radial-gradient(circle at top right,#0c1622 0,#070a0f 42%,#05070b 100%);color:var(--text);font:14px Inter,Segoe UI,Arial,sans-serif}button,input{font:inherit}.app{display:grid;grid-template-columns:250px 1fr;min-height:100vh}.sidebar{position:sticky;top:0;height:100vh;border-right:1px solid var(--line);background:rgba(8,12,18,.92);backdrop-filter:blur(10px);padding:18px 14px;display:flex;flex-direction:column}.brand{padding:6px 10px 18px;border-bottom:1px solid var(--line);margin-bottom:14px}.brand b{font-size:18px;letter-spacing:.3px}.brand span{display:block;color:var(--muted);font-size:11px;margin-top:5px}.nav{display:flex;flex-direction:column;gap:6px}.nav button{border:1px solid transparent;background:transparent;color:var(--muted);text-align:left;padding:11px 12px;border-radius:10px;cursor:pointer;transition:.18s}.nav button:hover{background:#111923;color:var(--text)}.nav button.active{background:#132134;border-color:#203450;color:#fff}.sidebar-bottom{margin-top:auto}.tiny{font-size:11px;color:var(--muted);line-height:1.5}.main{padding:18px 20px 28px;max-width:1700px;width:100%;margin:auto}.topbar{display:flex;justify-content:space-between;align-items:center;gap:14px;margin-bottom:16px}.topbar h1{font-size:19px;margin:0}.topbar p{margin:5px 0 0;color:var(--muted);font-size:12px}.tools{display:flex;gap:8px;align-items:center;justify-content:flex-end}.auth-top{min-width:110px;font-weight:800}.btn{position:relative;z-index:20;pointer-events:auto;background:#111923;border:1px solid var(--line);color:var(--text);padding:9px 12px;border-radius:9px;cursor:pointer}.btn:hover{background:#17222f}.btn.primary{background:#2462ae;border-color:#2d73ca}.btn.danger{color:#ffadb3}.pill{padding:6px 10px;border:1px solid var(--line);background:#0e151d;border-radius:999px;font-size:11px;color:var(--muted)}.dashboard{display:grid;grid-template-columns:minmax(0,1.72fr) minmax(330px,.85fr);gap:14px}.card{background:linear-gradient(180deg,rgba(14,20,28,.95),rgba(11,16,22,.95));border:1px solid var(--line);border-radius:14px;padding:14px;box-shadow:var(--shadow)}.card+.card{margin-top:14px}.section{display:none}.section.active{display:block}.hero{display:flex;justify-content:space-between;gap:20px;align-items:flex-end}.symbol{font-size:22px;font-weight:700}.sub{font-size:12px;color:var(--muted);margin-top:5px}.price{font-size:32px;font-weight:800}.change{font-size:12px;margin-top:5px}.up{color:var(--green)}.down{color:var(--red)}.tfbar{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0}.tf{border:1px solid var(--line);background:#0e151d;color:var(--muted);border-radius:8px;padding:8px 11px;cursor:pointer}.tf.active{background:#142742;border-color:#2c5c93;color:#fff}.chart{height:560px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:#090d12}.history-note{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:8px 0 0;font-size:11px;color:var(--muted)}.history-note b{color:var(--gold)}.countdown-box{margin-top:9px;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}.countdown-label{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}.countdown{color:var(--gold);font-weight:800;font-size:16px;font-variant-numeric:tabular-nums;text-shadow:0 0 14px rgba(245,193,93,.18)}.close-time{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}.section-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px}.section-head h2,.section-head h3{margin:0;font-size:15px}.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.metric{border:1px solid var(--line);background:#0b1118;border-radius:10px;padding:10px}.metric small{color:var(--muted);font-size:11px}.metric b{font-size:18px;display:block;margin-top:6px}.signal-box{border:1px solid var(--line);background:#0a1016;border-radius:10px;padding:12px}.signal-main{font-size:21px;font-weight:800}.buy{color:var(--green)}.sell{color:var(--red)}.wait{color:var(--gold)}.mini{font-size:12px;line-height:1.65}.levels .row,.list-row{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--line)}.levels .row:last-child,.list-row:last-child{border-bottom:0}.res{color:var(--red)}.sup{color:var(--green)}.piv{color:var(--gold)}.sessions{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.session{border:1px solid var(--line);border-radius:10px;padding:10px}.session.open{border-color:#216b55;background:#0b1714}.status{font-size:11px;font-weight:800}.calendar-item{border:1px solid var(--line);border-left:3px solid var(--red);padding:9px;border-radius:8px;margin:7px 0;background:#0b1118}.tag{font-size:10px;font-weight:800}.history{width:100%;border-collapse:collapse}.history th,.history td{text-align:left;padding:9px 7px;border-bottom:1px solid var(--line);font-size:11px;white-space:nowrap}.setup-badge{display:inline-block;padding:3px 6px;border:1px solid var(--line);border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.02em}.setup-badge.strong{border-color:#2f8f6f;background:rgba(47,143,111,.12);color:var(--green)}.outcome-tp{color:var(--green);font-weight:800}.outcome-sl{color:var(--red);font-weight:800}.outcome-open{color:var(--gold);font-weight:800}.outcome-amb{color:var(--purple);font-weight:800}.scroll{overflow:auto}.toast{position:fixed;right:18px;bottom:18px;background:#121b25;border:1px solid var(--line);padding:11px 14px;border-radius:10px;box-shadow:var(--shadow);display:none;z-index:20}.toast.show{display:block}.modal{position:fixed;inset:0;background:rgba(2,5,9,.86);display:none;align-items:center;justify-content:center;padding:16px;z-index:30}.modal.show{display:flex}.auth-required{backdrop-filter:blur(18px)}.auth-required .modal-card{animation:authIn .28s ease-out}@keyframes authIn{from{opacity:0;transform:translateY(14px) scale(.98)}to{opacity:1;transform:none}}.modal-card{width:min(410px,100%);background:#0d131b;border:1px solid var(--line);border-radius:14px;padding:18px}.input{width:100%;background:#090e14;color:#fff;border:1px solid var(--line);padding:11px;border-radius:9px;margin:0 0 9px}.link{font-size:12px;color:#8fb9ff;cursor:pointer;margin-top:10px}.health{display:flex;gap:7px;align-items:center}.dot{width:8px;height:8px;border-radius:50%;background:var(--green)}
@@ -656,6 +656,52 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 }
 </style>
 
+
+<style id="signalx-mobile-v3-verified-fix-20260913">
+/* VERIFIED MOBILE PATCH — desktop >=1101px intentionally untouched. */
+@media (max-width:1100px){
+  .sidebar{z-index:20001!important;pointer-events:auto!important;filter:none!important;opacity:1!important;}
+  body.sx-menu-open .sidebar{transform:translate3d(0,0,0)!important;pointer-events:auto!important;}
+  .sx-sidebar-overlay{z-index:20000!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+  body:not(.sx-menu-open) .sx-sidebar-overlay{pointer-events:none!important;opacity:0!important;}
+  .sidebar .nav{position:relative!important;z-index:5!important;overflow-y:auto!important;overflow-x:hidden!important;}
+  .sidebar .nav button,.sidebar .nav-external,.sidebar .nav-external-form button{position:relative!important;z-index:6!important;pointer-events:auto!important;touch-action:manipulation!important;}
+  .sidebar .nav button > *, .sidebar .nav-external > *, .sidebar .nav-external-form button > *{pointer-events:none!important;}
+  .sidebar .sx-nav-icon,.sidebar .sx-nav-icon svg{display:inline-flex!important;visibility:visible!important;opacity:1!important;filter:none!important;}
+  .sidebar .sx-nav-icon svg{display:block!important;}
+
+  /* Make every active page itself the horizontal touch surface. */
+  .main{overflow-x:auto!important;overflow-y:visible!important;touch-action:pan-x pan-y!important;-webkit-overflow-scrolling:touch!important;}
+  .section.active{width:100%!important;min-width:0!important;max-width:none!important;overflow-x:auto!important;overflow-y:visible!important;touch-action:pan-x pan-y!important;-webkit-overflow-scrolling:touch!important;overscroll-behavior-x:contain!important;}
+  .section.active .scroll,.section.active .history-wrap,.section.active .table-wrap,.section.active .table-scroll,.section.active .levels,.section.active .sessions{overflow-x:auto!important;overflow-y:visible!important;touch-action:pan-x pan-y!important;-webkit-overflow-scrolling:touch!important;}
+  .section.active .scroll > *, .section.active .history-wrap > *, .section.active .table-wrap > *, .section.active .table-scroll > *{max-width:none!important;}
+  .section.active .table,.section.active table,.section.active .history{min-width:max-content!important;width:max-content!important;}
+  .section.active .card,.section.active .advanced-card,.section.active .signal-box{touch-action:pan-x pan-y!important;}
+}
+</style>
+
+<style id="signalx-ai-signals-page-20260914">
+.ai-signals-page h2{font-size:24px!important;letter-spacing:.01em}.ai-signals-page .ai-page-symbol{font-size:28px;font-weight:900;letter-spacing:.04em}.ai-signals-page .ai-page-signal{min-width:180px}.ai-signals-page .ai-page-signal .signal-main{font-size:38px!important;font-weight:950!important;line-height:1.05}.ai-signals-page .ai-page-mode{font-size:14px;font-weight:800;margin-top:8px;letter-spacing:.06em}.ai-page-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:18px}.ai-page-grid .metric small{font-size:13px!important}.ai-page-grid .metric b{font-size:23px!important}.ai-page-confidence{display:flex;justify-content:space-between;align-items:center;margin-top:18px;font-size:17px;font-weight:800}.ai-page-confidence strong{font-size:28px}.ai-page-meta{display:flex;gap:22px;flex-wrap:wrap;margin-top:14px;font-size:16px}.ai-page-meta b{font-size:18px}.ai-page-reason{font-size:16px;line-height:1.55;margin-top:16px;padding:14px;border:1px solid var(--line);border-radius:12px}.ai-page-action{font-size:16px!important;font-weight:900!important;min-height:48px;margin-top:16px}.ai-page-source{margin-top:12px}
+@media(max-width:600px){.ai-signals-page h2{font-size:22px!important}.ai-page-grid{grid-template-columns:repeat(2,minmax(150px,1fr));min-width:330px}.ai-signals-page .ai-page-symbol{font-size:24px}.ai-signals-page .ai-page-signal .signal-main{font-size:34px!important}.ai-page-grid .metric b{font-size:20px!important}.ai-page-meta{font-size:14px;gap:12px}.ai-page-meta b{font-size:16px}.ai-page-reason{font-size:15px}.ai-page-action{width:100%;font-size:14px!important}}
+</style>
+
+<style id="signalx-overview-ai-admin-live">
+/* Overview AI Signals: admin-only live card. Desktop/mobile safe. */
+.overview-ai-card .ai-card-title h3 { font-size: 1.35rem !important; line-height: 1.2 !important; }
+.overview-ai-card .ai-card-title .mini { font-size: 1rem !important; line-height: 1.45 !important; }
+.overview-ai-card .ai-signal-badge { font-size: 1.2rem !important; }
+.overview-ai-card .ai-price-grid small { font-size: .9rem !important; }
+.overview-ai-card .ai-price-grid b { font-size: 1.15rem !important; }
+.overview-ai-card .ai-confidence-row { font-size: 1rem !important; }
+.overview-ai-card .ai-confidence-row b, .overview-ai-card .ai-extra-row b { font-size: 1.05rem !important; }
+.overview-ai-card .ai-sig-reason { font-size: .98rem !important; line-height: 1.45 !important; }
+@media (max-width: 600px) {
+  .overview-ai-card .ai-card-title h3 { font-size: 1.18rem; }
+  .overview-ai-card .ai-card-title .mini { font-size: .92rem; }
+  .overview-ai-card .ai-price-grid b { font-size: 1.02rem; }
+  .overview-ai-card .ai-sig-reason { font-size: .9rem; }
+}
+</style>
 </head>
 <body>
 <div class="gold-3d-orb"></div>
@@ -664,24 +710,25 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 <aside class="sidebar">
   <div class="brand"><div class="brand-logo sx-logo-mark"><img alt="SignalX" decoding="async" height="34" src="assets/logo/signalx-icon.svg" width="34"/></div><div class="brand-copy"><b>SignalX</b><span>EURUSD TRADING</span></div></div>
   <div class="nav">
-    <button class="active" data-section="overview"><span class="sx-nav-icon" data-icon="home"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Overview</span></button>
-    <button data-section="chartSection"><span class="sx-nav-icon" data-icon="chart"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Live Chart</span></button>
-    <button data-section="analysisSection"><span class="sx-nav-icon" data-icon="analysis"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Technical Analysis</span></button>
-    <button class="admin-only" data-section="smartAnalysisSection"><span class="sx-nav-icon" data-icon="brain"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">AI Smart Analysis</span></button>
-    <button class="admin-only" data-section="aiFallbackSection"><span class="sx-nav-icon" data-icon="network"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">AI Fallback Network</span></button>
-    <button data-section="classicSection"><span class="sx-nav-icon" data-icon="trade"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Classic Trade</span></button>
-    <button data-section="snrSection"><span class="sx-nav-icon" data-icon="diamond"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">SNR</span></button>
-    <button data-section="trendLineSection"><span class="sx-nav-icon" data-icon="trend"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Trend Line</span></button>
-    <button class="admin-only" data-section="signalSection"><span class="sx-nav-icon" data-icon="lab"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal Lab</span></button>
-    <button data-section="ictSection"><span class="sx-nav-icon" data-icon="target"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">ICT Signals</span></button>
-    <button class="admin-only" data-section="signalsSection"><span class="sx-nav-icon" data-icon="alert"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signals</span></button>
-    <button data-section="mtfSection"><span class="sx-nav-icon" data-icon="time"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Multi-Timeframe</span></button>
-    <button data-section="calendarSection"><span class="sx-nav-icon" data-icon="calendar"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Economic Calendar</span></button>
-    <button data-section="sessionsSection"><span class="sx-nav-icon" data-icon="globe"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Market Sessions</span></button>
-    <button data-section="historySection"><span class="sx-nav-icon" data-icon="history"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal History</span></button>
-    <button data-section="activeSessionsSection"><span class="sx-nav-icon" data-icon="status"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Aktiv Seanslar</span></button>
-    <button class="admin-only" data-section="mt5Section"><span class="sx-nav-icon" data-icon="terminal"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">MetaTrader 5</span></button>
-    <button type="button" id="xauUsdPageBtn" class="nav-external">🥇 XAUUSD</button>
+    <button type="button" class="active" data-section="overview"><span class="sx-nav-icon" data-icon="home" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.8 12 3l9 7.8v9.2a1 1 0 0 1-1 1h-5.2v-6h-5.6v6H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Overview</span></button>
+    <button type="button" data-section="chartSection"><span class="sx-nav-icon" data-icon="chart" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18V7m4 11v-5m4 5V4m4 14v-8m4 8V6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M3 18h18" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Live Chart</span></button>
+    <button type="button" data-section="analysisSection"><span class="sx-nav-icon" data-icon="analysis" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18 9 12l4 3 7-9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20h16" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Technical Analysis</span></button>
+    <button type="button" class="admin-only" data-section="smartAnalysisSection"><span class="sx-nav-icon" data-icon="brain" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5.2A3.2 3.2 0 0 0 5.8 8c-1.6.4-2.5 2-1.9 3.5a3 3 0 0 0 1 5.7A3.1 3.1 0 0 0 8 20.2m7-15A3.2 3.2 0 0 1 18.2 8c1.6.4 2.5 2 1.9 3.5a3 3 0 0 1-1 5.7A3.1 3.1 0 0 1 16 20.2M9 5.2v14.4m6-14.4v14.4M9 9h3m3 0h-3m-3 6h3m3 0h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">AI Smart Analysis</span></button>
+    <button type="button" class="admin-only" data-section="signalEngineSection"><span class="sx-nav-icon" data-icon="bolt" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 2 5 13h6l-.8 9L19 11h-6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal Engine</span></button>
+    <button type="button" class="admin-only" data-section="aiFallbackSection"><span class="sx-nav-icon" data-icon="network" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2" fill="currentColor"/><circle cx="19" cy="6" r="2" fill="currentColor"/><circle cx="19" cy="18" r="2" fill="currentColor"/><path d="m7 12 10-5M7 12l10 5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">AI Fallback Network</span></button>
+    <button type="button" data-section="classicSection"><span class="sx-nav-icon" data-icon="trade" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 5V3h8v2M8 12h3m2 0h3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Classic Trade</span></button>
+    <button type="button" data-section="snrSection"><span class="sx-nav-icon" data-icon="diamond" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 7-8 11-8-11zM4 10h16M9 4l3 6 3-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">SNR</span></button>
+    <button type="button" data-section="trendLineSection"><span class="sx-nav-icon" data-icon="trend" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18 10 12l4 3 6-9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20" cy="6" r="1.5" fill="currentColor"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Trend Line</span></button>
+    <button type="button" class="admin-only" data-section="signalSection"><span class="sx-nav-icon" data-icon="lab" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v6l-5.2 8.7A2 2 0 0 0 5.5 21h13a2 2 0 0 0 1.7-3.3L15 9V3M8 3h8M7 16h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal Lab</span></button>
+    <button type="button" data-section="ictSection"><span class="sx-nav-icon" data-icon="target" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 2v3m0 14v3m10-10h-3M5 12H2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">ICT Signals</span></button>
+    <button type="button" class="admin-only" data-section="signalsSection"><span class="sx-nav-icon" data-icon="alert" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3.8 18a1.6 1.6 0 0 0 1.4 2.4h13.6a1.6 1.6 0 0 0 1.4-2.4z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 8v5m0 3h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signals</span></button>
+    <button type="button" data-section="mtfSection"><span class="sx-nav-icon" data-icon="time" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Multi-Timeframe</span></button>
+    <button type="button" data-section="calendarSection"><span class="sx-nav-icon" data-icon="calendar" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7 3v4M17 3v4M3.5 9h17M7 13h3m2 0h3m-8 4h3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Economic Calendar</span></button>
+    <button type="button" data-section="sessionsSection"><span class="sx-nav-icon" data-icon="globe" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3.8 12h16.4M12 3.5c2.3 2.4 3.5 5.2 3.5 8.5s-1.2 6.1-3.5 8.5c-2.3-2.4-3.5-5.2-3.5-8.5S9.7 5.9 12 3.5z" fill="none" stroke="currentColor" stroke-width="1.35"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Market Sessions</span></button>
+    <button type="button" data-section="historySection"><span class="sx-nav-icon" data-icon="history" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h13M4 12h16M4 17h10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M18 4v6l3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal History</span></button>
+    <button type="button" data-section="activeSessionsSection"><span class="sx-nav-icon" data-icon="status" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M12 2v3m0 14v3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Aktiv Seanslar</span></button>
+    <button type="button" class="admin-only" data-section="mt5Section"><span class="sx-nav-icon" data-icon="terminal" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m7 9 3 3-3 3m5 0h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">MetaTrader 5</span></button>
+    <button type="button" id="xauUsdPageBtn" class="nav-external" aria-label="XAUUSD"><span class="sx-nav-icon" data-icon="gold"></span><span class="sx-nav-divider"></span><span class="sx-nav-label">XAUUSD</span></button>
   <div class="sx-pro-card sx-pro-card-sidebar">
   <div><span class="sx-pro-kicker">SIGNALX PRO</span><b>AI + AUTO TRADING</b><small>Advanced signals and premium tools</small></div>
   <a class="sx-pro-btn" href="https://t.me/Shohrux_Ravshanov" id="telegramGoPro" target="_blank" rel="noopener">✈ GO PRO</a>
@@ -708,20 +755,17 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
           <div class="card"><div class="section-head"><div><h3>Performance</h3><div class="mini">Signal history statistics</div></div><button class="btn" id="refreshStats">↻</button></div><div class="grid2"><div class="metric"><small>Total</small><b id="totalSignals">0</b></div><div class="metric"><small>Completed</small><b id="completedSignals">0</b></div><div class="metric"><small>Wins</small><b id="wins">0</b></div><div class="metric"><small>Losses</small><b id="losses">0</b></div></div><div class="metric" style="margin-top:8px"><small>Winrate (TP HIT / TP HIT + SL HIT)</small><b id="winrate">0%</b></div></div>
       </div>
       <aside class="overview-right">
-        <div class="card admin-only overview-ai-card"><div class="section-head ai-card-head"><div class="ai-card-title"><span class="ai-mini-badge">AI</span><div><h3>AI Signals</h3><div class="mini">AI + quantitative signal · selected timeframe</div></div></div><div class="ai-head-actions"><span class="pill ai-live-pill"><i></i> Live</span><button class="btn" id="refreshAISignals" type="button">↻</button></div></div><div class="ai-signal-layout"><div class="ai-signal-info"><div class="ai-symbol-row"><span class="ai-symbol-dot">●</span><b class="ai-symbol-name" id="aiSigSymbol">XAUUSD</b><span class="signal-main wait ai-signal-badge" id="aiSigSignal">WAIT</span></div><div class="ai-price-grid"><div><small>Entry</small><b id="aiSigEntry">—</b></div><div><small>TP1</small><b id="aiSigTP1">—</b></div><div><small>TP2</small><b id="aiSigTP2">—</b></div><div><small>SL</small><b id="aiSigSL">—</b></div></div><div class="ai-confidence-row"><span>Confidence</span><b id="aiSigConfidence">—</b></div><div class="ai-confidence-track"><span id="aiSigConfidenceBar"></span></div><div class="ai-extra-row"><span>Risk / Reward <b id="aiSigRR">—</b></span><span>Mode <b id="aiSigMode">WAIT</b></span></div><div class="mini ai-sig-reason" id="aiSigReason">AI signal hisoblanmoqda…</div><button class="btn primary ai-analysis-btn" id="getAIAnalysis" type="button">✦ &nbsp; Get AI Analysis <span>✦</span></button></div><div class="ai-signal-visual"><img src="assets/ai/ai-signals-banner.png" alt="AI Signals" loading="eager"><div class="ai-visual-glow"></div></div></div></div>
+        <div class="card admin-only overview-ai-card"><div class="section-head ai-card-head"><div class="ai-card-title"><span class="ai-mini-badge">AI</span><div><h3>AI Signals</h3><div class="mini">AI + quantitative signal · selected timeframe</div></div></div><div class="ai-head-actions"><span class="pill ai-live-pill"><i></i> Live</span><button class="btn" id="refreshAISignals" type="button">↻</button></div></div><div class="ai-signal-layout"><div class="ai-signal-info"><div class="ai-symbol-row"><span class="ai-symbol-dot">●</span><b class="ai-symbol-name" id="aiSigSymbol">EURUSD</b><span class="signal-main wait ai-signal-badge" id="aiSigSignal">WAIT</span></div><div class="ai-price-grid"><div><small>Entry</small><b id="aiSigEntry">—</b></div><div><small>TP1</small><b id="aiSigTP1">—</b></div><div><small>TP2</small><b id="aiSigTP2">—</b></div><div><small>SL</small><b id="aiSigSL">—</b></div></div><div class="ai-confidence-row"><span>Confidence</span><b id="aiSigConfidence">—</b></div><div class="ai-confidence-track"><span id="aiSigConfidenceBar"></span></div><div class="ai-extra-row"><span>Risk / Reward <b id="aiSigRR">—</b></span><span>Mode <b id="aiSigMode">WAIT</b></span></div><div class="mini ai-sig-reason" id="aiSigReason">AI signal hisoblanmoqda…</div><button class="btn primary ai-analysis-btn" id="getAIAnalysis" type="button">✦ &nbsp; Get AI Analysis <span>✦</span></button></div><div class="ai-signal-visual"><img src="assets/ai/ai-signals-banner.png" alt="AI Signals" loading="eager"><div class="ai-visual-glow"></div></div></div></div>
         <div class="card"><div class="section-head"><h3>Market Sessions</h3><span class="pill" id="sessionClock">—</span></div><div class="sessions" id="sessions"></div></div>
         <div class="card"><div class="section-head"><div><h3>Pivot / Key Levels</h3><div class="mini">Selected timeframe support & resistance</div></div><span class="pill" id="pivotFilter">5 MIN</span></div><div class="tfbar pivot-tfbar" id="pivotTfBar"><button class="tf" data-pivot-interval="1min">1M</button><button class="tf active" data-pivot-interval="5min">5M</button><button class="tf" data-pivot-interval="15min">15M</button><button class="tf" data-pivot-interval="30min">30M</button><button class="tf" data-pivot-interval="1h">1H</button><button class="tf" data-pivot-interval="4h">4H</button><button class="tf" data-pivot-interval="1day">1D</button></div><div class="levels" id="levels"></div><div class="mini" id="pivotSource" style="margin-top:8px">Selected timeframe Pivot</div></div>
       </aside>
     </div>
   </section>
+<section class="section" id="chartSection"><div class="card"><div class="section-head"><h2>Live Chart</h2><span class="pill" id="chartStatus">—</span></div><div class="tfbar"><button class="tf" data-interval="1min">1M</button><button class="tf" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div><div class="chart" id="chart2"></div></div></section>
+  <section class="section admin-only" id="signalEngineSection"><div class="card signal-engine-page"><div class="section-head"><div><h2>Signal Engine</h2><div class="mini">Har bir timeframe uchun alohida signal · quantitative engine</div></div><div><span class="pill" id="bias">—</span> <button class="btn" id="refreshSignalEngine" type="button">↻ Yangilash</button></div></div><div class="signal-box"><div class="signal-main wait" id="signalMain">WAIT</div><div class="mini" id="signalReason">—</div><div class="grid4" style="margin-top:10px"><div class="metric"><small>Entry</small><b id="entry">—</b></div><div class="metric"><small>SL</small><b id="sl">—</b></div><div class="metric"><small>TP1</small><b id="tp1">—</b></div><div class="metric"><small>TP2</small><b id="tp2">—</b></div></div></div><div id="signalEngineGrid" class="advanced-grid" style="margin-top:12px"></div><div style="margin-top:10px"><button class="btn primary" id="saveSignal" type="button">Signalni saqlash</button></div></div></section>
 
-  <section class="section" id="chartSection"><div class="card"><div class="section-head"><h2>Live Chart</h2><span class="pill" id="chartStatus">—</span></div><div class="tfbar"><button class="tf" data-interval="1min">1M</button><button class="tf" data-interval="5min">5M</button><button class="tf" data-interval="15min">15M</button><button class="tf" data-interval="30min">30M</button><button class="tf" data-interval="1h">1H</button><button class="tf" data-interval="4h">4H</button><button class="tf" data-interval="1day">1D</button></div><div class="chart" id="chart2"></div></div></section>
+  <section class="section admin-only" id="aiFallbackSection"><div class="section-head" style="margin-bottom:12px"><div><h2>AI Fallback Network</h2><div class="mini">AI providerlar va avtomatik fallback boshqaruvi</div></div><span class="pill">AI NETWORK</span></div><div class="card"><div class="section-head"><div><h3>AI Fallback Network</h3><div class="mini">AI faqat signal tasdig‘ida chaqiriladi · oddiy refresh AI request yubormaydi</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" id="aiAutoMode" type="button">AUTO</button><button class="btn" id="aiAllOn" type="button">ALL ON</button><button class="btn" id="aiAllOff" type="button">ALL OFF</button><button class="btn" id="refreshAIProviders" type="button">↻</button></div></div><div id="aiProvidersGrid" class="component-grid" style="margin-top:10px"></div></div></section>
   <section class="section admin-only" id="signalSection"><div class="card"><div class="section-head"><div><h2>Signal Lab</h2><div class="mini">ICT + SNR + SNR Malaysia + Order Block + FVG + Liquidity + Trend Lines + BOS/CHOCH + Internal Structure</div></div><button class="btn primary" id="refreshAdvanced">↻ Barcha timeframe signal</button></div><div class="tfbar"><button class="tf" data-signal-interval="1min">1M</button><button class="tf active" data-signal-interval="5min">5M</button><button class="tf" data-signal-interval="15min">15M</button><button class="tf" data-signal-interval="30min">30M</button><button class="tf" data-signal-interval="1h">1H</button><button class="tf" data-signal-interval="4h">4H</button><button class="tf" data-signal-interval="1day">1D</button></div><div class="mini" id="advancedStatus">Tanlangan timeframe signali va barcha timeframe signal kartalari alohida hisoblanadi.</div><div class="advanced-grid" id="advancedGrid" style="margin-top:12px"></div></div></section>
-  <section class="section admin-only" id="aiFallbackSection">
-    <div class="section-head"><div><h2>AI Fallback Network</h2><div class="mini">AI providerlar va avtomatik fallback boshqaruvi</div></div><span class="pill">AI NETWORK</span></div>
-    <div class="card"><div class="section-head"><div><h3>AI Fallback Network</h3><div class="mini">AI faqat signal tasdig‘ida chaqiriladi · oddiy refresh AI request yubormaydi</div></div><div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end"><button class="btn" id="aiAutoMode" type="button">AUTO</button><button class="btn" id="aiAllOn" type="button">ALL ON</button><button class="btn" id="aiAllOff" type="button">ALL OFF</button><button class="btn" id="refreshAIProviders" type="button">↻</button></div></div><div id="aiProvidersGrid" class="component-grid" style="margin-top:10px"></div></div>
-  </section>
-
 <section class="section" id="analysisSection"><div class="card"><div class="section-head"><h2>Technical Analysis</h2><span class="pill" id="taState">TradingView LIVE</span></div><div id="tvTechnicalWidget" style="min-height:520px;border:1px solid var(--line);border-radius:10px;overflow:hidden"></div><div class="grid4" style="margin-top:10px"><div class="metric"><small>RSI</small><b id="rsi">—</b></div><div class="metric"><small>RSI State</small><b id="rsiState">—</b></div><div class="metric"><small>ATR</small><b id="atr">—</b></div><div class="metric"><small>Trend</small><b id="taTrend">—</b></div></div><p class="mini" id="taSummary">TradingView Technical Analysis widget + canonical TradingView candle calculation.</p></div></section>
   
   <section class="section admin-only" id="smartAnalysisSection"><div class="card"><div class="section-head"><div><h2>AI Smart Analysis</h2><div class="mini">AI tasdiqlash faqat Auto Trading signalida ishlaydi · oddiy refresh AI request yubormaydi</div></div><button class="btn primary" id="refreshSmartAnalysis">↻ Yangilash</button></div><div class="grid4" style="margin-top:12px"><div class="metric"><small>AI Bias</small><b id="smartBias">—</b></div><div class="metric"><small>Confidence</small><b id="smartConfidence">—</b></div><div class="metric"><small>Signal</small><b id="smartSignal">—</b></div><div class="metric"><small>Mode</small><b id="smartMode">—</b></div></div><div class="signal-box" style="margin-top:12px"><div class="mini" id="smartSummary">AI Smart Analysis hisoblanmoqda…</div><div class="mini" id="smartAdvice" style="margin-top:8px">—</div></div></div></section>
@@ -796,7 +840,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 <section class="section" id="calendarSection"><div class="card"><div class="section-head"><h2>Economic Calendar</h2><span class="pill">TradingView LIVE · Global</span></div><div id="tvCalendarWidget" style="min-height:700px;border:1px solid var(--line);border-radius:10px;overflow:hidden"></div><div class="mini" style="margin-top:8px">Global economic events, currencies and impact levels are provided directly by TradingView. No user API key is required.</div></div></section>
   <section class="section" id="activeSessionsSection"><div class="card"><div class="section-head"><div><h2>Aktiv seanslar</h2><div class="mini">Hisobingizga kirgan qurilmalar va oxirgi faollik</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="refreshActiveSessions" type="button">↻ Yangilash</button><button class="btn danger" id="revokeOtherSessions" type="button">Boshqa seanslarni yopish</button><button class="btn danger" id="revokeAllSessions" type="button">⛔ Barchasini yopish</button></div></div><div class="grid2" id="activeSessionsGrid"><div class="mini">Seanslar yuklanmoqda…</div></div></div></section>
   <section class="section" id="sessionsSection"><div class="card"><div class="section-head"><h2>Market Sessions</h2><span class="pill" id="sessionClock2">—</span></div><div class="sessions" id="sessions2"></div></div></section>
-  <section class="section admin-only" id="mt5Section"><div class="card"><div class="section-head"><div><h2>MetaTrader 5</h2><div class="mini">Exness DEMO · MT5 EA/Bridge orqali xavfsiz ulanish</div></div><div><span class="pill" id="mt5Status">🔴 DISCONNECTED</span> <button class="btn" id="refreshMT5" type="button">↻ Yangilash</button></div></div><div class="grid2"><div><label class="mini">MT5 Login / Account number</label><input class="input" id="mt5Login" inputmode="numeric" placeholder="12345678" autocomplete="off"><label class="mini">MT5 Server</label><input class="input" id="mt5Server" placeholder="Exness-MT5..." autocomplete="off"><label class="mini">Trading Password</label><input class="input" id="mt5Password" type="password" placeholder="Trading password" autocomplete="off"><div class="mini" style="margin:4px 0 10px;color:var(--muted)">Parol serverda saqlanmaydi. Haqiqiy broker ulanishi MT5 terminalidagi EA/Bridge orqali tasdiqlanadi.</div><button class="btn primary" id="connectMT5" type="button">CONNECT MT5 DEMO</button></div><div><div class="grid2"><div class="metric"><small>Balance</small><b id="mt5Balance">—</b></div><div class="metric"><small>Equity</small><b id="mt5Equity">—</b></div><div class="metric"><small>Free Margin</small><b id="mt5FreeMargin">—</b></div><div class="metric"><small>Open Positions</small><b id="mt5Positions">0</b></div><div class="metric"><small>Heartbeat</small><b id="mt5Heartbeat">—</b><div class="mini" id="mt5LastError">—</div></div></div><div class="signal-box" style="margin-top:10px"><div class="section-head"><h3>AUTO TRADING</h3><span class="pill" id="mt5AutoState">🔴 OFF</span></div><div class="mini" id="mt5AutoInfo">OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.</div><div style="margin-top:10px"><label class="mini">Lot hajmi</label><input class="input" id="mt5Lot" type="number" min="0.01" max="100" step="0.01" value="0.01" placeholder="0.01"><div class="mini">Masalan: 0.01, 0.02, 0.10. Yangi auto orderlar shu lot bilan yuboriladi.</div></div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="saveMT5Lot" type="button">💾 Lotni saqlash</button><button class="btn" id="mt5AutoOn" type="button">🟢 AUTO ON</button><button class="btn danger" id="mt5AutoOff" type="button">🔴 AUTO OFF</button></div></div></div></div><div class="mini" style="margin-top:12px">Faqat DEMO rejim. Order faqat ≥84.99% + Strong Zone + AI tasdiq + MTF moslik shartlari bajarilganda navbatga qo‘yiladi.</div></div></div>
+  <section class="section admin-only" id="mt5Section"><div class="card"><div class="section-head"><div><h2>MetaTrader 5</h2><div class="mini">Exness DEMO · MT5 EA/Bridge orqali xavfsiz ulanish</div></div><div><span class="pill" id="mt5Status">🔴 DISCONNECTED</span> <button class="btn" id="refreshMT5" type="button">↻ Yangilash</button></div></div><div class="grid2"><div><label class="mini">MT5 Login / Account number</label><input class="input" id="mt5Login" inputmode="numeric" placeholder="12345678" autocomplete="off"><label class="mini">MT5 Server</label><input class="input" id="mt5Server" placeholder="Exness-MT5..." autocomplete="off"><label class="mini">Trading Password</label><input class="input" id="mt5Password" type="password" placeholder="Trading password" autocomplete="off"><div class="mini" style="margin:4px 0 10px;color:var(--muted)">Parol serverda saqlanmaydi. Haqiqiy broker ulanishi MT5 terminalidagi EA/Bridge orqali tasdiqlanadi.</div><button class="btn primary" id="connectMT5" type="button">CONNECT MT5 DEMO</button></div><div><div class="grid2"><div class="metric"><small>Balance</small><b id="mt5Balance">—</b></div><div class="metric"><small>Equity</small><b id="mt5Equity">—</b></div><div class="metric"><small>Free Margin</small><b id="mt5FreeMargin">—</b></div><div class="metric"><small>Open Positions</small><b id="mt5Positions">0</b></div><div class="metric"><small>Heartbeat</small><b id="mt5Heartbeat">—</b><div class="mini" id="mt5LastError">—</div></div></div><div class="signal-box" style="margin-top:10px"><div class="section-head"><h3>AUTO TRADING</h3><span class="pill" id="mt5AutoState">🔴 OFF</span></div><div class="mini" id="mt5AutoInfo">OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.</div><div style="margin-top:10px"><label class="mini">Lot hajmi</label><input class="input" id="mt5Lot" type="number" min="0.01" max="100" step="0.01" value="0.01" placeholder="0.01"><div class="mini">Masalan: 0.01, 0.02, 0.10. Yangi auto orderlar shu lot bilan yuboriladi.</div></div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="saveMT5Lot" type="button">💾 Lotni saqlash</button><button class="btn" id="mt5AutoOn" type="button">🟢 AUTO ON</button><button class="btn danger" id="mt5AutoOff" type="button">🔴 AUTO OFF</button></div></div></div></div><div class="signal-box" style="margin-top:10px"><div class="section-head"><div><h3>AUTO TRADE MODE</h3><div class="mini">Bir vaqtning o‘zida XAUUSD + EURUSD</div></div><span class="pill" id="mt5DualState">⚪ SINGLE SYMBOL</span></div><div class="mini" id="mt5DualInfo">Hozir faqat tanlangan sahifadagi symbol auto trade qiladi.</div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="mt5DualOn" type="button">🟢 BOTH SYMBOLS ON</button><button class="btn" id="mt5DualOff" type="button">⚪ SINGLE SYMBOL</button></div></div><div class="mini" style="margin-top:12px">Faqat DEMO rejim. Order faqat ≥84.99% + Strong Zone + AI tasdiq + MTF moslik shartlari bajarilganda navbatga qo‘yiladi.</div></div></div>
 <section class="section" id="historySection">
   <div class="card">
     <div class="section-head"><div><h2>Signal History</h2><div class="mini">Barcha saqlangan signal va trade natijalari · sana bo‘yicha saralash</div></div>
@@ -837,4 +881,657 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 
 <script src="config.js?v=20260908f"></script>
 <script src="app.js?v=20260912-eurusd-nav-fix-2"></script>
+
+<script id="signalx-sidebar-fix-20260913">
+(function(){
+  const ICONS={
+    home:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.8 12 3l9 7.8v9.2a1 1 0 0 1-1 1h-5.2v-6h-5.6v6H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
+    chart:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18V7m4 11v-5m4 5V4m4 14v-8m4 8V6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M3 18h18" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/></svg>',
+    analysis:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18 9 12l4 3 7-9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 20h16" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/></svg>',
+    brain:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5.2A3.2 3.2 0 0 0 5.8 8c-1.6.4-2.5 2-1.9 3.5a3 3 0 0 0 1 5.7A3.1 3.1 0 0 0 8 20.2m7-15A3.2 3.2 0 0 1 18.2 8c1.6.4 2.5 2 1.9 3.5a3 3 0 0 1-1 5.7A3.1 3.1 0 0 1 16 20.2M9 5.2v14.4m6-14.4v14.4M9 9h3m3 0h-3m-3 6h3m3 0h-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>',
+    bolt:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 2 5 13h6l-.8 9L19 11h-6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
+    network:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="2" fill="currentColor"/><circle cx="19" cy="6" r="2" fill="currentColor"/><circle cx="19" cy="18" r="2" fill="currentColor"/><path d="m7 12 10-5M7 12l10 5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>',
+    trade:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 5V3h8v2M8 12h3m2 0h3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+    diamond:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 7-8 11-8-11zM4 10h16M9 4l3 6 3-6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>',
+    trend:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18 10 12l4 3 6-9" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20" cy="6" r="1.5" fill="currentColor"/></svg>',
+    lab:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v6l-5.2 8.7A2 2 0 0 0 5.5 21h13a2 2 0 0 0 1.7-3.3L15 9V3M8 3h8M7 16h10" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    target:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 2v3m0 14v3m10-10h-3M5 12H2" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+    alert:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3.8 18a1.6 1.6 0 0 0 1.4 2.4h13.6a1.6 1.6 0 0 0 1.4-2.4z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 8v5m0 3h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>',
+    time:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    calendar:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7 3v4M17 3v4M3.5 9h17M7 13h3m2 0h3m-8 4h3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>',
+    globe:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3.8 12h16.4M12 3.5c2.3 2.4 3.5 5.2 3.5 8.5s-1.2 6.1-3.5 8.5c-2.3-2.4-3.5-5.2-3.5-8.5S9.7 5.9 12 3.5z" fill="none" stroke="currentColor" stroke-width="1.35"/></svg>',
+    history:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h13M4 12h16M4 17h10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M18 4v6l3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    status:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M12 2v3m0 14v3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>',
+    terminal:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m7 9 3 3-3 3m5 0h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    euro:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6.2A7.3 7.3 0 0 0 14 5c-3.4 0-6.2 2.6-6.2 7s2.8 7 6.2 7a7.3 7.3 0 0 0 4-1.2M5 10h7M5 14h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>'
+  };
+  function installIcons(){
+    document.querySelectorAll('.sidebar .sx-nav-icon[data-icon]').forEach(el=>{
+      const k=el.getAttribute('data-icon');
+      if(ICONS[k]) el.innerHTML=ICONS[k];
+    });
+  }
+  function closeMobile(){
+    document.body.classList.remove('sx-menu-open');
+    document.querySelector('#sxSidebarOverlay')?.classList.remove('sx-show');
+    document.querySelector('#sxMobileMenu')?.setAttribute('aria-expanded','false');
+  }
+  function robustOpen(id, silent){
+    const target=document.getElementById(id);
+    if(!target || !target.classList.contains('section')){
+      if(!silent) window.dispatchEvent(new CustomEvent('signalx:navigation-error',{detail:{id}}));
+      return false;
+    }
+    document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+    target.classList.add('active');
+    document.querySelectorAll('.sidebar .nav button[data-section]').forEach(b=>b.classList.toggle('active',b.dataset.section===id));
+    const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',signalEngineSection:'Signal Engine',aiFallbackSection:'AI Fallback Network',classicSection:'Classic Trade',snrSection:'SNR',trendLineSection:'Auto Trend Line',signalSection:'Signal Lab',ictSection:'ICT Signals',signalsSection:'Signals',mtfSection:'Multi-Timeframe Analysis',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',mt5Section:'MetaTrader 5'};
+    const t=document.getElementById('pageTitle'); if(t) t.textContent=titles[id]||'Trading SaaS';
+    closeMobile();
+    try{ if(typeof window.openSection==='function' && window.openSection!==robustOpen) window.openSection(id); }catch(e){ console.warn('SignalX section loader:',e); }
+    return true;
+  }
+  function bindNav(){
+    document.querySelectorAll('.sidebar .nav button[data-section]').forEach(b=>{
+      if(b.dataset.sxFixedBound==='1') return;
+      b.dataset.sxFixedBound='1';
+      b.addEventListener('click',function(e){
+        e.preventDefault(); e.stopImmediatePropagation();
+        const id=b.dataset.section;
+        const locked=b.classList.contains('admin-only') && typeof window.IS_ADMIN!=='undefined' && !window.IS_ADMIN;
+        if(locked){
+          if(typeof window.showToast==='function') window.showToast('Bu bo‘lim faqat administrator uchun');
+          return;
+        }
+        robustOpen(id);
+      },true);
+    });
+    const mobile=document.getElementById('sxMobileMenu');
+    if(mobile && mobile.dataset.sxFixedBound!=='1'){
+      mobile.dataset.sxFixedBound='1';
+      mobile.addEventListener('click',function(e){e.preventDefault();e.stopPropagation();document.body.classList.toggle('sx-menu-open');document.querySelector('#sxSidebarOverlay')?.classList.toggle('sx-show');mobile.setAttribute('aria-expanded',document.body.classList.contains('sx-menu-open')?'true':'false');},true);
+    }
+    const overlay=document.getElementById('sxSidebarOverlay');
+    if(overlay && overlay.dataset.sxFixedBound!=='1'){overlay.dataset.sxFixedBound='1';overlay.addEventListener('click',closeMobile,true);}
+    document.addEventListener('keydown',e=>{if(e.key==='Escape')closeMobile();},{once:false});
+  }
+  function apply(){installIcons();bindNav();}
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',apply,{once:true}); else apply();
+  window.addEventListener('load',apply);
+})();
+</script>
+<script id="signalx-sidebar-final-navigation-guard-20260913">
+(function(){
+  function ready(){
+    const eur=document.getElementById('eurUsdPageBtn');
+    if(eur && eur.dataset.sxEurBound!=='1'){
+      eur.dataset.sxEurBound='1';
+      eur.addEventListener('click',function(e){e.preventDefault();e.stopImmediatePropagation();window.location.href='eurusd.html';},true);
+    }
+    document.querySelectorAll('.sidebar .nav button[data-section]').forEach(function(btn){
+      const id=btn.dataset.section;
+      btn.setAttribute('aria-label',btn.querySelector('.sx-nav-label')?.textContent.trim() || id);
+      if(!document.getElementById(id)) btn.dataset.navBroken='1';
+    });
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',ready,{once:true}); else ready();
+  window.addEventListener('load',ready,{once:true});
+})();
+</script>
+<style id="signalx-sidebar-hard-fix-20260913">
+.sidebar{overflow:hidden!important}
+.sidebar .nav{overflow-x:hidden!important;overflow-y:auto!important;scrollbar-width:thin!important;padding-right:3px!important}
+.sidebar .nav > button,.sidebar .nav > .nav-external{display:flex!important;align-items:center!important;position:relative!important;isolation:isolate!important;overflow:hidden!important;flex:0 0 auto!important;min-width:0!important}
+.sidebar .sx-nav-icon{display:inline-flex!important;align-items:center!important;justify-content:center!important;flex:0 0 28px!important;width:28px!important;height:28px!important;min-width:28px!important;color:#dff9ff!important;background:linear-gradient(145deg,rgba(8,87,138,.58),rgba(36,43,114,.5))!important}
+.sidebar .sx-nav-icon svg{display:block!important;width:18px!important;height:18px!important;min-width:18px!important;min-height:18px!important;stroke:currentColor!important;fill:none!important;overflow:visible!important}
+.sidebar .sx-nav-divider{flex:0 0 1px!important}
+.sidebar .sx-nav-label{flex:1 1 auto!important;width:auto!important;max-width:100%!important;display:block!important;background:transparent!important;border:0!important;box-shadow:none!important;outline:0!important;line-height:1.1!important;padding:0!important;margin:0!important;color:#f4fbff!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+@media(max-width:1100px){.sidebar .nav > button,.sidebar .nav > .nav-external{width:100%!important;max-width:100%!important}.sidebar .sx-nav-icon{flex-basis:28px!important;width:28px!important;min-width:28px!important}}
+</style>
+
+<style id="signalx-phone-final-fix-20260913">
+/* PHONE ONLY FINAL FIX — desktop styles are untouched */
+@media (max-width: 1100px){
+  html,body{width:100%;max-width:100%;overflow-x:hidden!important;}
+  .app{display:block!important;width:100%!important;min-width:0!important;}
+  .main{width:100%!important;max-width:100%!important;min-width:0!important;margin:0!important;padding:10px!important;}
+  .sidebar{position:fixed!important;left:0!important;top:0!important;bottom:0!important;width:min(300px,84vw)!important;height:100dvh!important;max-height:100dvh!important;
+    transform:translate3d(-110%,0,0)!important;transition:transform .24s ease!important;z-index:10001!important;
+    overflow-y:auto!important;overflow-x:hidden!important;-webkit-overflow-scrolling:touch!important;
+    box-sizing:border-box!important;}
+  body.sx-menu-open .sidebar{transform:translate3d(0,0,0)!important;}
+  .sx-sidebar-overlay{position:fixed!important;inset:0!important;display:block!important;
+    background:rgba(1,5,12,.62)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+    opacity:0!important;pointer-events:none!important;z-index:10000!important;}
+  body.sx-menu-open .sx-sidebar-overlay{opacity:1!important;pointer-events:auto!important;}
+  .nav{display:flex!important;flex-direction:column!important;gap:6px!important;overflow:visible!important;}
+  .nav button,.nav-external-form,.nav-external{width:100%!important;max-width:100%!important;min-width:0!important;flex:0 0 auto!important;}
+  .sidebar .sx-nav-label{font-size:12px!important;line-height:1.2!important;}
+  .sidebar .sx-nav-icon{flex:0 0 30px!important;width:30px!important;height:30px!important;min-width:30px!important;}
+  .sidebar .sx-nav-icon svg{width:18px!important;height:18px!important;}
+  .sidebar-bottom{display:block!important;}
+  .topbar{width:100%!important;min-width:0!important;display:flex!important;align-items:center!important;}
+  .sx-mobile-menu{display:inline-flex!important;flex:0 0 40px!important;width:40px!important;height:40px!important;}
+  .sx-title-wrap{min-width:0!important;overflow:hidden!important;}
+  .topbar h1{max-width:100%!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important;}
+  .tools{min-width:0!important;max-width:100%!important;overflow-x:auto!important;flex-wrap:nowrap!important;}
+  .card,.advanced-card,.metric,.signal-box,.session,.calendar-item,.modal-card,.toast{max-width:100%!important;}
+  img,iframe,canvas,video{max-width:100%;}
+}
+@media (max-width:600px){
+  .sidebar{width:min(292px,86vw)!important;padding:12px 10px!important;}
+  .nav button,.nav-external{min-height:46px!important;padding:8px 9px!important;border-radius:12px!important;}
+  .main{padding:8px!important;}
+  .dashboard{grid-template-columns:1fr!important;}
+  .chart{height:clamp(300px,58vh,390px)!important;}
+  .grid2{grid-template-columns:1fr!important;}
+  .grid4{grid-template-columns:repeat(2,minmax(0,1fr))!important;}
+}
+@media (prefers-reduced-motion:reduce){.sidebar,.sx-sidebar-overlay{transition:none!important;}}
+</style>
+
+<style id="signalx-final-mobile-readability-click-fix-20260913">
+/* FINAL SAFE PATCH: visual/readability/click behavior only. Existing structure, auth roles and data logic stay intact. */
+
+/* Crisp UI typography: remove the heavy glow/stroke that makes prices and headings look blurred. */
+.app .section-head h2,
+.app .section-head h3,
+.app .card h2,
+.app .card h3,
+.app .metric small,
+.app .metric b,
+.app .mini,
+.app .tiny,
+.app .levels .row,
+.app .symbol,
+.app .topbar h1,
+.app .topbar p,
+.app .history-note,
+.app .countdown,
+.app .advanced-card .advanced-head .mini,
+.app .advanced-card .component small,
+.app .advanced-card .component b{
+  -webkit-text-stroke:0!important;
+  text-shadow:0 0 4px rgba(75,205,255,.16)!important;
+  filter:none!important;
+}
+.app .section-head h2,
+.app .section-head h3,
+.app .card h2,
+.app .card h3{
+  background:transparent!important;
+  -webkit-background-clip:border-box!important;
+  background-clip:border-box!important;
+  color:#f4f9ff!important;
+}
+.app .metric b{color:#f7fbff!important}
+.app .metric small{color:#c9d8ea!important}
+.app .piv,.app .wait{ -webkit-text-stroke:0!important; text-shadow:0 0 5px rgba(255,213,79,.30)!important; }
+.app .buy{ -webkit-text-stroke:0!important; text-shadow:0 0 5px rgba(40,242,164,.30)!important; }
+.app .sell{ -webkit-text-stroke:0!important; text-shadow:0 0 5px rgba(255,78,112,.30)!important; }
+
+/* No decorative glass layer is allowed to sit over text or controls. */
+.app .topbar,
+.app .card,
+.app .metric,
+.app .signal-box,
+.app .session,
+.app .advanced-card,
+.app .calendar-item{
+  isolation:isolate!important;
+}
+.app .topbar>* ,
+.app .card>* ,
+.app .metric>* ,
+.app .signal-box>* ,
+.app .session>* ,
+.app .advanced-card>* ,
+.app .calendar-item>*{
+  position:relative;
+  z-index:2;
+}
+.app .topbar .tools,
+.app .topbar .tools>* ,
+.app .topbar .sx-mobile-menu,
+.app .btn,
+.app .tf,
+.app .pill{
+  position:relative!important;
+  z-index:20!important;
+  pointer-events:auto!important;
+}
+
+/* Keep sidebar icons visible above every liquid/glass layer on desktop and mobile. */
+.sidebar .nav>button,
+.sidebar .nav>.nav-external-form button,
+.sidebar .nav>.nav-external{
+  isolation:isolate!important;
+  position:relative!important;
+}
+.sidebar .sx-nav-icon{
+  position:relative!important;
+  z-index:20!important;
+  display:inline-flex!important;
+  visibility:visible!important;
+  opacity:1!important;
+  color:#e9fbff!important;
+  filter:drop-shadow(0 0 5px rgba(68,214,255,.42))!important;
+}
+.sidebar .sx-nav-icon svg{
+  display:block!important;
+  visibility:visible!important;
+  opacity:1!important;
+  width:18px!important;
+  height:18px!important;
+  stroke:currentColor!important;
+  fill:none!important;
+  overflow:visible!important;
+}
+.sidebar .sx-nav-icon svg circle[fill="currentColor"],
+.sidebar .sx-nav-icon svg path[fill="currentColor"]{fill:currentColor!important}
+.sidebar .sx-nav-divider,.sidebar .sx-nav-label{position:relative!important;z-index:20!important}
+
+/* Phone: do not clip content that is wider than the screen. It can be swiped left/right. */
+@media(max-width:1100px){
+  html,body{overflow-x:hidden!important;overscroll-behavior-x:auto!important;}
+  .main{
+    overflow-x:auto!important;
+    overflow-y:visible!important;
+    -webkit-overflow-scrolling:touch!important;
+    scrollbar-width:none!important;
+  }
+  .main::-webkit-scrollbar{display:none!important}
+  .section{width:100%;min-width:0;overflow-x:auto!important;overflow-y:visible!important;-webkit-overflow-scrolling:touch!important;}
+  .section>.card,
+  .section>.advanced-card,
+  .section>.signal-box{
+    overflow-x:auto!important;
+    overflow-y:visible!important;
+    -webkit-overflow-scrolling:touch!important;
+  }
+  .section-head{min-width:0}
+  .tools{touch-action:pan-x!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch!important;}
+  .tfbar{touch-action:pan-x!important;overflow-x:auto!important;-webkit-overflow-scrolling:touch!important;}
+  .history{min-width:850px!important}
+}
+
+/* iPhone-sized screens: keep cards readable without changing the page hierarchy. */
+@media(max-width:600px){
+  .main{overflow-x:auto!important;}
+  .section>.card,.section>.advanced-card,.section>.signal-box{max-width:none!important;}
+  .app .section-head h2,.app .section-head h3{font-size:14px!important;}
+  .app .metric b{font-size:15px!important;}
+}
+
+/* Prevent any transparent fixed layer from stealing taps from the top bar when the drawer is closed. */
+body:not(.sx-menu-open) .sx-sidebar-overlay{pointer-events:none!important;opacity:0!important;}
+body:not(.sx-menu-open) .sidebar{pointer-events:auto!important;}
+</style>
+
+<script id="signalx-final-button-guard-20260913">
+(function(){
+  function bind(){
+    const $=id=>document.getElementById(id);
+    const actions={
+      refreshSignalEngine:()=>typeof loadSignalEngine==='function'&&loadSignalEngine(),
+      refreshAIProviders:()=>typeof loadAIProviders==='function'&&loadAIProviders(),
+      refreshAdvanced:()=>typeof loadAdvancedSignals==='function'&&loadAdvancedSignals(),
+      refreshICT:()=>typeof loadICTSignals==='function'&&loadICTSignals(),
+      refreshClassic:()=>typeof loadClassicTrade==='function'&&loadClassicTrade(window.classicInterval||'5min'),
+      refreshSNR:()=>typeof loadSNR==='function'&&loadSNR(window.snrInterval||'5min'),
+      refreshStats:async()=>{if(typeof loadStats==='function')await loadStats();if(typeof loadHistory==='function')await loadHistory();},
+      refreshSmartAnalysis:()=>typeof loadSmartAnalysis==='function'&&loadSmartAnalysis(),
+      refreshAISignals:()=>typeof loadAISignals==='function'&&loadAISignals(),
+      getAIAnalysis:()=>typeof loadAISignals==='function'&&loadAISignals(),
+      refreshCalendar:()=>typeof loadCalendar==='function'&&loadCalendar(),
+      refreshHistory:async()=>{if(typeof loadStats==='function')await loadStats();if(typeof loadHistory==='function')await loadHistory();},
+      refreshTrendLines:()=>typeof loadTrendLines==='function'&&loadTrendLines(window.trendLineInterval||'5min'),
+      refreshMT5:()=>typeof loadMT5Status==='function'&&loadMT5Status(),
+      refreshActiveSessions:()=>typeof loadActiveSessions==='function'&&loadActiveSessions()
+    };
+    Object.keys(actions).forEach(id=>{
+      const b=$(id); if(!b||b.dataset.sxFinalGuard==='1')return;
+      b.dataset.sxFinalGuard='1';
+      b.addEventListener('click',async function(e){
+        e.preventDefault();e.stopImmediatePropagation();
+        if(b.disabled)return;
+        const old=b.innerHTML;b.disabled=true;
+        try{b.innerHTML='⟳ Ishlanmoqda…';await actions[id]();if(typeof showToast==='function')showToast('Yangilandi');}
+        catch(err){console.error('SignalX button',id,err);if(typeof showToast==='function')showToast(err?.message||'Server xatosi');}
+        finally{b.disabled=false;b.innerHTML=old;}
+      },true);
+    });
+
+    const auth=$('authBtn');
+    if(auth&&auth.dataset.sxFinalGuard!=='auth'){
+      auth.dataset.sxFinalGuard='auth';
+      auth.addEventListener('click',function(e){
+        e.preventDefault();e.stopImmediatePropagation();
+        if(String(auth.textContent||'').trim()==='Chiqish'){
+          if(typeof logoutUser==='function')logoutUser();return;
+        }
+        if(typeof setAuth==='function')setAuth('login');
+        $('authMsg')?.replaceChildren();
+        $('authModal')?.classList.add('show');
+        setTimeout(()=>$('email')?.focus(),50);
+      },true);
+    }
+
+    const reg=$('openRegisterDirect');
+    if(reg&&reg.dataset.sxFinalGuard!=='register'){
+      reg.dataset.sxFinalGuard='register';
+      reg.addEventListener('click',function(e){
+        e.preventDefault();e.stopImmediatePropagation();
+        if(typeof setAuth==='function')setAuth('register');
+        $('authModal')?.classList.add('show');
+        setTimeout(()=>$('email')?.focus(),50);
+      },true);
+    }
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',bind,{once:true});else bind();
+  window.addEventListener('load',bind,{once:true});
+})();
+</script>
+
+
+<style id="signalx-phone-performance-v4-20260913">
+/* PHONE PERFORMANCE V4 — desktop is untouched. Keep visuals, remove GPU-heavy effects on small screens. */
+@media (max-width:1100px){
+  html,body{overscroll-behavior-x:auto!important;}
+  .topbar,.card,.advanced-card,.metric,.signal-box,.session,.calendar-item,.modal-card,.toast,.sidebar{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+  .topbar,.card,.advanced-card,.metric,.signal-box,.session,.calendar-item,.modal-card,.toast{box-shadow:0 8px 24px rgba(0,0,0,.28),inset 0 1px 0 rgba(255,255,255,.045)!important;}
+  .gold-photo-bg{filter:none!important;opacity:.16!important;will-change:auto!important;background-attachment:scroll!important;}
+  body:after{display:none!important;}
+  .signalx-visual-hero:before{display:none!important;}
+  .signalx-visual-hero:after{animation:none!important;}
+  .ai-visual-glow{filter:none!important;opacity:.55!important;}
+  .ai-signal-visual img{filter:none!important;}
+  .sidebar::before,.sidebar::after,.sidebar .nav button::before,.sidebar .nav button::after{animation:none!important;}
+  .title-shimmer{animation:none!important;background-position:center!important;}
+  .section.active,.section.active>.card,.section.active>.advanced-card,.section.active>.signal-box{scrollbar-width:none!important;}
+  .section.active::-webkit-scrollbar,.section.active>.card::-webkit-scrollbar,.section.active>.advanced-card::-webkit-scrollbar,.section.active>.signal-box::-webkit-scrollbar{display:none!important;}
+  .section.active .table-wrap,.section.active .table-scroll,.section.active .history-wrap,.section.active .scroll,.section.active .levels,.section.active .sessions{overflow-x:auto!important;overflow-y:visible!important;max-width:100%!important;-webkit-overflow-scrolling:touch!important;touch-action:pan-x pan-y!important;}
+  .section.active table{min-width:720px!important;}
+  .section.active .history{min-width:850px!important;}
+  .section.active *::before,.section.active *::after{pointer-events:none!important;}
+  .sidebar,.sidebar .nav,.sidebar .nav button,.sidebar .nav-external,.sidebar .sx-nav-icon,.sidebar .sx-nav-label{-webkit-tap-highlight-color:transparent!important;}
+}
+@media (max-width:600px){
+  .main{contain:layout paint!important;}
+  .section.active{contain:layout style!important;}
+  .topbar{box-shadow:0 6px 18px rgba(0,0,0,.24)!important;}
+  .card,.advanced-card,.metric,.signal-box,.session,.calendar-item{box-shadow:0 6px 18px rgba(0,0,0,.22)!important;}
+}
+</style>
+<script id="signalx-phone-performance-v4-20260913">
+(function(){
+  function phonePerf(){
+    if(window.innerWidth>1100)return;
+    document.querySelectorAll('.ai-signal-visual img').forEach(function(img){img.loading='lazy';img.decoding='async';});
+    document.querySelectorAll('.sidebar .sx-nav-icon svg').forEach(function(svg){svg.style.visibility='visible';svg.style.opacity='1';});
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',phonePerf,{once:true});else phonePerf();
+  window.addEventListener('resize',phonePerf,{passive:true});
+})();
+</script>
+
+<style id="signalx-phone-performance-v5">
+/* PHONE LIGHT MODE V5 — desktop >=1101px is untouched. */
+@media (max-width:1100px){
+  html,body{background:#05080d!important;}
+  body:before,body:after{display:none!important;background:none!important;animation:none!important;}
+  .gold-photo-bg{display:none!important;background-image:none!important;opacity:0!important;}
+  .signalx-visual-hero:before,.signalx-visual-hero:after{display:none!important;animation:none!important;}
+  .ai-visual-glow{display:none!important;filter:none!important;}
+  .ai-signal-visual img{display:none!important;filter:none!important;}
+  .sidebar{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;filter:none!important;opacity:1!important;box-shadow:0 8px 24px rgba(0,0,0,.28)!important;}
+  .sidebar::before,.sidebar::after,.sidebar .nav button::before,.sidebar .nav button::after{display:none!important;animation:none!important;filter:none!important;}
+  .sidebar .sx-nav-icon,.sidebar .sx-nav-icon svg{display:inline-flex!important;visibility:visible!important;opacity:1!important;filter:none!important;}
+  .topbar,.card,.advanced-card,.metric,.signal-box,.session,.calendar-item,.modal-card,.toast{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;box-shadow:0 4px 12px rgba(0,0,0,.20)!important;}
+  .title-shimmer{animation:none!important;background:none!important;color:#eef3f8!important;-webkit-text-fill-color:#eef3f8!important;}
+  .section.active *{animation:none!important;transition:none!important;}
+  .section.active *::before,.section.active *::after{pointer-events:none!important;}
+  .sx-sidebar-overlay{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;z-index:9000!important;}
+  .sidebar{z-index:10001!important;isolation:isolate!important;pointer-events:auto!important;}
+  body.sx-menu-open .sidebar{z-index:10002!important;pointer-events:auto!important;}
+  .sidebar .nav,.sidebar .nav button,.sidebar .nav-external-form,.sidebar .nav-external{pointer-events:auto!important;}
+  .section.active .scroll,.section.active .table-wrap,.section.active .table-scroll,.section.active .history-wrap{overflow-x:auto!important;overflow-y:visible!important;max-width:100%!important;-webkit-overflow-scrolling:touch!important;touch-action:pan-x!important;}
+  .section.active .history{min-width:850px!important;}
+  .section.active table{min-width:720px!important;}
+}
+@media (max-width:600px){
+  .app{min-height:100dvh!important;}
+  .main{contain:layout!important;}
+  .card,.advanced-card,.metric,.signal-box,.session,.calendar-item{box-shadow:0 3px 10px rgba(0,0,0,.18)!important;}
+  .chart{height:420px!important;}
+  .topbar{box-shadow:none!important;}
+}
+</style>
+<script id="signalx-phone-performance-v5">
+(function(){
+  if(window.innerWidth>1100) return;
+  function lightPhone(){
+    document.querySelectorAll('.sidebar .sx-nav-icon').forEach(function(el){el.style.visibility='visible';el.style.opacity='1';el.style.pointerEvents='auto';});
+    document.querySelectorAll('.sidebar .sx-nav-icon svg').forEach(function(el){el.style.visibility='visible';el.style.opacity='1';});
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',lightPhone,{once:true}); else lightPhone();
+})();
+</script>
+
+<style id="signalx-mobile-final-stability-20260914">
+/* FINAL MOBILE STABILITY PATCH — desktop >=1101px untouched */
+@media (max-width:1100px){
+  html,body{overflow-x:hidden!important;overscroll-behavior-x:none!important;-webkit-text-size-adjust:100%!important;}
+  .gold-photo-bg{display:none!important;}
+  *,*::before,*::after{animation:none!important;transition:none!important;}
+  .sidebar,.topbar,.card,.advanced-card,.metric,.signal-box,.session,.calendar-item,.modal,.modal-card,.toast{
+    backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+  }
+  .sidebar{position:fixed!important;left:0!important;top:0!important;bottom:0!important;width:min(300px,86vw)!important;height:100dvh!important;
+    transform:translate3d(-110%,0,0)!important;z-index:30001!important;pointer-events:none!important;opacity:1!important;
+    overflow-y:auto!important;overflow-x:hidden!important;-webkit-overflow-scrolling:touch!important;
+    background:rgba(5,10,18,.98)!important;box-shadow:8px 0 24px rgba(0,0,0,.45)!important;}
+  body.sx-menu-open .sidebar{transform:translate3d(0,0,0)!important;pointer-events:auto!important;}
+  .sx-sidebar-overlay{position:fixed!important;inset:0!important;z-index:30000!important;display:block!important;
+    background:rgba(0,0,0,.55)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;
+    opacity:0!important;pointer-events:none!important;}
+  body.sx-menu-open .sx-sidebar-overlay{opacity:1!important;pointer-events:auto!important;}
+  .sidebar .nav{display:flex!important;flex-direction:column!important;overflow-y:auto!important;overflow-x:hidden!important;}
+  .sidebar .nav button,.sidebar .nav-external,.sidebar .nav-external-form button{pointer-events:auto!important;touch-action:manipulation!important;}
+  .sidebar .sx-nav-icon,.sidebar .sx-nav-icon svg{visibility:visible!important;opacity:1!important;display:inline-flex!important;filter:none!important;}
+  .sidebar .sx-nav-icon svg{display:block!important;}
+  .main{width:100%!important;max-width:100%!important;min-width:0!important;overflow-x:visible!important;}
+  .section.active{width:100%!important;min-width:0!important;overflow:visible!important;}
+  .section.active .scroll,.section.active .history-wrap,.section.active .table-wrap,.section.active .table-scroll{
+    display:block!important;max-width:100%!important;overflow-x:auto!important;overflow-y:hidden!important;
+    -webkit-overflow-scrolling:touch!important;touch-action:pan-x!important;}
+  .section.active .scroll>*,.section.active .history-wrap>*,.section.active .table-wrap>*,.section.active .table-scroll>*{max-width:none!important;}
+  .section.active table,.section.active .history{min-width:max-content!important;width:max-content!important;}
+  .tfbar,.tools{overflow-x:auto!important;overflow-y:hidden!important;white-space:nowrap!important;-webkit-overflow-scrolling:touch!important;touch-action:pan-x!important;}
+  .chart{height:330px!important;}
+  .ai-signal-layout{display:block!important;}
+  .ai-signal-visual{display:none!important;}
+  .overview-ai-card{padding:16px!important;}
+  .overview-ai-card .ai-card-title h3{font-size:21px!important;line-height:1.15!important;}
+  .overview-ai-card .ai-card-title .mini{font-size:15px!important;line-height:1.4!important;}
+  .overview-ai-card .ai-signal-badge{font-size:25px!important;}
+  .overview-ai-card .ai-symbol-name{font-size:18px!important;}
+  .overview-ai-card .ai-price-grid small{font-size:13px!important;}
+  .overview-ai-card .ai-price-grid b{font-size:20px!important;}
+  .overview-ai-card .ai-confidence-row{font-size:15px!important;}
+  .overview-ai-card .ai-confidence-row b{font-size:22px!important;}
+  .overview-ai-card .ai-extra-row{font-size:14px!important;}
+  .overview-ai-card .ai-sig-reason{font-size:14px!important;line-height:1.55!important;}
+  .overview-ai-card .ai-analysis-btn{font-size:16px!important;min-height:46px!important;width:100%!important;}
+}
+@media(max-width:600px){
+  .sidebar{width:min(292px,88vw)!important;}
+  .main{padding:8px!important;}
+  .topbar{min-width:0!important;}
+  .chart{height:290px!important;}
+  .overview-ai-card .ai-price-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px!important;}
+  .overview-ai-card .ai-price-grid>div{min-width:0!important;padding:9px!important;}
+  .overview-ai-card .ai-signal-layout{min-width:0!important;}
+}
+</style>
+
 </body></html>
+
+<style id="signalx-phone-final-v2-20260913">
+/* PHONE-ONLY V2 PATCH — desktop (>=1101px) is intentionally untouched. */
+@media (max-width:1100px){
+  /* Drawer must always sit above the dimmer. */
+  .sx-sidebar-overlay{
+    z-index:9000!important;
+    background:rgba(1,5,12,.62)!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+  }
+  .sidebar{
+    z-index:10000!important;
+    isolation:isolate!important;
+    opacity:1!important;
+    filter:none!important;
+    backdrop-filter:none!important;
+    -webkit-backdrop-filter:none!important;
+    pointer-events:auto!important;
+  }
+  body.sx-menu-open .sidebar{z-index:10001!important;pointer-events:auto!important;}
+  .sidebar::before,.sidebar::after{pointer-events:none!important;}
+  .sidebar .nav,
+  .sidebar .nav > button,
+  .sidebar .nav > .nav-external-form,
+  .sidebar .nav > .nav-external,
+  .sidebar .sx-nav-icon,
+  .sidebar .sx-nav-divider,
+  .sidebar .sx-nav-label{pointer-events:auto!important;}
+  .sidebar .nav > button,
+  .sidebar .nav > .nav-external-form button,
+  .sidebar .nav > .nav-external{
+    opacity:1!important;
+    filter:none!important;
+  }
+  .sidebar .sx-nav-icon,
+  .sidebar .sx-nav-icon svg{visibility:visible!important;opacity:1!important;filter:none!important;}
+
+  /* One horizontal touch surface for content that is wider than an iPhone. */
+  html,body{overflow-x:hidden!important;}
+  .main{
+    width:100%!important;min-width:0!important;
+    overflow-x:visible!important;
+    touch-action:pan-y!important;
+  }
+  .section.active{
+    width:100%!important;min-width:0!important;
+    overflow-x:auto!important;overflow-y:visible!important;
+    -webkit-overflow-scrolling:touch!important;
+    touch-action:pan-x pan-y!important;
+    overscroll-behavior-x:contain!important;
+    scrollbar-width:none!important;
+  }
+  .section.active::-webkit-scrollbar{display:none!important;}
+  .section.active > *{max-width:none!important;}
+  .section.active .scroll,
+  .section.active .history-wrap,
+  .section.active .table-wrap,
+  .section.active .table-scroll,
+  .section.active .levels,
+  .section.active .sessions,
+  .section.active .grid2,
+  .section.active .grid4{
+    touch-action:pan-x pan-y!important;
+  }
+  .history{min-width:850px!important;width:850px!important;}
+  .section.active .history-wrap,.section.active .scroll{overflow-x:auto!important;-webkit-overflow-scrolling:touch!important;}
+
+  /* Do not let decorative glass pseudo-layers intercept or blur text. */
+  .section.active .card::before,
+  .section.active .card::after,
+  .section.active .advanced-card::before,
+  .section.active .advanced-card::after,
+  .section.active .signal-box::before,
+  .section.active .signal-box::after,
+  .section.active .session::before,
+  .section.active .session::after{pointer-events:none!important;}
+}
+</style>
+<script id="signalx-phone-v2-guard-20260913">
+(function(){
+  function fixPhone(){
+    if(window.innerWidth>1100)return;
+    const sidebar=document.querySelector('.sidebar');
+    const overlay=document.getElementById('sxSidebarOverlay');
+    if(sidebar){sidebar.style.zIndex='10001';sidebar.style.pointerEvents='auto';}
+    if(overlay && !document.body.classList.contains('sx-menu-open')){
+      overlay.style.pointerEvents='none';overlay.style.opacity='0';
+    }
+    document.querySelectorAll('.sidebar .sx-nav-icon[data-icon]').forEach(function(el){
+      el.style.visibility='visible';el.style.opacity='1';
+      const svg=el.querySelector('svg'); if(svg){svg.style.visibility='visible';svg.style.opacity='1';}
+    });
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',fixPhone,{once:true});else fixPhone();
+  window.addEventListener('resize',fixPhone,{passive:true});
+  window.addEventListener('orientationchange',function(){setTimeout(fixPhone,80);},{passive:true});
+})();
+</script>
+
+<style id="signalx-phone-final-clean-20260914">
+/* FINAL PHONE CLEANUP — desktop >=1101px intentionally untouched. */
+@media (max-width:1100px){
+  /* The dimmer is not needed on phones and must never block taps or darken the UI. */
+  #sxSidebarOverlay,.sx-sidebar-overlay{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+  html,body{overflow-x:hidden!important;overflow-y:auto!important;-webkit-text-size-adjust:100%!important;}
+  .app{display:block!important;min-width:0!important;}
+  .sidebar{position:fixed!important;left:0!important;top:0!important;bottom:0!important;width:min(300px,88vw)!important;height:100dvh!important;max-height:100dvh!important;transform:translate3d(-105%,0,0)!important;z-index:50000!important;pointer-events:none!important;opacity:1!important;filter:none!important;overflow-y:auto!important;overflow-x:hidden!important;background:rgba(5,10,18,.99)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+  body.sx-menu-open .sidebar{transform:translate3d(0,0,0)!important;pointer-events:auto!important;z-index:50000!important;}
+  .sidebar::before,.sidebar::after,.sidebar .nav button::before,.sidebar .nav button::after{display:none!important;content:none!important;animation:none!important;filter:none!important;}
+  .sidebar .nav{position:relative!important;z-index:2!important;display:flex!important;flex-direction:column!important;overflow-y:auto!important;overflow-x:hidden!important;}
+  .sidebar .nav button,.sidebar .nav-external,.sidebar .nav-external-form button{position:relative!important;z-index:3!important;display:flex!important;align-items:center!important;pointer-events:auto!important;touch-action:manipulation!important;opacity:1!important;filter:none!important;}
+  .sidebar .sx-nav-icon,.sidebar .sx-nav-icon svg{display:inline-flex!important;visibility:visible!important;opacity:1!important;filter:none!important;pointer-events:none!important;}
+  .sidebar .sx-nav-label,.sidebar .sx-nav-divider{visibility:visible!important;opacity:1!important;pointer-events:none!important;}
+  /* Horizontal scrolling belongs to the component that is actually wider than the phone. */
+  .main{width:100%!important;min-width:0!important;max-width:none!important;overflow-x:hidden!important;}
+  .section.active{width:100%!important;min-width:0!important;max-width:none!important;overflow:visible!important;}
+  .section.active>.card,.section.active>.advanced-card,.section.active>.signal-box{max-width:100%!important;overflow-x:auto!important;overflow-y:visible!important;-webkit-overflow-scrolling:touch!important;touch-action:pan-x pan-y!important;}
+  .section.active .scroll,.section.active .history-wrap,.section.active .table-wrap,.section.active .table-scroll,.section.active .levels,.section.active .sessions,.section.active .grid2,.section.active .grid4{max-width:100%!important;overflow-x:auto!important;overflow-y:visible!important;-webkit-overflow-scrolling:touch!important;touch-action:pan-x!important;}
+  .section.active table,.section.active .history{width:max-content!important;min-width:max-content!important;}
+  .section.active *::before,.section.active *::after{pointer-events:none!important;}
+  /* Keep the overview AI card readable on small screens. */
+  .overview-ai-card .ai-card-title h3,.overview-ai-card .ai-card-title h3{font-size:25px!important;line-height:1.15!important;font-weight:900!important;}
+  .overview-ai-card .ai-card-title .mini,.overview-ai-card .ai-card-title .mini{font-size:17px!important;line-height:1.45!important;font-weight:700!important;}
+  .overview-ai-card .ai-signal-badge{font-size:31px!important;line-height:1.05!important;font-weight:950!important;}
+  .overview-ai-card .ai-symbol-name{font-size:21px!important;font-weight:900!important;}
+  .overview-ai-card .ai-price-grid small{font-size:15px!important;font-weight:700!important;}
+  .overview-ai-card .ai-price-grid b{font-size:23px!important;font-weight:900!important;}
+  .overview-ai-card .ai-confidence-row{font-size:17px!important;font-weight:800!important;}
+  .overview-ai-card .ai-confidence-row b,.overview-ai-card .ai-extra-row b{font-size:24px!important;font-weight:900!important;}
+  .overview-ai-card .ai-extra-row{font-size:16px!important;font-weight:700!important;}
+  .overview-ai-card .ai-sig-reason{font-size:16px!important;line-height:1.55!important;font-weight:600!important;}
+  .overview-ai-card .ai-analysis-btn{font-size:17px!important;min-height:50px!important;font-weight:900!important;width:100%!important;}
+}
+@media (max-width:600px){
+  .sidebar{width:min(294px,89vw)!important;}
+  .main{padding:8px!important;}
+  .overview-ai-card{padding:17px!important;}
+  .overview-ai-card .ai-price-grid{grid-template-columns:repeat(2,minmax(130px,1fr))!important;gap:10px!important;}
+  .overview-ai-card .ai-price-grid>div{padding:10px!important;}
+  .overview-ai-card .ai-card-title h3{font-size:24px!important;}
+  .overview-ai-card .ai-card-title .mini{font-size:16px!important;}
+  .overview-ai-card .ai-signal-badge{font-size:30px!important;}
+  .overview-ai-card .ai-price-grid b{font-size:22px!important;}
+  .overview-ai-card .ai-confidence-row b{font-size:23px!important;}
+}
+</style>
+<script id="signalx-phone-final-clean-20260914">
+(function(){
+  function phoneFix(){
+    if(window.innerWidth>1100)return;
+    var ov=document.getElementById('sxSidebarOverlay');
+    if(ov){ov.style.display='none';ov.style.pointerEvents='none';ov.style.opacity='0';}
+    document.querySelectorAll('.sidebar .sx-nav-icon,.sidebar .sx-nav-icon svg').forEach(function(el){el.style.visibility='visible';el.style.opacity='1';});
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',phoneFix,{once:true});else phoneFix();
+  window.addEventListener('resize',phoneFix,{passive:true});
+})();
+</script>
