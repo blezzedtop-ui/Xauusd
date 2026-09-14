@@ -5,7 +5,7 @@
 CTrade trade;
 
 input string ApiBase="https://signalx.asia";
-input string BridgeToken="";
+input string BridgeToken="SignalX_MT5_2026_9Kx7P2mQ";
 input int PollSeconds=2;
 input int StateSeconds=5;
 input double DefaultLot=0.01;
@@ -62,7 +62,7 @@ bool EnsureSymbol(string symbol){
    return (SymbolInfoDouble(symbol,SYMBOL_BID)>0 || SymbolInfoDouble(symbol,SYMBOL_ASK)>0);
 }
 
-void AppendMarketState(string &body, string symbol, ENUM_TIMEFRAMES &tfs[], int n, bool &firstMarket){
+void AppendMarketState(string &body, string symbol, ENUM_TIMEFRAMES tfs[], int n, bool &firstMarket){
    if(!EnsureSymbol(symbol)) return;
    if(!firstMarket) body += ","; firstMarket=false;
    body += "\"" + JsonEscape(symbol) + "\":{";
@@ -130,6 +130,67 @@ double ExtractFirstTP(string json,int from_pos){
    return StringToDouble(StringSubstr(json,s,e-s));
 }
 
+double NormalizePrice(string symbol,double price){
+   int digits=(int)SymbolInfoInteger(symbol,SYMBOL_DIGITS);
+   return NormalizeDouble(price,digits);
+}
+
+double MinStopDistance(string symbol){
+   long stops=(long)SymbolInfoInteger(symbol,SYMBOL_TRADE_STOPS_LEVEL);
+   long freeze=(long)SymbolInfoInteger(symbol,SYMBOL_TRADE_FREEZE_LEVEL);
+   long level=MathMax(stops,freeze);
+   double point=SymbolInfoDouble(symbol,SYMBOL_POINT);
+   double spread=MathAbs(SymbolInfoDouble(symbol,SYMBOL_ASK)-SymbolInfoDouble(symbol,SYMBOL_BID));
+   // Add a small safety buffer above the broker's minimum distance.
+   return MathMax(point*(double)(level+5),spread*1.5);
+}
+
+bool PrepareStops(string symbol,string dir,double &sl,double &tp){
+   double bid=SymbolInfoDouble(symbol,SYMBOL_BID);
+   double ask=SymbolInfoDouble(symbol,SYMBOL_ASK);
+   if(bid<=0 || ask<=0) return false;
+   double entry=(dir=="BUY" ? ask : bid);
+   double minDist=MinStopDistance(symbol);
+   double risk=MathAbs(entry-sl);
+   double target=MathAbs(tp-entry);
+   // Some signal modules can emit levels from the wrong symbol/side. Keep the
+   // signal when valid; otherwise rebuild a conservative market-relative SL/TP.
+   bool valid=false;
+   if(dir=="BUY") valid=(sl>0 && tp>0 && sl<entry-minDist && tp>entry+minDist);
+   else if(dir=="SELL") valid=(sl>0 && tp>0 && sl>entry+minDist && tp<entry-minDist);
+   if(!valid){
+      double point=SymbolInfoDouble(symbol,SYMBOL_POINT);
+      double fallback=MathMax(entry*0.0025,minDist*3.0);
+      if(point>0) fallback=MathMax(fallback,point*20.0);
+      risk=fallback;
+      if(dir=="BUY"){
+         sl=entry-risk;
+         tp=entry-risk*2.0;
+      }else{
+         sl=entry+risk;
+         tp=entry-risk*2.0;
+      }
+      Print("[MT5 BRIDGE] Invalid signal stops for ",symbol," ",dir," -> rebuilt SL/TP. Entry=",DoubleToString(entry,8));
+   }else{
+      // Revalidate the actual broker-side distance at execution time.
+      if(risk<minDist) risk=minDist*1.2;
+      if(target<minDist) target=minDist*1.2;
+      if(dir=="BUY"){
+         sl=MathMin(sl,entry-minDist);
+         tp=MathMax(tp,entry+minDist);
+      }else{
+         sl=MathMax(sl,entry+minDist);
+         tp=MathMin(tp,entry-minDist);
+      }
+   }
+   sl=NormalizePrice(symbol,sl);
+   tp=NormalizePrice(symbol,tp);
+   // Final directional check after rounding.
+   if(dir=="BUY") return (sl<entry-minDist && tp>entry+minDist);
+   if(dir=="SELL") return (sl>entry+minDist && tp<entry-minDist);
+   return false;
+}
+
 void SendReport(string order_id,string action,string status,string symbol,string message){
    string rb=StringFormat("{\"action\":\"%s\",\"ticket\":\"%s\",\"symbol\":\"%s\",\"status\":\"%s\",\"message\":\"%s\"}",
       JsonEscape(action),JsonEscape(order_id),JsonEscape(symbol),JsonEscape(status),JsonEscape(message));
@@ -171,8 +232,12 @@ void OnTimer(){
       } else {
          trade.SetAsyncMode(false);
          string comment="SignalX "+(source==""?"AUTO":source);
-         if(dir=="BUY") ok=trade.Buy(vol,symbol,0,sl,tp,comment);
-         else if(dir=="SELL") ok=trade.Sell(vol,symbol,0,sl,tp,comment);
+         if((dir=="BUY" || dir=="SELL") && PrepareStops(symbol,dir,sl,tp)){
+            if(dir=="BUY") ok=trade.Buy(vol,symbol,0,sl,tp,comment);
+            else if(dir=="SELL") ok=trade.Sell(vol,symbol,0,sl,tp,comment);
+         }else{
+            Print("[MT5 BRIDGE] Invalid direction/stops; order skipped symbol=",symbol," dir=",dir);
+         }
          string desc=trade.ResultRetcodeDescription();
          if(ok) SendReport(order_id,dir,"ORDER_SENT",symbol,desc);
          else SendReport(order_id,dir,"ORDER_FAILED",symbol,desc);

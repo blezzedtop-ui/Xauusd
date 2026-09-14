@@ -3668,9 +3668,12 @@ def _mt5_is_connected_now() -> bool:
     return age is not None and age <= MT5_HEARTBEAT_TIMEOUT
 
 def _mt5_market_key(symbol: str | None) -> str:
+    # Normalize broker-specific symbols (XAUUSDm/XAUUSDc/XAUUSDr, EURUSDm, etc.)
+    # to the canonical symbols used by the web UI and signal engine.
     key = clean_symbol(symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL)
-    if key in {"XAUUSD", "XAU/USD"}: return "XAU/USD"
-    if key in {"EURUSD", "EUR/USD"}: return "EUR/USD"
+    compact = key.replace("/", "")
+    if compact.startswith("XAUUSD"): return "XAU/USD"
+    if compact.startswith("EURUSD"): return "EUR/USD"
     return key
 
 def _mt5_market_state(symbol: str | None) -> dict[str, Any]:
@@ -4112,8 +4115,28 @@ async def mt5_state(body: MT5StateBody, token: str = Query(...)) -> dict[str, An
             }
             MT5_BRIDGE_STATE.setdefault("markets", {})[key] = snapshot
             saved.append(key)
-        # Keep global heartbeat fresh while preserving the per-symbol snapshots.
-        MT5_BRIDGE_STATE.update({"connected": bool(body.connected), "login": body.login or None, "server": body.server or None, "last_seen": now_iso, "last_error": body.error or "", "symbol": saved[0] if saved else body.symbol or None})
+        # Keep the global heartbeat AND account metrics fresh. The UI can request
+        # either canonical XAU/USD or EUR/USD, so the canonical market snapshot
+        # must be available through _mt5_market_state().
+        primary = None
+        if "XAU/USD" in (MT5_BRIDGE_STATE.get("markets") or {}):
+            primary = MT5_BRIDGE_STATE["markets"]["XAU/USD"]
+        elif saved:
+            primary = MT5_BRIDGE_STATE["markets"].get(saved[0])
+        primary = primary or {}
+        MT5_BRIDGE_STATE.update({
+            "connected": bool(body.connected),
+            "login": body.login or primary.get("account"),
+            "server": body.server or primary.get("server"),
+            "balance": primary.get("balance", body.balance),
+            "equity": primary.get("equity", body.equity),
+            "free_margin": primary.get("free_margin", body.free_margin),
+            "margin": primary.get("margin", body.margin),
+            "positions": primary.get("positions", body.positions),
+            "last_seen": now_iso,
+            "last_error": body.error or primary.get("last_error", ""),
+            "symbol": saved[0] if saved else body.symbol or None,
+        })
         return {"ok": True, "symbols": saved}
     key = _mt5_market_key(body.symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL)
     snapshot = {"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": now_iso, "last_error": body.error or "", "symbol": key, "candles": body.candles or {}}
