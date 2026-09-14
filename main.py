@@ -316,6 +316,7 @@ TRADINGVIEW_TIMEOUT = float(os.getenv("TRADINGVIEW_TIMEOUT", "10"))
 MT5_BRIDGE_TOKEN = os.getenv("MT5_BRIDGE_TOKEN", "change-this-mt5-bridge-token").strip()
 MT5_AUTO_TRADING = os.getenv("MT5_AUTO_TRADING", "true").lower() == "true"
 MT5_AUTO_DUAL = os.getenv("MT5_AUTO_DUAL", "true").lower() == "true"
+AUTOTRADE_INTERNAL_TOKEN = os.getenv("AUTOTRADE_INTERNAL_TOKEN", "").strip() or secrets.token_urlsafe(32)
 MT5_LOT_SIZE = float(os.getenv("MT5_DEFAULT_LOT", "0.01"))
 MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "symbol": None, "candles": {}, "markets": {}}
 MT5_ORDER_QUEUE: list[dict[str, Any]] = []
@@ -658,6 +659,13 @@ def current_user(authorization: str | None, session: Session) -> User:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Authentication required")
     raw = authorization.split(" ", 1)[1].strip()
+    if secrets.compare_digest(raw, AUTOTRADE_INTERNAL_TOKEN):
+        user = session.scalar(select(User).where(User.role == "admin").order_by(User.id.asc()))
+        if user is None:
+            user = session.scalar(select(User).order_by(User.id.asc()))
+        if user is None:
+            raise HTTPException(status_code=503, detail="No user exists for internal auto-trade worker")
+        return user
     row = session.scalar(select(SessionToken).where(SessionToken.token_hash == token_hash(raw)))
     if not row or getattr(row, "is_revoked", False):
         raise HTTPException(status_code=401, detail="Invalid or expired session")
@@ -3520,6 +3528,55 @@ def _normalize_auto_trade_levels(item: dict[str, Any], candles: list[dict[str, A
         if not tps or not all(v<entry for v in tps): tps=[entry-risk*1.5,entry-risk*2.5]; repaired=True
     return round(entry,4),round(sl,4),[round(v,4) for v in tps[:2]],repaired
 
+
+def _autotrade_source_excluded(source: str) -> bool:
+    normalized = re.sub(r"[\s_\-/]+", " ", str(source or "").strip().lower()).strip()
+    return normalized in {"book + openai", "book openai", "book/openai", "book-openai"} or ("book" in normalized and "openai" in normalized)
+
+
+def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction: str,
+                           entry: float, sl: float, tp: list[float], volume: float,
+                           confidence: float | None, candle_time: str) -> dict[str, Any] | None:
+    """Put one eligible signal into the in-memory MT5 queue exactly once.
+
+    The queue key is symbol/source/timeframe/live-candle/direction. Book + OpenAI is
+    explicitly excluded. All values are copied from the freshly validated signal.
+    """
+    if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
+        return None
+    market = _mt5_market_key(symbol)
+    if market not in {"XAU/USD", "EUR/USD"}:
+        return None
+    key = (market, source.strip(), interval, str(candle_time), direction.upper())
+    for q in MT5_ORDER_QUEUE:
+        qkey = (_mt5_market_key(q.get("symbol") or q.get("market")),
+                str(q.get("source") or "").strip(), str(q.get("interval") or ""),
+                str(q.get("candle_time") or ""), str(q.get("direction") or "").upper())
+        if qkey == key:
+            return q
+    order_id = secrets.token_hex(8)
+    order = {
+        "id": order_id,
+        "symbol": market,
+        "market": market,
+        "interval": interval,
+        "direction": direction.upper(),
+        "entry": float(entry),
+        "sl": float(sl),
+        "tp": [float(x) for x in tp[:2]],
+        "volume": float(volume or MT5_LOT_SIZE),
+        "source": source.strip(),
+        "confidence": float(confidence or 0),
+        "candle_time": str(candle_time),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "claimed": False,
+        "status": "QUEUED",
+    }
+    MT5_ORDER_ATTEMPTS[order_id] = 0
+    MT5_ORDER_QUEUE.append(order)
+    print(f"[AUTO TRADE QUEUE] QUEUED market={market} source={source} tf={interval} dir={direction} entry={entry} sl={sl} tp={tp}")
+    return order
+
 @app.post("/api/v1/signals/auto-record")
 async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     """Forward every BUY/SELL signal source except Book + OpenAI into the MT5 queue.
@@ -3675,36 +3732,13 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 session.add(row)
                 created_history.append({"source": source, "symbol": key, "interval": candidate["interval"], "direction": direction, "confidence": confidence})
 
-            if MT5_AUTO_TRADING:
-                queue_fingerprint = (key, source, candidate["interval"], candle_time, direction)
-                already_queued = any(
-                    (str(q.get("symbol")) == key and
-                     str(q.get("source")) == source and
-                     str(q.get("interval")) == candidate["interval"] and
-                     str(q.get("candle_time")) == candle_time and
-                     str(q.get("direction")) == direction)
-                    for q in MT5_ORDER_QUEUE
-                )
-                if not already_queued:
-                    order_id = secrets.token_hex(8)
-                    MT5_ORDER_ATTEMPTS[order_id] = 0
-                    order = {
-                        "id": order_id,
-                        "symbol": key,
-                        "market": _mt5_market_key(key),
-                        "interval": candidate["interval"],
-                        "direction": direction,
-                        "entry": float(entry),
-                        "sl": float(sl),
-                        "tp": [float(x) for x in tp],
-                        "volume": MT5_LOT_SIZE,
-                        "source": source,
-                        "confidence": confidence,
-                        "candle_time": candle_time,
-                        "created_at": now.isoformat(),
-                    }
-                    MT5_ORDER_QUEUE.append(order)
-                    queued.append(order)
+            order = _queue_autotrade_order(
+                symbol=key, source=source, interval=candidate["interval"], direction=direction,
+                entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
+                confidence=confidence, candle_time=candle_time,
+            )
+            if order is not None and order not in queued:
+                queued.append(order)
 
     await asyncio.gather(*(process_symbol(k) for k in symbols))
     if created_history:
@@ -3721,6 +3755,38 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         "excluded_sources": ["Book + OpenAI"],
         "items": created_history,
     }
+
+
+_AUTOTRADE_WORKER_STARTED = False
+
+async def _autotrade_worker() -> None:
+    """Generate live BUY/SELL signals into the MT5 queue without browser login."""
+    global _AUTOTRADE_WORKER_STARTED
+    if _AUTOTRADE_WORKER_STARTED:
+        return
+    _AUTOTRADE_WORKER_STARTED = True
+    await asyncio.sleep(3)
+    while True:
+        session = SessionLocal()
+        try:
+            if MT5_AUTO_TRADING and MT5_AUTO_DUAL and AUTO_ENTRY_ENABLED:
+                result = await auto_record_signals(
+                    symbol="XAU/USD", interval=DEFAULT_INTERVAL,
+                    authorization=f"Bearer {AUTOTRADE_INTERNAL_TOKEN}", session=session
+                )
+                queued_count = int(result.get("queued") or 0)
+                print(f"[AUTO TRADE WORKER] symbols={result.get('symbols')} queued={queued_count} queue_total={len(MT5_ORDER_QUEUE)}")
+        except Exception as exc:
+            print(f"[AUTO TRADE WORKER] error={exc}")
+        finally:
+            session.close()
+        await asyncio.sleep(max(5, int(os.getenv("AUTOTRADE_WORKER_SECONDS", "15"))))
+
+
+@app.on_event("startup")
+async def _start_autotrade_worker() -> None:
+    if MT5_AUTO_TRADING and MT5_AUTO_DUAL and AUTO_ENTRY_ENABLED:
+        asyncio.create_task(_autotrade_worker())
 
 
 MT5_CANDLE_MAX_AGE = int(os.getenv("MT5_CANDLE_MAX_AGE", "20"))
@@ -3956,8 +4022,6 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         SignalHistory.candle_time == live_candle_time
     ).order_by(SignalHistory.id.desc())
     existing = session.scalar(q)
-    if existing:
-        return {"saved": False, "duplicate": True, "id": existing.id}
 
     payload = dict(body.payload or {})
     setup_strength, setup_grade, strong_setup = _setup_strength_from_payload(payload, body.confidence)
@@ -3982,9 +4046,23 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         outcome="OPEN", created_at=datetime.now(timezone.utc),
         source=source, candle_time=live_candle_time
     )
-    session.add(row); session.commit(); session.refresh(row)
+    if existing is None:
+        session.add(row); session.commit(); session.refresh(row)
+    else:
+        session.flush()
+
+    order = _queue_autotrade_order(
+        symbol=symbol, source=source, interval=interval, direction=direction,
+        entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
+        confidence=body.confidence, candle_time=live_candle_time,
+    )
+    if existing is not None:
+        return {"saved": False, "duplicate": True, "id": existing.id, "queued": bool(order),
+                "source": source, "symbol": symbol, "entry": entry, "stop_loss": sl,
+                "take_profit": tp, "candle_time": live_candle_time}
     return {"saved": True, "id": row.id, "source": source, "outcome": row.outcome,
-            "symbol": symbol, "entry": entry, "stop_loss": sl, "take_profit": tp, "candle_time": live_candle_time}
+            "symbol": symbol, "entry": entry, "stop_loss": sl, "take_profit": tp,
+            "candle_time": live_candle_time, "queued": bool(order)}
 
 @app.get("/api/v1/signals/analytics")
 async def signal_analytics(period: str = Query("all"), date: str | None = Query(None), symbol: str = Query(""), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
