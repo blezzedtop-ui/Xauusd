@@ -327,7 +327,15 @@ TV_CANDLE_LOCKS: dict[tuple[str,str], asyncio.Lock] = {}
 TV_CANDLE_LOCKS_GUARD = asyncio.Lock()
 NODE_QUOTE_TIMEOUT = float(os.getenv("NODE_QUOTE_TIMEOUT", "2.5"))
 MARKET_TIMEZONE = os.getenv("MARKET_TIMEZONE", "UTC").strip() or "UTC"
-SECRET_KEY = os.getenv("SECRET_KEY", "change-me-in-production").strip()
+# SECRET_KEY is automatically generated when Railway does not provide one.
+# A manually configured Railway SECRET_KEY always takes precedence.
+# The generated key is unique for each running instance/process and is never sent to the frontend.
+_configured_secret_key = os.getenv("SECRET_KEY", "").strip()
+if _configured_secret_key:
+    SECRET_KEY = _configured_secret_key
+else:
+    SECRET_KEY = secrets.token_urlsafe(64)
+    print("[SignalX security] SECRET_KEY not set; generated a unique runtime key automatically.")
 SESSION_HOURS = int(os.getenv("SESSION_HOURS", "168"))
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./trading_saas.db").strip()
 
@@ -515,16 +523,48 @@ def initialize_database() -> None:
     ensure_admin_user()
 
 
-app = FastAPI(title=APP_TITLE, version="19.0.0")
-origins_raw = os.getenv("FRONTEND_ORIGINS", "*")
-origins = [x.strip() for x in origins_raw.split(",") if x.strip()] or ["*"]
+# Production hardening: keep the algorithm server-side and expose only derived results.
+# The public browser never receives Python source or provider secrets.
+ENABLE_API_DOCS = os.getenv("ENABLE_API_DOCS", "false").strip().lower() == "true"
+app = FastAPI(
+    title=APP_TITLE,
+    version="19.0.0",
+    docs_url="/docs" if ENABLE_API_DOCS else None,
+    redoc_url="/redoc" if ENABLE_API_DOCS else None,
+    openapi_url="/openapi.json" if ENABLE_API_DOCS else None,
+)
+
+# Default to same-site production origins. FRONTEND_ORIGINS can explicitly add approved
+# development/staging origins without reopening CORS to the world.
+origins_raw = os.getenv(
+    "FRONTEND_ORIGINS",
+    "https://signalx.asia,https://www.signalx.asia,https://xauusd-production-9fd9.up.railway.app"
+)
+origins = [x.strip() for x in origins_raw.split(",") if x.strip()] or ["https://signalx.asia"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=origins != ["*"],
+    allow_credentials=True,
     allow_methods=["GET", "POST", "OPTIONS"],
-    allow_headers=["*"],
+    allow_headers=["Authorization", "Content-Type", "X-Requested-With"],
 )
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin-allow-popups")
+    response.headers.setdefault("X-Robots-Tag", "noindex, nofollow") if request.url.path.startswith("/api/") else None
+    if request.url.path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store, max-age=0")
+        response.headers.setdefault("Pragma", "no-cache")
+    if request.url.scheme == "https" or request.headers.get("x-forwarded-proto", "").lower() == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    return response
 
 
 
@@ -4408,7 +4448,9 @@ async def signalx_premium_theme_css() -> FileResponse:
     return FileResponse(os.path.join(BASE_DIR, "signalx-premium-theme.css"), media_type="text/css")
 
 @app.get("/api/deploy-diagnostics")
-async def deploy_diagnostics() -> dict[str, Any]:
+async def deploy_diagnostics(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    # Deployment fingerprints can help the owner debug production, but must not be public.
+    require_admin(authorization, session)
     files = {}
     for name in ("index.html", "signalx-master-clean.css", "signalx-premium-theme.css", "app.js", "main.py"):
         path = os.path.join(BASE_DIR, name)
