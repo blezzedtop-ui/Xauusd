@@ -62,7 +62,7 @@ bool EnsureSymbol(string symbol){
    return (SymbolInfoDouble(symbol,SYMBOL_BID)>0 || SymbolInfoDouble(symbol,SYMBOL_ASK)>0);
 }
 
-void AppendMarketState(string &body, string symbol, ENUM_TIMEFRAMES tfs[], int n, bool &firstMarket){
+void AppendMarketState(string &body, string symbol, ENUM_TIMEFRAMES &tfs[], int n, bool &firstMarket){
    if(!EnsureSymbol(symbol)) return;
    if(!firstMarket) body += ","; firstMarket=false;
    body += "\"" + JsonEscape(symbol) + "\":{";
