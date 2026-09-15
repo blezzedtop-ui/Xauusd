@@ -87,6 +87,11 @@ bool ValidSignalLevels(string symbol,string dir,double sl,double tp)
    return false;
 }
 
+bool TradeResultAccepted(uint retcode)
+{
+   return (retcode==TRADE_RETCODE_DONE || retcode==TRADE_RETCODE_DONE_PARTIAL || retcode==TRADE_RETCODE_PLACED);
+}
+
 double NormalizeVolume(string symbol,double requested)
 {
    double minv=SymbolInfoDouble(symbol,SYMBOL_VOLUME_MIN);
@@ -390,14 +395,20 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
       }
 
       string comment="SignalX "+(source==""?"AUTO":source);
-      bool ok=false;
-      if(dir=="BUY")  ok=trade.Buy(vol,execSymbol,0,sl,tp,comment);
-      if(dir=="SELL") ok=trade.Sell(vol,execSymbol,0,sl,tp,comment);
+      trade.SetTypeFillingBySymbol(execSymbol);
+      trade.SetDeviationInPoints(20);
+      bool request_ok=false;
+      if(dir=="BUY")  request_ok=trade.Buy(vol,execSymbol,0,sl,tp,comment);
+      if(dir=="SELL") request_ok=trade.Sell(vol,execSymbol,0,sl,tp,comment);
 
+      uint retcode=trade.ResultRetcode();
       string desc=trade.ResultRetcodeDescription();
+      bool executed=request_ok && TradeResultAccepted(retcode);
+      PrintFormat("[AUTO TRADE] order_id=%s market=%s symbol=%s dir=%s lot=%.2f request_ok=%s retcode=%u desc=%s deal=%I64u order=%I64u",
+                  order_id,requestedMarket,execSymbol,dir,vol,request_ok?"true":"false",retcode,desc,trade.ResultDeal(),trade.ResultOrder());
       MarkOrderGuard(order_id);
-      if(ok) SendReport(order_id,dir,"ORDER_SENT",execSymbol,desc);
-      else   SendReport(order_id,dir,"ORDER_FAILED",execSymbol,desc);
+      if(executed) SendReport(order_id,dir,"ORDER_SENT",execSymbol,desc);
+      else         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,desc);
 
       pos+=MathMax(1,StringLen(order_id));
    }
