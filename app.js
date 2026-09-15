@@ -254,11 +254,20 @@ async function loadStats(){
     if($('historyTfStats')) $('historyTfStats').innerHTML=Object.entries(d.by_timeframe||{}).map(([tf,x])=>`<div class="source-stat"><div class="source-title">${tfName(tf)}</div><div class="source-win">${Number(x.winrate||0).toFixed(2)}%</div><div class="source-line">${x.total_signals??0} signal · <span class="buy">${x.wins??0} TP</span> · <span class="sell">${x.losses??0} SL</span> · ${x.open??0} OPEN</div></div>`).join('');    if($('historyDateStats')) $('historyDateStats').innerHTML=Object.entries(d.by_date||{}).map(([day,x])=>`<div class="source-stat"><div class="source-title">${new Date(day+'T00:00:00+05:00').toLocaleDateString('uz-UZ')}</div><div class="source-win">${Number(x.winrate||0).toFixed(2)}%</div><div class="source-line">${x.total_signals??0} signal · <span class="buy">${x.wins??0} TP</span> · <span class="sell">${x.losses??0} SL</span> · ${x.open??0} OPEN · ${x.ambiguous??0} AMB</div></div>`).join('')||'<div class="metric">Hozircha kunlik statistika yo‘q.</div>';
   }catch(e){if($('historySummary'))$('historySummary').innerHTML=`<div class="card">Analytics error: ${e?.message||'server xatosi'}</div>`;}
 }
-async function recordModuleSignal(source, response, item, intervalName, candleTime){
+const SIGNAL_RECORD_SEEN=new Map();
+function recordModuleSignal(source, response, item, intervalName, candleTime){
   if(!token) return;
   const x=item||{}; const direction=String(x.signal||response?.direction||'WAIT').toUpperCase();
   if(!['BUY','SELL'].includes(direction)) return;
-  try{ await api('/api/v1/signals/record-module',{method:'POST',body:JSON.stringify({symbol,interval:intervalName||response?.interval||interval,source,direction,confidence:x.confidence??response?.ai?.confidence??null,entry:x.entry??response?.setup?.entry??null,stop_loss:x.stop_loss??response?.setup?.stop_loss??null,take_profit:x.take_profit??response?.setup?.take_profit??[],headline:`${source} · ${direction}`,candle_time:String(candleTime??x.candle_time??response?.candle_time??''),payload:{response:item||response}})}); }catch(e){ console.warn('Signal history record',source,e); }
+  const tf=intervalName||response?.interval||interval;
+  const ct=String(candleTime??x.candle_time??response?.candle_time??'');
+  const key=`${symbol}|${tf}|${source}|${direction}|${ct}`;
+  const now=Date.now();
+  const seenAt=SIGNAL_RECORD_SEEN.get(key)||0;
+  if(now-seenAt<120000) return;
+  SIGNAL_RECORD_SEEN.set(key,now);
+  if(SIGNAL_RECORD_SEEN.size>2000){for(const [k,t] of SIGNAL_RECORD_SEEN){if(now-t>900000) SIGNAL_RECORD_SEEN.delete(k);}}
+  api('/api/v1/signals/record-module',{method:'POST',body:JSON.stringify({symbol,interval:tf,source,direction,confidence:x.confidence??response?.ai?.confidence??null,entry:x.entry??response?.setup?.entry??null,stop_loss:x.stop_loss??response?.setup?.stop_loss??null,take_profit:x.take_profit??response?.setup?.take_profit??[],headline:`${source} · ${direction}`,candle_time:ct,payload:{response:item||response}})}).catch(e=>console.warn('Signal history record',source,e));
 }
 async function loadHistory(){
   syncHistoryPeriodButtons(); syncHistoryDate();
@@ -266,7 +275,7 @@ async function loadHistory(){
   if(!body)return;
   if(!token){body.innerHTML='<tr><td colspan="14">Kirish kerak.</td></tr>';return;}
   try{
-    const hq=new URLSearchParams(historyQuery().replace(/^\?/,'&')); hq.set('symbol',symbol); hq.set('limit','200'); const d=await api(`/api/v1/signals/history?${hq.toString()}`);
+    const hq=new URLSearchParams(historyQuery().replace(/^\?/,'&')); hq.set('symbol',symbol); hq.set('limit','50'); const d=await api(`/api/v1/signals/history?${hq.toString()}`);
     const dateSelect=$('historyDateSelect'); if(dateSelect){ const dates=[...new Set((d.items||[]).map(x=>{try{return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tashkent',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(x.created_at))}catch(_){return ''}}).filter(Boolean))].sort().reverse(); dateSelect.innerHTML='<option value="">Barcha kunlar</option>'+dates.map(v=>{const [y,m,dd]=v.split('-'); return `<option value="${v}">${dd}.${m}.${y}</option>`}).join(''); dateSelect.value=historyDate||''; }
     const items=[...(d.items||[])].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
     let lastDate='', lastSource='';
@@ -342,10 +351,17 @@ async function loadAutoSignals(){
       return `<div class="signal-box auto-signal"><div class="section-head"><b>${tfName(tf)}</b><span class="pill">${x.confidence||0}% · ${x.mode||'LIVE'}</span></div><div class="signal-main ${cls}">${sig}</div><div class="mini">Live price: ${fmt(x.current_price)} · Entry: ${fmt(x.entry)} · SL: ${fmt(x.stop_loss)} · TP: ${(x.take_profit||[]).map(fmt).join(' / ')||'—'}</div><div class="mini">${x.reason||'Live engine'}</div><div class="mini">${x.evaluated_at?new Date(x.evaluated_at).toLocaleTimeString():''}</div></div>`;
     }).join('');
     $('autoSignalUpdated').textContent='AUTO ENTRY · LIVE CHART · NO QUALITY FILTER · '+new Date(d.generated_at).toLocaleTimeString();if(token) order.forEach(tf=>recordModuleSignal('Signals',d,d.timeframes?.[tf]||{},tf,d.timeframes?.[tf]?.candle_time||liveCandle?.time));
-    if(token){ try{ const saved=await api(`/api/v1/signals/auto-record?symbol=${encodeURIComponent(symbol)}`,{method:'POST'}); if(saved.count) { loadStats(); if($('historySection').classList.contains('active')) loadHistory(); } }catch(_){} }
   }catch(e){$('autoSignalsGrid').innerHTML=`<div class="card">Live Signals error: ${e.message}</div>`}
 }
-async function autoEntryTick(){if(!token)return;try{const target=symbol;const d=await api(`/api/v1/signals/auto-record?symbol=${encodeURIComponent(target)}&interval=${encodeURIComponent(interval)}`,{method:'POST'});const total=Number(d.queued||0);if(total){showToast(`AUTO TRADE: ${total} ta signal MT5 navbatiga uzatildi`);loadStats();loadHistory();}else{loadStats();}}catch(e){console.warn('AUTO ENTRY',e)}}
+async function autoEntryTick(){
+  if(!token)return;
+  try{
+    const d=await api(`/api/v1/signals/live/${encodeURIComponent(symbol)}`);
+    const x=d?.timeframes?.[interval]||{};
+    if(x.signal) markSignal(String(x.signal).toUpperCase(),x.candle_time||d.generated_at||Math.floor(Date.now()/1000));
+    setText('autoSignalUpdated','AUTO ENTRY · LIVE CHART · '+new Date(d.generated_at||Date.now()).toLocaleTimeString());
+  }catch(e){console.warn('AUTO ENTRY LIVE',e)}
+}
 async function loadClassicTrade(tf=interval){try{const d=await api(`/api/v1/classic-trade/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`);const x=d.classic||{};const sig=x.signal||'WAIT';const cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';$('classicSymbol').textContent=`${symbol} · ${tfName(tf)}`;$('classicSignal').textContent=sig;$('classicSignal').className='signal-main '+cls;$('classicConfidence').textContent=(x.confidence??0)+'% · Score '+(x.score??0);$('classicReason').textContent=x.reason||'—';$('classicEntry').textContent=fmt(x.entry);$('classicSL').textContent=fmt(x.stop_loss);$('classicTP1').textContent=fmt((x.take_profit||[])[0]);$('classicTP2').textContent=fmt((x.take_profit||[])[1]);$('classicTrend').textContent=x.trend||'—';$('classicEma').textContent=`EMA20 ${fmt(x.ema20)} · EMA50 ${fmt(x.ema50)}`;$('classicSNR').textContent=`S ${fmt((x.support||[])[0])} · R ${fmt((x.resistance||[])[0])}`;$('classicPivot').textContent=`Pivot ${fmt(x.pivot)}`;$('classicRSI').textContent=fmt(x.rsi);$('classicRSIState').textContent=x.rsi_state||'—';$('classicMACD').textContent=`${fmt(x.macd)} · ${x.macd_state||'—'}`;$('classicPattern').textContent=x.pattern||'—'; await recordModuleSignal('Classic Trade',d,x,tf,x.candle_time); }catch(e){$('classicReason').textContent='Classic Trade error: '+(e.message||'server error')}}
 let snrInterval='5min';
 function snrFmt(v){return v==null||!Number.isFinite(Number(v))?'—':fmt(Number(v));}

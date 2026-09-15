@@ -3958,7 +3958,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     await asyncio.gather(*(process_symbol(k) for k in symbols))
     if created_history:
         session.commit()
-    rows = await refresh_signal_outcomes(session, user.id, limit=500)
+    rows = await refresh_signal_outcomes(session, user.id, limit=80)
     return {
         "enabled": True,
         "symbols": symbols,
@@ -4362,12 +4362,14 @@ async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Que
     user = current_user(authorization, session)
     requested_symbol = clean_symbol(symbol) if symbol else ""
     # Always isolate history by the currently requested trading symbol.
+    # History reads must stay fast and must never trigger expensive TradingView outcome scans.
+    # Outcomes are refreshed by the auto-record/background path; this endpoint is read-only.
     if requested_symbol:
-        rows = list(session.scalars(select(SignalHistory).where(SignalHistory.user_id == user.id, SignalHistory.symbol == requested_symbol).order_by(SignalHistory.created_at.asc()).limit(500)))
-        await refresh_signal_outcomes(session, user.id, limit=500)
-        rows = list(session.scalars(select(SignalHistory).where(SignalHistory.user_id == user.id, SignalHistory.symbol == requested_symbol).order_by(SignalHistory.created_at.asc()).limit(500)))
+        rows = list(session.scalars(select(SignalHistory).where(SignalHistory.user_id == user.id, SignalHistory.symbol == requested_symbol).order_by(SignalHistory.created_at.desc()).limit(limit)))
+        rows = list(reversed(rows))
     else:
-        rows = await refresh_signal_outcomes(session, user.id, limit=500)
+        rows = list(session.scalars(select(SignalHistory).where(SignalHistory.user_id == user.id).order_by(SignalHistory.created_at.desc()).limit(limit)))
+        rows = list(reversed(rows))
     rows = filter_history_rows(rows, period, date)
     rows = rows[-limit:][::-1]
     items = []
