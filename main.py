@@ -3428,10 +3428,11 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 1
         setup = payload.get("setup") if isinstance(payload.get("setup"), dict) else {}
         # Support current auto-record schema, legacy advanced schema and signal-module schema.
         adv = payload.get("advanced") if isinstance(payload.get("advanced"), dict) else (payload.get("signal") if isinstance(payload.get("signal"), dict) else {})
+        module_signal = payload.get("module_signal") if isinstance(payload.get("module_signal"), dict) else {}
         setup = {
-            "entry": setup.get("entry", adv.get("entry", payload.get("entry", row.price))),
-            "stop_loss": setup.get("stop_loss", adv.get("stop_loss", payload.get("stop_loss", payload.get("sl")))),
-            "take_profit": setup.get("take_profit", adv.get("take_profit", payload.get("take_profit", payload.get("tp", [])))),
+            "entry": setup.get("entry", adv.get("entry", module_signal.get("entry", payload.get("entry", row.price)))),
+            "stop_loss": setup.get("stop_loss", adv.get("stop_loss", module_signal.get("stop_loss", payload.get("stop_loss", payload.get("sl"))))),
+            "take_profit": setup.get("take_profit", adv.get("take_profit", module_signal.get("take_profit", payload.get("take_profit", payload.get("tp", []))))),
         }
         entry = setup.get("entry", row.price)
         sl = setup.get("stop_loss")
@@ -4001,26 +4002,33 @@ def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[di
     else:
         add("News Guard",8,True,"news clear / higher-TF context")
     confirmed=(direction in {"BUY","SELL"} and score>=profile["min_score"] and confirms>=profile["min_confirmations"] and not (news_blocked and interval in {"5min","15min","30min"}))
-    # Structural levels and RR.
+    # Structural risk + EXECUTION RR.
+    # The previous implementation measured RR against the nearest structural target
+    # and rejected the setup before building the actual 1.5R/2.5R execution ladder.
+    # That made valid high-confluence setups impossible to queue whenever the nearest
+    # liquidity target was closer than 1.5R. Build the real execution targets first,
+    # then validate RR against the target that MT5 will actually receive.
     if direction=="BUY":
         sl=min(rl,float(c2["low"]),float(last["low"]))-a*0.18; risk=price-sl
-        target=rh; rr=(target-price)/max(risk,1e-9)
+        target=rh
     elif direction=="SELL":
         sl=max(rh,float(c2["high"]),float(last["high"]))+a*0.18; risk=sl-price
-        target=rl; rr=(price-target)/max(risk,1e-9)
-    else: sl=price; target=price; risk=0; rr=0
+        target=rl
+    else: sl=price; target=price; risk=0
     risk_ok=0<risk<=a*profile["max_risk_atr"]
+    if direction=="BUY" and risk_ok:
+        t1=max(price+risk*1.5,target); t2=max(price+risk*2.5,t1+risk*0.5)
+        rr=(t1-price)/max(risk,1e-9)
+    elif direction=="SELL" and risk_ok:
+        t1=min(price-risk*1.5,target); t2=min(price-risk*2.5,t1-risk*0.5)
+        rr=(price-t1)/max(risk,1e-9)
+    else:
+        t1=t2=price; rr=0
     rr_ok=rr>=1.5
     add("Structural Risk",5,risk_ok,f"risk={risk/a:.2f} ATR")
-    add("RR >= 1.5",8,rr_ok,f"RR={rr:.2f}")
+    add("RR >= 1.5",8,rr_ok,f"execution RR={rr:.2f}")
     confirmed=confirmed and risk_ok and rr_ok
-    if not confirmed: direction_out="WAIT"
-    else: direction_out=direction
-    # Conservative TP ladder: first structural target, second extension.
-    if confirmed:
-        if direction=="BUY": t1=max(price+risk*1.5,target); t2=max(price+risk*2.5,t1+risk*0.5)
-        else: t1=min(price-risk*1.5,target); t2=min(price-risk*2.5,t1-risk*0.5)
-    else: t1=t2=price
+    direction_out=direction if confirmed else "WAIT"
     return {"signal":direction_out,"score":score,"confidence":min(99,score),"confirmed":confirmed,
             "entry":round(price,4),"stop_loss":round(sl,4),"take_profit":[round(t1,4),round(t2,4)],"risk_reward":round(rr,2),
             "strategy_engine":"SignalX Strategic Pro","strategy_version":"TF-SP1","timeframe":interval,
@@ -4416,7 +4424,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                     strategic=_strategic_pro_for_timeframe(tf, {k:v[0] for k,v in live_by_tf.items()}, news_blocked=False)
                     consensus["strategic_pro"]=strategic
                     if strategic.get("signal") != direction or not strategic.get("confirmed"):
-                        print(f"[TF STRATEGIC PRO] BLOCKED tf={tf} consensus={direction} strategic={strategic.get('signal')} score={strategic.get('score',0)} rr={strategic.get('risk_reward',0)} reason={strategic.get('reason','')}")
+                        print(f"[TF STRATEGIC PRO] BLOCKED tf={tf} consensus={direction} strategic={strategic.get('signal')} confirmed={strategic.get('confirmed')} score={strategic.get('score',0)} confirms={sum(1 for c in strategic.get('checks',[]) if c.get('ok'))} rr={strategic.get('risk_reward',0)} risk={next((c.get('reason','') for c in strategic.get('checks',[]) if c.get('name')=='Structural Risk'), '')} reason={strategic.get('reason','')}")
                         continue
                     consensus.update({
                         "entry": strategic.get("entry"),
@@ -4899,20 +4907,15 @@ async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Que
         try: payload = json.loads(r.payload)
         except Exception: pass
         setup = payload.get("setup") if isinstance(payload.get("setup"), dict) else {}
-        # Current auto-trade records keep execution levels at the payload root; older records keep them under setup/advanced.
-        if not setup:
-            adv = payload.get("advanced") if isinstance(payload.get("advanced"), dict) else (payload.get("signal") if isinstance(payload.get("signal"), dict) else {})
-            setup = {
-                "entry": adv.get("entry", payload.get("entry", r.price)),
-                "stop_loss": adv.get("stop_loss", payload.get("stop_loss", payload.get("sl"))),
-                "take_profit": adv.get("take_profit", payload.get("take_profit", payload.get("tp", []))),
-            }
-        else:
-            setup = {
-                "entry": setup.get("entry", payload.get("entry", r.price)),
-                "stop_loss": setup.get("stop_loss", payload.get("stop_loss", payload.get("sl"))),
-                "take_profit": setup.get("take_profit", payload.get("take_profit", payload.get("tp", []))),
-            }
+        # Current auto-trade records keep execution levels at the payload root;
+        # legacy records use setup/advanced; module history records use module_signal.
+        module_signal = payload.get("module_signal") if isinstance(payload.get("module_signal"), dict) else {}
+        adv = payload.get("advanced") if isinstance(payload.get("advanced"), dict) else (payload.get("signal") if isinstance(payload.get("signal"), dict) else {})
+        setup = {
+            "entry": setup.get("entry", adv.get("entry", module_signal.get("entry", payload.get("entry", r.price)))),
+            "stop_loss": setup.get("stop_loss", adv.get("stop_loss", module_signal.get("stop_loss", payload.get("stop_loss", payload.get("sl"))))),
+            "take_profit": setup.get("take_profit", adv.get("take_profit", module_signal.get("take_profit", payload.get("take_profit", payload.get("tp", []))))),
+        }
         result = payload.get("result", {}) or {}
         created_at = r.created_at
         if created_at is None:
