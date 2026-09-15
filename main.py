@@ -317,6 +317,12 @@ TRADINGVIEW_TIMEOUT = float(os.getenv("TRADINGVIEW_TIMEOUT", "10"))
 MT5_BRIDGE_TOKEN = os.getenv("MT5_BRIDGE_TOKEN", "change-this-mt5-bridge-token").strip()
 MT5_AUTO_TRADING = os.getenv("MT5_AUTO_TRADING", "true").lower() == "true"
 MT5_AUTO_DUAL = os.getenv("MT5_AUTO_DUAL", "true").lower() == "true"
+# Per-symbol AutoTrade switches. These are intentionally independent: turning
+# EUR/USD OFF must never disable XAU/USD, and vice versa.
+MT5_AUTO_SYMBOLS: dict[str, bool] = {
+    "XAU/USD": os.getenv("MT5_AUTO_XAUUSD", str(MT5_AUTO_TRADING and MT5_AUTO_DUAL)).lower() == "true",
+    "EUR/USD": os.getenv("MT5_AUTO_EURUSD", str(MT5_AUTO_TRADING and MT5_AUTO_DUAL)).lower() == "true",
+}
 AUTOTRADE_INTERNAL_TOKEN = os.getenv("AUTOTRADE_INTERNAL_TOKEN", "").strip() or secrets.token_urlsafe(32)
 MT5_LOT_SIZE = float(os.getenv("MT5_DEFAULT_LOT", "0.01"))
 MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "symbol": None, "candles": {}, "markets": {}}
@@ -3755,9 +3761,9 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     The queue key is symbol/source/timeframe/live-candle/direction. Book + OpenAI is
     explicitly excluded. All values are copied from the freshly validated signal.
     """
-    if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
-        return None
     market = _mt5_market_key(symbol)
+    if not MT5_AUTO_TRADING or not MT5_AUTO_SYMBOLS.get(market, False) or _autotrade_source_excluded(source):
+        return None
     if market not in {"XAU/USD", "EUR/USD"}:
         return None
     key = (market, source.strip(), interval, str(candle_time), direction.upper())
@@ -3791,7 +3797,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     return order
 
 @app.post("/api/v1/signals/auto-record")
-async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFAULT_INTERVAL, market: str | None = Query(default=None), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     """Forward every BUY/SELL signal source except Book + OpenAI into the MT5 queue.
 
     Dual mode is global: when MT5_AUTO_DUAL is ON, one call processes XAU/USD and EUR/USD
@@ -3801,10 +3807,17 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     require_admin(authorization, session)
     user = current_user(authorization, session)
     selected_interval = validate_interval(interval)
-    requested = clean_symbol(symbol)
-    symbols = ["XAU/USD", "EUR/USD"] if MT5_AUTO_DUAL else [requested]
-    if not AUTO_ENTRY_ENABLED:
-        return {"enabled": False, "count": 0, "queued": 0, "symbols": symbols, "excluded_sources": ["Book + OpenAI"], "mode": "disabled"}
+    requested = clean_symbol(market or symbol)
+    if requested not in {"XAU/USD", "EUR/USD"}:
+        requested = _mt5_market_key(requested)
+    if market is not None:
+        symbols = [requested] if requested in {"XAU/USD", "EUR/USD"} else []
+    else:
+        symbols = [m for m in ("XAU/USD", "EUR/USD") if MT5_AUTO_SYMBOLS.get(m, False)]
+        if not symbols and MT5_AUTO_DUAL:
+            symbols = ["XAU/USD", "EUR/USD"]
+    if not AUTO_ENTRY_ENABLED or not MT5_AUTO_TRADING:
+        return {"enabled": False, "count": 0, "queued": 0, "symbols": symbols, "excluded_sources": ["Book + OpenAI"], "mode": "disabled", "symbol_auto_trading": dict(MT5_AUTO_SYMBOLS)}
 
     now = datetime.now(timezone.utc)
     excluded = {"book + openai", "book/openai", "book-openai", "book openai"}
@@ -3984,13 +3997,16 @@ async def _autotrade_worker() -> None:
     while True:
         session = SessionLocal()
         try:
-            if MT5_AUTO_TRADING and MT5_AUTO_DUAL and AUTO_ENTRY_ENABLED:
-                result = await auto_record_signals(
-                    symbol="XAU/USD", interval="1min",
-                    authorization=f"Bearer {AUTOTRADE_INTERNAL_TOKEN}", session=session
-                )
-                queued_count = int(result.get("queued") or 0)
-                print(f"[AUTO TRADE WORKER] symbols={result.get('symbols')} queued={queued_count} queue_total={len(MT5_ORDER_QUEUE)}")
+            if MT5_AUTO_TRADING and AUTO_ENTRY_ENABLED:
+                enabled_symbols = [m for m in ("XAU/USD", "EUR/USD") if MT5_AUTO_SYMBOLS.get(m, False)]
+                totals = []
+                for market_key in enabled_symbols:
+                    result = await auto_record_signals(
+                        symbol=market_key, market=market_key, interval="1min",
+                        authorization=f"Bearer {AUTOTRADE_INTERNAL_TOKEN}", session=session
+                    )
+                    totals.append((market_key, int(result.get("queued") or 0)))
+                print(f"[AUTO TRADE WORKER] symbols={enabled_symbols} queued={totals} queue_total={len(MT5_ORDER_QUEUE)}")
         except Exception as exc:
             print(f"[AUTO TRADE WORKER] error={exc}")
         finally:
@@ -4000,8 +4016,11 @@ async def _autotrade_worker() -> None:
 
 @app.on_event("startup")
 async def _start_autotrade_worker() -> None:
-    if MT5_AUTO_TRADING and MT5_AUTO_DUAL and AUTO_ENTRY_ENABLED:
-        asyncio.create_task(_autotrade_worker())
+    # Always start the worker at application startup.  AutoTrade can be
+    # toggled from the site after Railway has already started; the worker
+    # itself checks MT5_AUTO_TRADING on every cycle, so OFF means idle and
+    # ON immediately resumes signal generation without a redeploy.
+    asyncio.create_task(_autotrade_worker())
 
 
 MT5_CANDLE_MAX_AGE = int(os.getenv("MT5_CANDLE_MAX_AGE", "20"))
@@ -4489,7 +4508,10 @@ async def mt5_status(symbol: str = DEFAULT_SYMBOL, authorization: str | None = H
     state["connected"] = connected_now
     state["heartbeat_age_sec"] = round(age, 1) if age is not None else None
     state["connection_state"] = "CONNECTED" if connected_now else ("STALE" if age is not None and age <= 60 else "DISCONNECTED")
-    return {"ok": True, "symbol": key, "auto_trading": MT5_AUTO_TRADING, "auto_dual": MT5_AUTO_DUAL, "lot": MT5_LOT_SIZE, "state": state, "queue": len(MT5_ORDER_QUEUE), "demo_only": True, "heartbeat_timeout_sec": MT5_HEARTBEAT_TIMEOUT}
+    return {"ok": True, "symbol": key, "auto_trading": bool(MT5_AUTO_SYMBOLS.get(key, False)), "global_auto_trading": MT5_AUTO_TRADING,
+            "market_auto_trading": bool(MT5_AUTO_SYMBOLS.get(key, False)), "markets": dict(MT5_AUTO_SYMBOLS),
+            "auto_dual": MT5_AUTO_DUAL, "lot": MT5_LOT_SIZE, "state": state, "queue": len(MT5_ORDER_QUEUE),
+            "demo_only": True, "heartbeat_timeout_sec": MT5_HEARTBEAT_TIMEOUT}
 
 @app.post("/api/v1/mt5/connect")
 async def mt5_connect(body: MT5ConnectBody, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
@@ -4514,18 +4536,36 @@ async def mt5_lot(body: MT5LotBody, authorization: str | None = Header(default=N
     return {"ok": True, "lot": MT5_LOT_SIZE, "demo_only": True}
 
 @app.post("/api/v1/mt5/auto-trading")
-async def mt5_auto_trading(enabled: bool = Query(...), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def mt5_auto_trading(enabled: bool = Query(...), market: str | None = Query(default=None), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     require_admin(authorization, session)
     global MT5_AUTO_TRADING
+    if market:
+        key = _mt5_market_key(market)
+        if key not in {"XAU/USD", "EUR/USD"}:
+            raise HTTPException(status_code=400, detail="Faqat XAU/USD yoki EUR/USD symbol ruxsat etiladi.")
+        MT5_AUTO_SYMBOLS[key] = bool(enabled)
+        # Global master remains ON as long as at least one symbol is enabled.
+        MT5_AUTO_TRADING = any(MT5_AUTO_SYMBOLS.values())
+        return {"ok": True, "auto_trading": MT5_AUTO_TRADING, "market": key,
+                "market_auto_trading": MT5_AUTO_SYMBOLS[key], "markets": dict(MT5_AUTO_SYMBOLS), "demo_only": True}
     MT5_AUTO_TRADING = bool(enabled)
-    return {"ok": True, "auto_trading": MT5_AUTO_TRADING, "demo_only": True}
+    for key in MT5_AUTO_SYMBOLS:
+        MT5_AUTO_SYMBOLS[key] = bool(enabled)
+    return {"ok": True, "auto_trading": MT5_AUTO_TRADING, "markets": dict(MT5_AUTO_SYMBOLS), "demo_only": True}
 
 @app.post("/api/v1/mt5/auto-dual")
 async def mt5_auto_dual(enabled: bool = Query(...), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     require_admin(authorization, session)
     global MT5_AUTO_DUAL
     MT5_AUTO_DUAL = bool(enabled)
-    return {"ok": True, "auto_dual": MT5_AUTO_DUAL, "symbols": ["XAU/USD", "EUR/USD"] if MT5_AUTO_DUAL else ["current"], "demo_only": True}
+    # Legacy dual switch: when explicitly enabled/disabled, synchronize both
+    # symbol switches. The per-symbol AutoTrade endpoint remains authoritative
+    # for independent control.
+    if enabled:
+        for key in MT5_AUTO_SYMBOLS:
+            MT5_AUTO_SYMBOLS[key] = True
+    return {"ok": True, "auto_dual": MT5_AUTO_DUAL, "markets": dict(MT5_AUTO_SYMBOLS),
+            "symbols": ["XAU/USD", "EUR/USD"] if MT5_AUTO_DUAL else ["current"], "demo_only": True}
 
 @app.get("/api/v1/mt5/poll")
 async def mt5_poll(token: str = Query(...), market: str = Query(...), client_id: str = Query("")) -> dict[str, Any]:
@@ -4551,8 +4591,8 @@ async def mt5_poll(token: str = Query(...), market: str = Query(...), client_id:
             item["claimed"] = False
             item.pop("claimed_by", None)
             item.pop("claim_expires", None)
-    if not MT5_AUTO_TRADING or not MT5_ORDER_QUEUE:
-        return {"ok": True, "market": requested_market, "orders": [], "client_id": client}
+    if not MT5_AUTO_TRADING or not MT5_AUTO_SYMBOLS.get(requested_market, False) or not MT5_ORDER_QUEUE:
+        return {"ok": True, "market": requested_market, "auto_trading": bool(MT5_AUTO_SYMBOLS.get(requested_market, False)), "orders": [], "client_id": client}
     MT5_BRIDGE_CLIENTS[client] = {"last_seen": now, "market": requested_market}
     # Claim a small batch for THIS market and THIS bridge client. A second terminal
     # using the same token cannot take an active lease away from the first one.
