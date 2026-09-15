@@ -4293,14 +4293,26 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             source = str(consensus.get("consensus_source") or "Signal Consensus")
             payload = {"type":"CONSENSUS","signal":direction,"confidence":confidence,"strategy_engine":consensus.get("strategy_engine"),"strategy_version":consensus.get("strategy_version"),"reason":consensus.get("reason"),"consensus":consensus}
             headline=f"CONSENSUS {direction} · {tf.upper()} · {confidence:.1f}%"
-            history_row = SignalHistory(
-                user_id=user.id, symbol=key, interval=tf, signal=direction,
-                headline=headline, price=float(entry), payload=json.dumps(payload, ensure_ascii=False),
-                outcome="OPEN", created_at=now, source=source, candle_time=candle_time
-            )
-            session.add(history_row)
-            created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction,"confidence":confidence,"agreement":consensus["consensus_agreement"],"history_recorded":True})
-            print(f"[SIGNAL HISTORY] RECORDED market={key} tf={tf} dir={direction} confidence={confidence:.1f} candle={candle_time}")
+            # Do not duplicate the same consensus history row on the 15-second worker cycle.
+            history_recent = session.scalars(select(SignalHistory).where(
+                SignalHistory.user_id == user.id,
+                SignalHistory.symbol == key,
+                SignalHistory.interval == tf,
+                SignalHistory.candle_time == candle_time,
+                SignalHistory.direction == direction,
+                SignalHistory.source == source,
+            ).order_by(SignalHistory.id.desc())).first()
+            if history_recent is None:
+                history_row = SignalHistory(
+                    user_id=user.id, symbol=key, interval=tf, direction=direction,
+                    headline=headline, price=float(entry), payload=json.dumps(payload, ensure_ascii=False),
+                    outcome="OPEN", created_at=now, source=source, candle_time=candle_time
+                )
+                session.add(history_row)
+                created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction,"confidence":confidence,"agreement":consensus["consensus_agreement"],"history_recorded":True})
+                print(f"[SIGNAL HISTORY] RECORDED market={key} tf={tf} dir={direction} confidence={confidence:.1f} candle={candle_time}")
+            else:
+                print(f"[SIGNAL HISTORY] DUPLICATE SKIP market={key} tf={tf} dir={direction} candle={candle_time} existing_id={history_recent.id}")
 
             # Every tradable timeframe has its own Strategic Pro gate for AutoTrade.
             if tf in {"5min","15min","30min","1h","4h","1day"} and direction in {"BUY","SELL"}:
