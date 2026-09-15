@@ -4246,7 +4246,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         active_total = totals[winner] + totals[loser]
         agreement = (totals[winner] / active_total) if active_total else 0.0
         distinct_winner = sum(1 for f in families.values() if f[winner] > 0)
-        min_families = 2 if interval in {"1min", "5min"} else 3
+        min_families = 2  # tradable timeframes: require two independent strategy families
         # Hard conflict protection: if the opposing side is materially represented, wait.
         if distinct_winner < min_families or agreement < 0.60 or (active_total and totals[loser] / active_total > 0.35):
             return None
@@ -4418,27 +4418,17 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             else:
                 print(f"[SIGNAL HISTORY] DUPLICATE SKIP market={key} tf={tf} dir={direction} candle={candle_time} existing_id={history_recent.id}")
 
-            # Every tradable timeframe has its own Strategic Pro gate for AutoTrade.
-            if tf in {"5min","15min","30min","1h","4h","1day"} and direction in {"BUY","SELL"}:
+            # Consensus is the primary execution gate. The former second Strategic Pro
+            # gate could reject a valid consensus a second time and leave MT5 with no order.
+            # Keep Strategic Pro as diagnostic metadata only.
+            if direction in {"BUY","SELL"}:
                 try:
                     strategic=_strategic_pro_for_timeframe(tf, {k:v[0] for k,v in live_by_tf.items()}, news_blocked=False)
                     consensus["strategic_pro"]=strategic
                     if strategic.get("signal") != direction or not strategic.get("confirmed"):
-                        print(f"[TF STRATEGIC PRO] BLOCKED tf={tf} consensus={direction} strategic={strategic.get('signal')} confirmed={strategic.get('confirmed')} score={strategic.get('score',0)} confirms={sum(1 for c in strategic.get('checks',[]) if c.get('ok'))} rr={strategic.get('risk_reward',0)} risk={next((c.get('reason','') for c in strategic.get('checks',[]) if c.get('name')=='Structural Risk'), '')} reason={strategic.get('reason','')}")
-                        continue
-                    consensus.update({
-                        "entry": strategic.get("entry"),
-                        "stop_loss": strategic.get("stop_loss"),
-                        "take_profit": strategic.get("take_profit",[]),
-                        "risk_reward": strategic.get("risk_reward",0),
-                        "confidence": strategic.get("confidence",consensus.get("confidence",0)),
-                        "strategy_engine": f"SignalX {tf} Strategic Pro",
-                        "strategy_version": "TF-SP1",
-                        "strategy_chain": ["HTF Bias","Liquid Session","Liquidity Sweep","BOS/CHoCH","Displacement","OB/FVG","Volatility","News Guard","RR Validation","AutoTrade"],
-                    })
+                        print(f"[TF STRATEGIC PRO] DIAGNOSTIC ONLY tf={tf} consensus={direction} strategic={strategic.get('signal')} confirmed={strategic.get('confirmed')} score={strategic.get('score',0)} confirms={sum(1 for c in strategic.get('checks',[]) if c.get('ok'))} rr={strategic.get('risk_reward',0)} reason={strategic.get('reason','')}")
                 except Exception as exc:
-                    print(f"[TF STRATEGIC PRO] ERROR tf={tf}: {exc}")
-                    continue
+                    print(f"[TF STRATEGIC PRO] DIAGNOSTIC ERROR tf={tf}: {exc}")
             try:
                 entry, sl, tp, repaired = _normalize_auto_trade_levels(consensus, current_candles, direction, tf)
             except Exception:
