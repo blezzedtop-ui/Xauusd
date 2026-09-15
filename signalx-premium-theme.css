@@ -783,7 +783,7 @@ body:after{content:""!important;position:fixed!important;inset:0!important;z-ind
 }
 
 
-/* FINAL SHARED LIQUID-GLASS UI — XAUUSD + EURUSD. TradingView iframe/widget intentionally untouched. */
+/* FINAL SHARED LIQUID-GLASS UI — XAUUSD. TradingView iframe/widget intentionally untouched. */
 :root{
   --sx-ui-white:#f7fbff;
   --sx-ui-blue:#39cfff;
@@ -912,7 +912,7 @@ body:after{content:""!important;position:fixed!important;inset:0!important;z-ind
 }
 
 
-/* FINAL SIDEBAR CONSISTENCY PASS — identical on XAUUSD and EURUSD. */
+/* FINAL SIDEBAR CONSISTENCY PASS — XAUUSD. */
 @media(min-width:1101px){
   .app{grid-template-columns:250px minmax(0,1fr)!important;}
   .sidebar{width:250px!important;min-width:250px!important;height:100vh!important;max-height:100vh!important;overflow-y:auto!important;overflow-x:hidden!important;padding:9px 9px 10px!important;}

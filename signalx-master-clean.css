@@ -1,4 +1,4 @@
-/* SIGNALX MASTER CLEAN UI — shared by XAUUSD + EURUSD
+/* SIGNALX MASTER CLEAN UI — XAUUSD
    TradingView internals intentionally untouched. */
 :root{
   --sx-master-bg:#020611;
@@ -633,9 +633,6 @@ body:before{
 }
 
 /* External page buttons inherit a section-like palette */
-.sidebar .nav > .nav-external#eurUsdPageBtn{
-  --sx-liquid-a:rgba(77,192,255,.45);--sx-liquid-b:rgba(74,94,255,.28);--sx-liquid-c:rgba(54,231,183,.12);
-}
 .sidebar .nav > .nav-external#xauUsdPageBtn{
   --sx-liquid-a:rgba(81,195,255,.45);--sx-liquid-b:rgba(95,75,255,.28);--sx-liquid-c:rgba(255,203,78,.12);
 }

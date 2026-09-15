@@ -23,7 +23,7 @@ Higher timeframes have dedicated Strategy Engine V2 profiles.
 Every BUY/SELL source except Book + OpenAI is eligible for the MT5 queue on all seven timeframes. WAIT is not queued. Entry/SL/TP are revalidated against fresh candles for the exact symbol/timeframe.
 
 ## Symbol isolation
-Only XAUUSDm and EURUSDm are allowed by the final EA. Suffixless fallback and generic symbol scanning were removed.
+Only XAUUSDm is allowed by the final EA. Suffixless fallback and generic symbol scanning are blocked.
 
 ## Important limitation
 These tests validate code integrity and local HTTP behavior. They do not simulate a live broker fill or prove a real external TradingView connection is available at every instant. Live MT5 execution still depends on the connected terminal, broker symbol availability, WebRequest permission, and valid Railway environment variables.

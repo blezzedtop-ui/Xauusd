@@ -1,6 +1,6 @@
 #property strict
-#property version   "1.6"
-#property description "SignalX dual-symbol XAUUSD + EURUSD MT5 bridge"
+#property version   "1.7"
+#property description "SignalX XAUUSD MT5 bridge"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -11,7 +11,6 @@ input int    PollSeconds=2;
 input int    StateSeconds=5;
 input double DefaultLot=0.01;
 input string XAUTradeSymbol="XAUUSDm";
-input string EURTradeSymbol="EURUSDm";
 input long   SignalXMagic=26091401;
 input int    DuplicateCooldownSeconds=30;
 input string BridgeClientId=""; // blank = account-specific client id
@@ -83,17 +82,7 @@ bool IsUsableSymbol(string symbol)
 
 bool IsExactAllowedSymbol(string symbol)
 {
-   return (symbol=="XAUUSDm" || symbol=="EURUSDm");
-}
-
-string NormalizeInstrumentKey(string s)
-{
-   UpperInPlace(s);
-   StringReplace(s,"/","");
-   StringReplace(s,"_","");
-   StringReplace(s,"-","");
-   StringReplace(s,".","");
-   return s;
+   return (symbol=="XAUUSDm");
 }
 
 bool IsBlockedSource(string source)
@@ -155,8 +144,7 @@ double NormalizeVolume(string symbol,double requested)
 
 string ExecSymbol(string market)
 {
-   string m=market; UpperInPlace(m);
-   string wanted=(StringFind(m,"EUR")>=0) ? EURTradeSymbol : XAUTradeSymbol;
+   string wanted=XAUTradeSymbol;
    if(!IsExactAllowedSymbol(wanted) || !IsUsableSymbol(wanted)) return "";
    return wanted;
 }
@@ -166,10 +154,6 @@ string XAUStateSymbol()
    return (XAUTradeSymbol=="XAUUSDm" && IsUsableSymbol(XAUTradeSymbol)) ? XAUTradeSymbol : "";
 }
 
-string EURStateSymbol()
-{
-   return (EURTradeSymbol=="EURUSDm" && IsUsableSymbol(EURTradeSymbol)) ? EURTradeSymbol : "";
-}
 
 string TFKey(ENUM_TIMEFRAMES tf)
 {
@@ -278,11 +262,10 @@ void AppendMarketState(string &body,string symbol,bool &firstMarket)
 void ReportState()
 {
    string xau=XAUStateSymbol();
-   string eur=EURStateSymbol();
 
    string body="{";
    body += "\"connected\":true";
-   body += ",\"symbol\":\"DUAL\"";
+   body += ",\"symbol\":\"XAUUSDm\"";
    body += ",\"login\":\""+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN))+"\"";
    body += ",\"server\":\""+JsonEscape(AccountInfoString(ACCOUNT_SERVER))+"\"";
    body += ",\"balance\":"+DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE),2);
@@ -295,7 +278,6 @@ void ReportState()
 
    bool firstMarket=true;
    AppendMarketState(body,xau,firstMarket);
-   AppendMarketState(body,eur,firstMarket);
    body += "}}";
 
    string out;
@@ -359,7 +341,7 @@ int OnInit()
 {
    if(ApiBase=="" || StringFind(ApiBase,"http")!=0) return(INIT_PARAMETERS_INCORRECT);
    if(BridgeToken=="" || BridgeToken=="CHANGE_ME") return(INIT_PARAMETERS_INCORRECT);
-   if(XAUTradeSymbol!="XAUUSDm" || EURTradeSymbol!="EURUSDm") return(INIT_PARAMETERS_INCORRECT);
+   if(XAUTradeSymbol!="XAUUSDm") return(INIT_PARAMETERS_INCORRECT);
    if(!AcquireSession()) return(INIT_FAILED);
    trade.SetExpertMagicNumber(SignalXMagic);
    trade.SetAsyncMode(false);
@@ -428,20 +410,15 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
       string req=requested_symbol;
       string mkt=order_market;
       string expected=expectedSymbol;
-      string reqKey=NormalizeInstrumentKey(req);
-      string mktKey=NormalizeInstrumentKey(mkt);
-      string expectedKey=NormalizeInstrumentKey(expected);
+      UpperInPlace(req);
+      UpperInPlace(mkt);
+      UpperInPlace(expected);
 
-      bool isEUR=(StringFind(NormalizeInstrumentKey(requestedMarket),"EUR")>=0);
-      string expectedMarketKey=isEUR ? "EURUSD" : "XAUUSD";
-      bool marketMatches=(mktKey==expectedMarketKey || StringFind(mktKey,expectedMarketKey)>=0);
-      bool symbolMatches=(reqKey==expectedMarketKey || StringFind(reqKey,expectedMarketKey)>=0);
-      bool expectedMatches=(expectedKey==expectedMarketKey || StringFind(expectedKey,expectedMarketKey)>=0);
-      if(!marketMatches || !symbolMatches || !expectedMatches)
+      bool marketMatches=(StringFind(mkt,"XAU")>=0);
+      bool symbolMatches=(StringFind(req,"XAUUSD")>=0);
+      if(!marketMatches || !symbolMatches)
       {
-         string msg=StringFormat("BLOCKED: cross-symbol order rejected by EA req=%s market=%s expected=%s",reqKey,mktKey,expectedKey);
-         Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," ",msg);
-         SendReport(order_id,dir,"ORDER_FAILED",expectedSymbol,msg);
+         SendReport(order_id,dir,"ORDER_FAILED",expectedSymbol,"BLOCKED: cross-symbol order rejected by EA");
          pos+=MathMax(1,StringLen(order_id));
          continue;
       }
@@ -574,7 +551,5 @@ void OnTimer()
    }
 
    string xau=XAUStateSymbol();
-   string eur=EURStateSymbol();
    PollMarket("XAU/USD",xau);
-   PollMarket("EUR/USD",eur);
 }

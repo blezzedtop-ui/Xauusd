@@ -87,13 +87,6 @@ AI_PROVIDER_PROFILE = {
 ALLOW_DEMO = os.getenv("ALLOW_DEMO", "false").lower() == "true"
 DEFAULT_SYMBOL = os.getenv("DEFAULT_SYMBOL", "XAU/USD").strip() or "XAU/USD"
 DEFAULT_INTERVAL = os.getenv("DEFAULT_INTERVAL", "30min").strip() or "30min"
-
-# M1/M5 high-confidence signal confirmation.
-# These are signal-quality controls only; they do not alter broker execution rules.
-M1_M5_STRONG_MODE = os.getenv("M1_M5_STRONG_MODE", "true").lower() == "true"
-M1_MIN_CONFIRMATIONS = int(os.getenv("M1_MIN_CONFIRMATIONS", "4"))
-M5_MIN_CONFIRMATIONS = int(os.getenv("M5_MIN_CONFIRMATIONS", "4"))
-
 PIVOT_INTERVAL = os.getenv("PIVOT_INTERVAL", "1day").strip() or "1day"
 PIVOT_NO_TRADE_PCT = float(os.getenv("PIVOT_NO_TRADE_PCT", "0.0010"))
 SL_BUFFER_PCT = float(os.getenv("SL_BUFFER_PCT", "0.0015"))
@@ -323,8 +316,6 @@ TRADINGVIEW_BARS = max(80, min(int(os.getenv("TRADINGVIEW_BARS", "260")), 500))
 TRADINGVIEW_TIMEOUT = float(os.getenv("TRADINGVIEW_TIMEOUT", "10"))
 MT5_BRIDGE_TOKEN = os.getenv("MT5_BRIDGE_TOKEN", "change-this-mt5-bridge-token").strip()
 MT5_AUTO_TRADING = os.getenv("MT5_AUTO_TRADING", "true").lower() == "true"
-MT5_AUTO_DUAL = os.getenv("MT5_AUTO_DUAL", "true").lower() == "true"
-MT5_AUTO_SYMBOLS = {"XAU/USD": MT5_AUTO_TRADING, "EUR/USD": MT5_AUTO_TRADING}
 AUTOTRADE_INTERNAL_TOKEN = os.getenv("AUTOTRADE_INTERNAL_TOKEN", "").strip() or secrets.token_urlsafe(32)
 MT5_LOT_SIZE = float(os.getenv("MT5_DEFAULT_LOT", "0.01"))
 MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "symbol": None, "candles": {}, "markets": {}}
@@ -545,7 +536,7 @@ ENABLE_API_DOCS = os.getenv("ENABLE_API_DOCS", "false").strip().lower() == "true
 RATE_LIMIT_WINDOW_SECONDS = max(10, int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")))
 RATE_LIMIT_MAX_REQUESTS = max(30, int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "180")))
 MAX_REQUEST_BODY_BYTES = max(65536, int(os.getenv("MAX_REQUEST_BODY_BYTES", "1048576")))
-RATE_LIMIT_EXEMPT_PATHS = {"/", "/eurusd", "/eurusd/", "/eurusd.html", "/health", "/favicon.ico"}
+RATE_LIMIT_EXEMPT_PATHS = {"/", "/health", "/favicon.ico"}
 _RATE_BUCKETS: dict[str, tuple[float, int]] = {}
 _LOGIN_FAILS: dict[str, tuple[float, int]] = {}
 LOGIN_LOCK_SECONDS = max(30, int(os.getenv("LOGIN_LOCK_SECONDS", "300")))
@@ -1547,8 +1538,6 @@ def _tv_frame(method: str, params: list[Any]) -> str:
 def tv_symbol_for(symbol: str) -> str:
     """Return the TradingView symbol matching the requested instrument page."""
     key = clean_symbol(symbol)
-    if key in {"EURUSD", "EUR/USD"}:
-        return os.getenv("TRADINGVIEW_EURUSD_SYMBOL", "OANDA:EURUSD").strip() or "OANDA:EURUSD"
     return os.getenv("TRADINGVIEW_SYMBOL", "OANDA:XAUUSD").strip() or "OANDA:XAUUSD"
 
 def _tv_interval(interval: str) -> str:
@@ -3721,101 +3710,6 @@ async def advanced_signals(symbol: str, authorization: str | None = Header(defau
     return result
 
 
-
-def _strengthen_m1_m5_signal(item: dict[str, Any], interval: str,
-                             lower_tf: dict[str, Any] | None = None,
-                             higher_tf: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Strengthen M1/M5 signals using multi-confirmation alignment.
-
-    M1: M5 direction + M1 structure/flow confirmations.
-    M5: M15 direction + M5 structure/flow confirmations.
-    A conflict becomes WAIT. Existing non-M1/M5 signals are unchanged.
-    """
-    if not M1_M5_STRONG_MODE or interval not in {"1min", "5min"}:
-        return item
-
-    out = dict(item or {})
-    direction = str(out.get("signal") or out.get("direction") or "WAIT").upper()
-    if direction not in {"BUY", "SELL"}:
-        return out
-
-    def flag(v):
-        if isinstance(v, bool):
-            return v
-        if isinstance(v, (int, float)):
-            return v > 0
-        s=str(v or "").strip().upper()
-        return s not in {"", "NONE", "WAIT", "FALSE", "NO", "NEUTRAL", "0"}
-
-    checks=[]
-    for k in ("bos","mss","choch","liquidity_sweep","liquidity","fvg","order_block",
-              "trend","trend_direction","structure","displacement","momentum"):
-        if k in out:
-            checks.append((k, out.get(k)))
-
-    # Read common nested structures used by SignalX modules.
-    for container_key in ("checks","m5","m30","structure_data","confluence"):
-        c=out.get(container_key)
-        if isinstance(c, dict):
-            for k,v in c.items():
-                if k.lower() in {"bos","mss","choch","liquidity","liquidity_sweep",
-                                 "fvg","order_block","trend","trend_direction",
-                                 "displacement","momentum","structure"}:
-                    checks.append((k,v))
-
-    confirmations=0
-    for k,v in checks:
-        s=str(v or "").upper()
-        if isinstance(v, dict):
-            s=" ".join(str(x) for x in v.values()).upper()
-        if direction=="BUY" and any(x in s for x in ("BULL","BUY","LONG","UP","SWEEP_LOW")):
-            confirmations += 1
-        elif direction=="SELL" and any(x in s for x in ("BEAR","SELL","SHORT","DOWN","SWEEP_HIGH")):
-            confirmations += 1
-        elif flag(v) and k.lower() in {"bos","mss","choch","liquidity_sweep","fvg","order_block","displacement","momentum"}:
-            confirmations += 1
-
-    # Higher/lower timeframe direction confirmation.
-    higher_signal=str((higher_tf or {}).get("signal") or "").upper()
-    lower_signal=str((lower_tf or {}).get("signal") or "").upper()
-    higher_ok=higher_signal in {direction, "WAIT"} or not higher_signal
-    lower_ok=lower_signal in {direction, "WAIT"} or not lower_signal
-
-    required=M1_MIN_CONFIRMATIONS if interval=="1min" else M5_MIN_CONFIRMATIONS
-    if higher_tf and not higher_ok:
-        out["signal"]="WAIT"
-        out["reason"]=f"M1/M5 strong filter: higher-TF conflict ({higher_signal} vs {direction})"
-        out["confidence"]=min(float(out.get("confidence") or 0), 69)
-        out["strong_confirmation"]=False
-        return out
-
-    if lower_tf and not lower_ok:
-        out["signal"]="WAIT"
-        out["reason"]=f"M1/M5 strong filter: lower-TF conflict ({lower_signal} vs {direction})"
-        out["confidence"]=min(float(out.get("confidence") or 0), 69)
-        out["strong_confirmation"]=False
-        return out
-
-    # Confidence is treated as a score, not a win probability.
-    base=float(out.get("confidence") or out.get("score") or 0)
-    bonus=min(12, confirmations*3)
-    strengthened=min(99, base+bonus)
-
-    if confirmations < required:
-        out["signal"]="WAIT"
-        out["reason"]=f"M1/M5 strong filter: {confirmations}/{required} confirmations"
-        out["confidence"]=round(min(base, 79), 2)
-        out["strong_confirmation"]=False
-    else:
-        out["confidence"]=round(strengthened, 2)
-        out["strong_confirmation"]=True
-        out["confirmation_count"]=confirmations
-        out["required_confirmations"]=required
-        out["reason"]=f"{out.get('reason','')} | Strong M{1 if interval=='1min' else 5}: {confirmations} confirmations".strip(" |")
-
-    return out
-
-
 def _normalize_auto_trade_levels(item: dict[str, Any], candles: list[dict[str, Any]], direction: str) -> tuple[float, float, list[float], bool]:
     """Validate/repair Entry/SL/TP against the current live TradingView chart."""
     if not candles:
@@ -3858,10 +3752,10 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     The queue key is symbol/source/timeframe/live-candle/direction. Book + OpenAI is
     explicitly excluded. All values are copied from the freshly validated signal.
     """
-    if not MT5_AUTO_TRADING or not MT5_AUTO_SYMBOLS.get(_mt5_market_key(symbol), False) or _autotrade_source_excluded(source):
+    if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
         return None
     market = _mt5_market_key(symbol)
-    if market not in {"XAU/USD", "EUR/USD"}:
+    if market != "XAU/USD":
         return None
     key = (market, source.strip(), interval, str(candle_time), direction.upper())
     for q in MT5_ORDER_QUEUE:
@@ -3870,6 +3764,12 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
                 str(q.get("candle_time") or ""), str(q.get("direction") or "").upper())
         if qkey == key:
             return q
+        # Never allow BUY and SELL for the same XAUUSD source/timeframe/candle
+        # to coexist in the queue. A live candle may recalculate while open; the
+        # first accepted consensus owns that candle until it expires/executes.
+        if qkey[:4] == key[:4] and qkey[4] != key[4]:
+            print(f"[AUTO TRADE QUEUE] OPPOSITE SIGNAL BLOCKED market={market} source={source} tf={interval} candle={candle_time}")
+            return None
     order_id = secrets.token_hex(8)
     order = {
         "id": order_id,
@@ -3897,16 +3797,16 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
 async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     """Forward every BUY/SELL signal source except Book + OpenAI into the MT5 queue.
 
-    Dual mode is global: when MT5_AUTO_DUAL is ON, one call processes XAU/USD and EUR/USD
-    together, so opening either site page is enough to keep both symbols eligible.
+    Only XAU/USD is eligible for the MT5 AutoTrade queue.
     Book + OpenAI is intentionally excluded from the MT5 queue.
     """
     require_admin(authorization, session)
     user = current_user(authorization, session)
     selected_interval = validate_interval(interval)
     requested = clean_symbol(symbol)
-    symbols = ["XAU/USD", "EUR/USD"] if MT5_AUTO_DUAL else [requested]
-    symbols = [m for m in symbols if MT5_AUTO_SYMBOLS.get(m, False)]
+    if requested != "XAU/USD":
+        raise HTTPException(status_code=404, detail="Only XAU/USD is supported")
+    symbols = ["XAU/USD"]
     if not AUTO_ENTRY_ENABLED:
         return {"enabled": False, "count": 0, "queued": 0, "symbols": symbols, "excluded_sources": ["Book + OpenAI"], "mode": "disabled"}
 
@@ -3919,7 +3819,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     async def load_symbol_candidates(key: str) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
         # One canonical live candle series per timeframe. Every module below consumes
-        # the same timeframe candles, so the signal chain cannot mix XAU/EUR or TF data.
+        # the same timeframe candles, so the signal chain cannot mix symbols or TF data.
         intervals=["1min","5min","15min","30min","1h","4h","1day"]
         live_by_tf: dict[str, tuple[list[dict[str, Any]],str,str|None]] = {}
         async def load_tf(tf: str):
@@ -3949,18 +3849,12 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 levels=calculate_pivot_levels(float(ref["high"]),float(ref["low"]),float(ref["close"]),price)
                 technical=build_key_level_signal(candles,levels,news_blocked=False)
                 technical=_enhance_strategy_result(technical,candles,tf)
-                if tf in {"1min","5min"}:
-                    higher_tf = (advanced.get("timeframes") or {}).get("5min" if tf=="1min" else "15min") or {}
-                    technical=_strengthen_m1_m5_signal(technical,tf,higher_tf=higher_tf)
                 candidates.append({"source":"Technical Analysis","interval":tf,"item":technical,"response":{"mode":mode,"warning":warning,"candle_time":ct}})
             except Exception:
                 technical={}
             try:
                 classic=_classic_trade(candles,calculate_pivot_levels(float(candles[-2]["high"]),float(candles[-2]["low"]),float(candles[-2]["close"]),float(candles[-1]["close"])))
                 classic["strategy_chain"]=_strategy_chain(tf); classic["strategy_version"]="V2"
-                if tf in {"1min","5min"}:
-                    higher_tf = (advanced.get("timeframes") or {}).get("5min" if tf=="1min" else "15min") or {}
-                    classic=_strengthen_m1_m5_signal(classic,tf,higher_tf=higher_tf)
                 candidates.append({"source":"Classic Trade","interval":tf,"item":classic,"response":{"mode":mode,"warning":warning,"candle_time":ct}})
             except Exception:
                 pass
@@ -3973,9 +3867,6 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 trend=_trendline_analysis(candles); fib=_fibonacci_analysis(candles)
                 trend["strategy_engine"]="Market Structure Trendline V2"; trend["strategy_version"]="V2"; trend["strategy_chain"]=_strategy_chain(tf)
                 trend["take_profit"]=[v for v in [fib.get("extension_targets",{}).get("1.272"),fib.get("extension_targets",{}).get("1.618")] if v is not None]
-                if tf in {"1min","5min"}:
-                    higher_tf = (advanced.get("timeframes") or {}).get("5min" if tf=="1min" else "15min") or {}
-                    trend=_strengthen_m1_m5_signal(trend,tf,higher_tf=higher_tf)
                 candidates.append({"source":"Auto Trend Line","interval":tf,"item":trend,"response":{"mode":mode,"warning":warning,"candle_time":ct,"fibonacci":fib}})
             except Exception:
                 pass
@@ -3998,124 +3889,141 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 pass
         return candidates
 
-    async def process_symbol(key: str):
-        nonlocal created_history, queued
-        candidates = await load_symbol_candidates(key)
-        # Consensus engine: for each symbol + timeframe + live candle, all strategy
-        # modules vote first. Only ONE final BUY/SELL is allowed into AutoTrade.
-        # Ties/conflicts or weak consensus become WAIT and are not sent to MT5.
-        grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
-        for candidate in candidates:
-            source = str(candidate["source"]).strip()
-            if source.lower() in excluded:
+    def _build_consensus(candidates: list[dict[str, Any]], interval: str, candle_time: str) -> dict[str, Any] | None:
+        """Collapse all module outputs into ONE directional decision per XAU timeframe/candle.
+
+        Signal Lab and Signals are aliases of the same master output and therefore count as
+        one strategy family. A trade is emitted only when independent families agree; ties,
+        conflicts and weak consensus become WAIT. This is the final AutoTrade gate.
+        """
+        weights = {
+            "Signal Engine": 1.00,
+            "Technical Analysis": 1.00,
+            "Classic Trade": 1.00,
+            "SNR": 1.20,
+            "Auto Trend Line": 1.10,
+            "ICT Signals": 1.40,
+            "AI Smart Analysis": 0.80,
+        }
+        families: dict[str, dict[str, Any]] = {}
+        aliases = {"signal lab": "Signal Engine", "signals": "Signal Engine"}
+        for c in candidates:
+            if str(c.get("interval")) != interval:
                 continue
-            item = candidate.get("item") or {}
+            item = c.get("item") or {}
             direction = str(item.get("signal") or item.get("direction") or "WAIT").upper()
             if direction not in {"BUY", "SELL"}:
                 continue
-            grouped.setdefault((candidate["interval"], source), []).append(candidate)
-
-        # Re-group by timeframe so every section participates in one decision.
-        by_tf: dict[str, list[dict[str, Any]]] = {}
-        for (_, _source), items in grouped.items():
-            by_tf.setdefault(items[0]["interval"], []).extend(items)
-
-        for tf, tf_candidates in by_tf.items():
-            votes = {"BUY": [], "SELL": []}
-            seen_sources = set()
-            for candidate in tf_candidates:
-                source = str(candidate["source"]).strip()
-                if source in seen_sources:
-                    continue
-                seen_sources.add(source)
-                item = candidate.get("item") or {}
-                direction = str(item.get("signal") or item.get("direction") or "WAIT").upper()
-                confidence = float(item.get("confidence") or item.get("trend_power") or 0)
-                # Confidence is a weight, but every strategy gets a meaningful vote.
-                weight = max(1.0, min(100.0, confidence))
-                votes[direction].append((weight, candidate))
-            buy_score = sum(x[0] for x in votes["BUY"])
-            sell_score = sum(x[0] for x in votes["SELL"])
-            total_votes = len(votes["BUY"]) + len(votes["SELL"])
-            if total_votes < 2 or buy_score == sell_score:
+            source = str(c.get("source") or "").strip()
+            family = aliases.get(source.lower(), source)
+            if family not in weights:
                 continue
-            final_direction = "BUY" if buy_score > sell_score else "SELL"
-            winning = votes[final_direction]
-            losing = votes["SELL" if final_direction == "BUY" else "BUY"]
-            # Require a clear majority: at least 2 agreeing modules and >55% weighted score.
-            winning_score = buy_score if final_direction == "BUY" else sell_score
-            total_score = buy_score + sell_score
-            agreement = winning_score / total_score if total_score else 0.0
-            if len(winning) < 2 or agreement < 0.55:
-                continue
-            # Pick the strongest agreeing candidate for executable levels, while the
-            # consensus itself remains the source of direction.
-            best = max(winning, key=lambda x: x[0])[1]
-            source = "Consensus AutoTrade"
-            item = dict(best.get("item") or {})
+            confidence = max(0.0, min(100.0, float(item.get("confidence") or item.get("trend_power") or 0)))
+            # Confidence contributes gradually; no single module can dominate the ensemble.
+            score = weights[family] * (0.55 + 0.45 * confidence / 100.0)
+            bucket = families.setdefault(family, {"BUY": 0.0, "SELL": 0.0, "items": []})
+            bucket[direction] += score
+            bucket["items"].append((direction, item, source, confidence))
+
+        if not families:
+            return None
+        totals = {d: 0.0 for d in ("BUY", "SELL")}
+        for f in families.values():
+            totals["BUY"] += f["BUY"]
+            totals["SELL"] += f["SELL"]
+        winner = "BUY" if totals["BUY"] > totals["SELL"] else "SELL" if totals["SELL"] > totals["BUY"] else "WAIT"
+        if winner == "WAIT":
+            return None
+        loser = "SELL" if winner == "BUY" else "BUY"
+        active_total = totals[winner] + totals[loser]
+        agreement = (totals[winner] / active_total) if active_total else 0.0
+        distinct_winner = sum(1 for f in families.values() if f[winner] > 0)
+        min_families = 2 if interval in {"1min", "5min"} else 3
+        # Hard conflict protection: if the opposing side is materially represented, wait.
+        if distinct_winner < min_families or agreement < 0.60 or (active_total and totals[loser] / active_total > 0.35):
+            return None
+        # Choose the strongest representative setup on the winning side for levels.
+        reps=[]
+        for f in families.values():
+            for d,item,source,conf in f["items"]:
+                if d == winner:
+                    reps.append((weights.get(aliases.get(source.lower(), source),1.0) * (0.55+0.45*conf/100), item, source, conf))
+        reps.sort(key=lambda x:x[0], reverse=True)
+        _, representative, rep_source, rep_conf = reps[0]
+        return {
+            "signal": winner,
+            "confidence": round(min(99.0, max(0.0, 50.0 + 50.0 * agreement)), 1),
+            "entry": representative.get("entry"),
+            "stop_loss": representative.get("stop_loss"),
+            "take_profit": representative.get("take_profit") or [],
+            "reason": f"Consensus {winner}: {distinct_winner} independent strategy families agreed; agreement {agreement*100:.1f}%.",
+            "consensus_agreement": round(agreement*100, 1),
+            "consensus_families": sorted(families.keys()),
+            "consensus_votes": {f:{"BUY":round(v["BUY"],3),"SELL":round(v["SELL"],3)} for f,v in families.items()},
+            "consensus_source": rep_source,
+            "consensus_source_confidence": rep_conf,
+            "candle_time": candle_time,
+            "strategy_engine": "SignalX Consensus Engine V3",
+            "strategy_version": "V3",
+            "decision_state": "CONFIRMED",
+            "strategy_chain": _strategy_chain(interval),
+        }
+
+    async def process_symbol(key: str):
+        nonlocal created_history, queued
+        candidates = await load_symbol_candidates(key)
+        # Final AutoTrade decision: one consensus signal per timeframe and live candle.
+        intervals = ["1min", "5min", "15min", "30min", "1h", "4h", "1day"]
+        for tf in intervals:
             current_candles = (await get_candles(key, tf, 260))[0]
-            if not current_candles:
-                continue
-            try:
-                entry, sl, tp, repaired = _normalize_auto_trade_levels(item, current_candles, final_direction)
-            except Exception:
+            if len(current_candles) < 40:
                 continue
             candle_time = str(current_candles[-1].get("time"))
-            consensus_conf = min(99.0, max(0.0, (winning_score / max(1, len(winning))) + agreement * 10.0))
-            item.update({
-                "signal": final_direction,
-                "direction": final_direction,
+            consensus = _build_consensus(candidates, tf, candle_time)
+            if not consensus:
+                continue
+            direction = consensus["signal"]
+            try:
+                entry, sl, tp, repaired = _normalize_auto_trade_levels(consensus, current_candles, direction)
+            except Exception:
+                continue
+            consensus.update({
                 "entry": entry, "stop_loss": sl, "take_profit": tp,
                 "current_price": float(current_candles[-1]["close"]),
-                "candle_time": candle_time, "live_levels_verified": True,
+                "live_levels_verified": True,
                 "levels_repaired_from_live_chart": bool(repaired),
-                "consensus": {
-                    "decision": final_direction,
-                    "buy_votes": len(votes["BUY"]),
-                    "sell_votes": len(votes["SELL"]),
-                    "buy_score": round(buy_score, 2),
-                    "sell_score": round(sell_score, 2),
-                    "agreement": round(agreement * 100, 1),
-                    "agreeing_sources": [x[1]["source"] for x in winning],
-                    "conflicting_sources": [x[1]["source"] for x in losing],
-                },
             })
-            fingerprint = (key, source, tf, candle_time, final_direction)
-            if fingerprint in seen_queue_keys:
-                continue
-            seen_queue_keys.add(fingerprint)
+            source = "Consensus"
+            confidence = float(consensus.get("confidence") or 0)
             recent = session.scalars(select(SignalHistory).where(
                 SignalHistory.user_id == user.id,
                 SignalHistory.source == source,
                 SignalHistory.symbol == key,
                 SignalHistory.interval == tf,
                 SignalHistory.candle_time == candle_time,
-                SignalHistory.direction == final_direction,
+                SignalHistory.direction == direction,
             ).order_by(SignalHistory.id.desc())).first()
             payload = {
                 "source": source,
-                "mode": "multi-strategy-consensus",
-                "signal": item,
-                "entry": float(entry),
-                "stop_loss": float(sl),
-                "take_profit": [float(x) for x in tp],
-                "confidence_at_entry": consensus_conf,
-                "candle_time": candle_time,
-                "auto_entry": True,
+                "mode": "consensus-all-strategies-except-book-openai",
+                "signal": consensus,
+                "entry": float(entry), "stop_loss": float(sl), "take_profit": [float(x) for x in tp],
+                "confidence_at_entry": confidence, "candle_time": candle_time,
+                "auto_entry": True, "xauusd_only": True,
             }
             if recent is None:
                 row = SignalHistory(
-                    user_id=user.id, symbol=key, interval=tf, direction=final_direction,
-                    headline=f"AUTO CONSENSUS {final_direction} · {tf.upper()} · {consensus_conf:.1f}%",
+                    user_id=user.id, symbol=key, interval=tf, direction=direction,
+                    headline=f"AUTO CONSENSUS {direction} · {tf.upper()} · {confidence:.1f}%",
                     price=float(entry), payload=json.dumps(payload, ensure_ascii=False), outcome="OPEN",
                     created_at=now, source=source, candle_time=candle_time
                 )
                 session.add(row)
-                created_history.append({"source": source, "symbol": key, "interval": tf, "direction": final_direction, "confidence": consensus_conf})
+                created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction,"confidence":confidence,"agreement":consensus["consensus_agreement"]})
             order = _queue_autotrade_order(
-                symbol=key, source=source, interval=tf, direction=final_direction,
+                symbol=key, source=source, interval=tf, direction=direction,
                 entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
-                confidence=consensus_conf, candle_time=candle_time,
+                confidence=confidence, candle_time=candle_time,
             )
             if order is not None and order not in queued:
                 queued.append(order)
@@ -4131,7 +4039,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         "queued": len(queued),
         "history_count": len(rows),
         "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
-        "forward_mode": "MULTI-STRATEGY CONSENSUS · ONE FINAL SIGNAL PER SYMBOL/TF/CANDLE",
+        "forward_mode": "ONE CONSENSUS SIGNAL PER XAUUSD TIMEFRAME/CANDLE · BOOK + OPENAI EXCLUDED",
         "excluded_sources": ["Book + OpenAI"],
         "items": created_history,
     }
@@ -4149,7 +4057,7 @@ async def _autotrade_worker() -> None:
     while True:
         session = SessionLocal()
         try:
-            if MT5_AUTO_TRADING and MT5_AUTO_DUAL and AUTO_ENTRY_ENABLED and any(MT5_AUTO_SYMBOLS.values()):
+            if MT5_AUTO_TRADING and AUTO_ENTRY_ENABLED:
                 result = await auto_record_signals(
                     symbol="XAU/USD", interval="1min",
                     authorization=f"Bearer {AUTOTRADE_INTERNAL_TOKEN}", session=session
@@ -4201,15 +4109,12 @@ def _mt5_is_connected_now() -> bool:
 def _mt5_market_key(symbol: str | None) -> str:
     """Canonicalize broker symbols to a strict transport market key.
 
-    Handles suffix variants such as XAUUSDm/EURUSDm and separator variants
-    without ever collapsing XAUUSD and EURUSD into the same bucket.
+    Handles XAUUSD broker suffix variants and separator variants.
     """
     raw = str(symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL).strip().upper()
     compact = raw.replace("/", "").replace("-", "").replace("_", "")
     if compact.startswith("XAUUSD"):
         return "XAU/USD"
-    if compact.startswith("EURUSD"):
-        return "EUR/USD"
     return raw.replace("-", "/")
 
 def _mt5_market_state(symbol: str | None) -> dict[str, Any]:
@@ -4657,7 +4562,7 @@ async def mt5_status(symbol: str = DEFAULT_SYMBOL, authorization: str | None = H
     state["connected"] = connected_now
     state["heartbeat_age_sec"] = round(age, 1) if age is not None else None
     state["connection_state"] = "CONNECTED" if connected_now else ("STALE" if age is not None and age <= 60 else "DISCONNECTED")
-    return {"ok": True, "symbol": key, "auto_trading": MT5_AUTO_SYMBOLS.get(key, False), "auto_trading_global": MT5_AUTO_TRADING, "auto_symbols": MT5_AUTO_SYMBOLS, "auto_dual": MT5_AUTO_DUAL, "lot": MT5_LOT_SIZE, "state": state, "queue": len(MT5_ORDER_QUEUE), "demo_only": True, "heartbeat_timeout_sec": MT5_HEARTBEAT_TIMEOUT}
+    return {"ok": True, "symbol": key, "auto_trading": MT5_AUTO_TRADING if key == "XAU/USD" else False, "lot": MT5_LOT_SIZE, "state": state, "queue": len(MT5_ORDER_QUEUE), "demo_only": True, "heartbeat_timeout_sec": MT5_HEARTBEAT_TIMEOUT}
 
 @app.post("/api/v1/mt5/connect")
 async def mt5_connect(body: MT5ConnectBody, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
@@ -4682,39 +4587,24 @@ async def mt5_lot(body: MT5LotBody, authorization: str | None = Header(default=N
     return {"ok": True, "lot": MT5_LOT_SIZE, "demo_only": True}
 
 @app.post("/api/v1/mt5/auto-trading")
-async def mt5_auto_trading(enabled: bool = Query(...), market: str = Query(""), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+async def mt5_auto_trading(enabled: bool = Query(...), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     require_admin(authorization, session)
     global MT5_AUTO_TRADING
-    market = _mt5_market_key(market) if market else None
-    if market in {"XAU/USD", "EUR/USD"}:
-        MT5_AUTO_SYMBOLS[market] = bool(enabled)
-        MT5_AUTO_TRADING = any(MT5_AUTO_SYMBOLS.values())
-        return {"ok": True, "auto_trading": MT5_AUTO_SYMBOLS[market], "market": market, "auto_symbols": MT5_AUTO_SYMBOLS, "demo_only": True}
     MT5_AUTO_TRADING = bool(enabled)
-    for market in MT5_AUTO_SYMBOLS:
-        MT5_AUTO_SYMBOLS[market] = MT5_AUTO_TRADING
-    return {"ok": True, "auto_trading": MT5_AUTO_TRADING, "auto_symbols": MT5_AUTO_SYMBOLS, "demo_only": True}
+    return {"ok": True, "auto_trading": MT5_AUTO_TRADING, "demo_only": True}
 
-@app.post("/api/v1/mt5/auto-dual")
-async def mt5_auto_dual(enabled: bool = Query(...), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    require_admin(authorization, session)
-    global MT5_AUTO_DUAL
-    MT5_AUTO_DUAL = bool(enabled)
-    return {"ok": True, "auto_dual": MT5_AUTO_DUAL, "symbols": ["XAU/USD", "EUR/USD"] if MT5_AUTO_DUAL else ["current"], "demo_only": True}
 
 @app.get("/api/v1/mt5/poll")
 async def mt5_poll(token: str = Query(...), market: str = Query(...), client_id: str = Query("")) -> dict[str, Any]:
     """Return ONLY orders for the requested canonical market.
 
-    The bridge must poll XAU/USD and EUR/USD separately. This is a hard transport
-    boundary in addition to the order payload's symbol field, so an EURUSD order
-    cannot be delivered to the XAUUSD poll and vice versa.
+    The bridge is XAU/USD-only. This is a hard transport boundary.
     """
     if not secrets.compare_digest(token, MT5_BRIDGE_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid MT5 bridge token")
     requested_market = _mt5_market_key(market)
-    if requested_market not in {"XAU/USD", "EUR/USD"}:
-        raise HTTPException(status_code=400, detail="Unsupported MT5 market")
+    if requested_market != "XAU/USD":
+        raise HTTPException(status_code=400, detail="Unsupported MT5 market: only XAU/USD is enabled")
     MT5_BRIDGE_STATE["last_seen"] = datetime.now(timezone.utc).isoformat()
     now = datetime.now(timezone.utc).timestamp()
     client = re.sub(r"[^A-Za-z0-9._:-]+", "_", str(client_id or "").strip())[:100]
@@ -4856,14 +4746,6 @@ async def deploy_diagnostics(authorization: str | None = Header(default=None), s
 @app.get("/api/health")
 async def api_health() -> dict[str, Any]:
     return {"ok": True, "service": "xauusd-trading", "timestamp": datetime.now(timezone.utc).isoformat()}
-
-@app.get("/eurusd.html")
-@app.get("/eurusd")
-@app.get("/eurusd/")
-@app.get("/EURUSD")
-@app.get("/EURUSD/")
-async def read_eurusd() -> FileResponse:
-    return FileResponse(os.path.join(BASE_DIR, "eurusd.html"))
 
 @app.get("/")
 async def read_root() -> FileResponse:
