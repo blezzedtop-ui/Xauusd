@@ -2026,17 +2026,18 @@ def _adaptive_regime(candles: list[dict[str, Any]]) -> dict[str, Any]:
     return {"regime":regime,"trend_strength":trend_strength,"volatility":vol,"volatility_ratio":round(vr,2),"momentum":mom}
 
 def _strategy_profile(interval: str) -> dict[str, Any]:
-    # Every timeframe uses the new Strategy Engine V2. 1M/5M have dedicated
-    # microstructure/noise controls; higher TFs emphasize structure and regime.
-    return {
-        "1min":{"strategy":"Microstructure Momentum + Liquidity V2","min_confirmations":5,"min_quality":72,"max_volatility":"NORMAL"},
-        "5min":{"strategy":"M5 Liquidity + Displacement V2","min_confirmations":5,"min_quality":70,"max_volatility":"HIGH"},
-        "15min":{"strategy":"Intraday Structure + Confluence V2","min_confirmations":4,"min_quality":66,"max_volatility":"HIGH"},
-        "30min":{"strategy":"Institutional Structure + SNR V2","min_confirmations":4,"min_quality":64,"max_volatility":"HIGH"},
-        "1h":{"strategy":"HTF Trend + Momentum V2","min_confirmations":4,"min_quality":62,"max_volatility":"HIGH"},
-        "4h":{"strategy":"Macro Structure + Liquidity V2","min_confirmations":3,"min_quality":58,"max_volatility":"HIGH"},
-        "1day":{"strategy":"Daily Regime + Structural Bias V2","min_confirmations":3,"min_quality":55,"max_volatility":"HIGH"},
-    }.get(interval,{"strategy":"Adaptive Strategy V2","min_confirmations":4,"min_quality":65,"max_volatility":"HIGH"})
+    # Dedicated Strategic Pro profile for each analysis timeframe.
+    # Higher TFs use wider structural context; lower TFs use tighter microstructure.
+    profiles = {
+        "1min":{"strategy":"Microstructure Liquidity Pro","min_confirmations":5,"min_quality":78,"min_score":90,"max_risk_atr":1.20},
+        "5min":{"strategy":"ICT Liquidity + Displacement Pro","min_confirmations":6,"min_quality":78,"min_score":85,"max_risk_atr":2.20},
+        "15min":{"strategy":"Intraday Structure + OB/FVG Pro","min_confirmations":5,"min_quality":76,"min_score":82,"max_risk_atr":2.50},
+        "30min":{"strategy":"Institutional Structure + Liquidity Pro","min_confirmations":5,"min_quality":74,"min_score":80,"max_risk_atr":2.80},
+        "1h":{"strategy":"HTF Trend + Structure Pro","min_confirmations":4,"min_quality":72,"min_score":78,"max_risk_atr":3.00},
+        "4h":{"strategy":"Macro ICT + Liquidity Pro","min_confirmations":4,"min_quality":70,"min_score":75,"max_risk_atr":3.50},
+        "1day":{"strategy":"Daily Macro Structure Pro","min_confirmations":3,"min_quality":68,"min_score":72,"max_risk_atr":4.00},
+    }
+    return profiles.get(interval,{"strategy":"Adaptive Strategic Pro","min_confirmations":4,"min_quality":70,"min_score":80,"max_risk_atr":3.0})
 
 def _strategy_chain(interval: str) -> list[str]:
     return [
@@ -3710,7 +3711,7 @@ async def advanced_signals(symbol: str, authorization: str | None = Header(defau
     return result
 
 
-def _normalize_auto_trade_levels(item: dict[str, Any], candles: list[dict[str, Any]], direction: str) -> tuple[float, float, list[float], bool]:
+def _normalize_auto_trade_levels(item: dict[str, Any], candles: list[dict[str, Any]], direction: str, interval: str | None = None) -> tuple[float, float, list[float], bool]:
     """Validate/repair Entry/SL/TP against the current live TradingView chart."""
     if not candles:
         raise MarketDataError("No live candles available for auto-trade levels")
@@ -3720,6 +3721,15 @@ def _normalize_auto_trade_levels(item: dict[str, Any], candles: list[dict[str, A
     try: entry=float(item.get("entry")) if item.get("entry") is not None else current
     except Exception: entry=current
     repaired=False
+    if str(interval or "").lower() == "5min":
+        # Preserve the Strategic Pro structural levels unless they are invalid on the live candle.
+        try:
+            s_sl=float(item.get("stop_loss")) if item.get("stop_loss") is not None else None
+            s_tp=[float(v) for v in (item.get("take_profit") or []) if v is not None]
+            if entry>0 and s_sl is not None and s_tp and ((direction=="BUY" and s_sl<entry and all(v>entry for v in s_tp)) or (direction=="SELL" and s_sl>entry and all(v<entry for v in s_tp))):
+                return round(entry,4),round(s_sl,4),[round(v,4) for v in s_tp[:2]],False
+        except Exception:
+            pass
     if entry<=0 or abs(entry-current)>max(atr_now*2.5,current*0.0025):
         entry=current; repaired=True
     try: sl=float(item.get("stop_loss")) if item.get("stop_loss") is not None else None
@@ -3738,6 +3748,250 @@ def _normalize_auto_trade_levels(item: dict[str, Any], candles: list[dict[str, A
         if not tps or not all(v<entry for v in tps): tps=[entry-risk*1.5,entry-risk*2.5]; repaired=True
     return round(entry,4),round(sl,4),[round(v,4) for v in tps[:2]],repaired
 
+
+
+def _m5_htf_bias(candles: list[dict[str, Any]]) -> str:
+    """Conservative HTF bias: EMA alignment + confirmed swing structure."""
+    if len(candles) < 55:
+        return "NEUTRAL"
+    closes=[float(c["close"]) for c in candles]
+    price=closes[-1]
+    e20=_ema(closes[-80:],20)
+    e50=_ema(closes[-120:],50)
+    highs,lows=_ict_swings(candles[:-1],2)
+    bull=len(highs)>=2 and len(lows)>=2 and highs[-1][1]>highs[-2][1] and lows[-1][1]>lows[-2][1]
+    bear=len(highs)>=2 and len(lows)>=2 and highs[-1][1]<highs[-2][1] and lows[-1][1]<lows[-2][1]
+    if bull and e20>e50 and price>e20: return "BULLISH"
+    if bear and e20<e50 and price<e20: return "BEARISH"
+    if e20>e50 and price>e20: return "BULLISH"
+    if e20<e50 and price<e20: return "BEARISH"
+    return "NEUTRAL"
+
+
+def _m5_recent_liquidity_sweep(candles: list[dict[str, Any]], lookback: int = 18) -> dict[str, Any]:
+    """Find a recent M5 swing liquidity sweep, preferring the newest event."""
+    if len(candles) < 25:
+        return {"type":"NONE","level":None,"extreme":None,"index":None}
+    highs,lows=_ict_swings(candles[:-2],2)
+    start=max(0,len(candles)-lookback-8)
+    recent_h=[x for x in highs if x[0]>=start]
+    recent_l=[x for x in lows if x[0]>=start]
+    for i in range(len(candles)-2, max(1,len(candles)-6), -1):
+        c=candles[i]; hi=float(c["high"]); lo=float(c["low"]); close=float(c["close"])
+        if recent_l:
+            level=recent_l[-1][1]
+            if lo < level and close > level:
+                return {"type":"SSL_SWEEP","level":level,"extreme":lo,"index":i}
+        if recent_h:
+            level=recent_h[-1][1]
+            if hi > level and close < level:
+                return {"type":"BSL_SWEEP","level":level,"extreme":hi,"index":i}
+    return {"type":"NONE","level":None,"extreme":None,"index":None}
+
+
+def _m5_zone_near(price: float, zone: dict[str, Any], atr_value: float, max_atr: float = 0.45) -> bool:
+    if not zone or zone.get("low") is None or zone.get("high") is None:
+        return False
+    lo=float(zone["low"]); hi=float(zone["high"])
+    return (lo-max_atr*atr_value) <= price <= (hi+max_atr*atr_value)
+
+
+def _m5_strategic_pro(c5: list[dict[str, Any]], c15: list[dict[str, Any]],
+                      c1h: list[dict[str, Any]], c4h: list[dict[str, Any]]) -> dict[str, Any]:
+    """M5 Strategic Pro: HTF bias -> liquidity sweep -> MSS/BOS -> displacement -> OB/FVG retest -> RR.
+
+    This is an AutoTrade gate, not a prediction guarantee. It intentionally prefers WAIT
+    over forcing a setup when institutional-style confluence is incomplete.
+    """
+    if min(len(c5),len(c15),len(c1h),len(c4h)) < 60:
+        return {"signal":"WAIT","score":0,"confidence":0,"reason":"Insufficient M5/HTF candles","confirmed":False}
+    price=float(c5[-1]["close"])
+    a5=max(atr(c5),price*0.0002)
+    b4=_m5_htf_bias(c4h); b1=_m5_htf_bias(c1h); b15=_m5_htf_bias(c15)
+    sweep=_m5_recent_liquidity_sweep(c5)
+    # Sweep determines the setup direction; HTF must agree rather than being overridden.
+    direction="BUY" if sweep["type"]=="SSL_SWEEP" else "SELL" if sweep["type"]=="BSL_SWEEP" else "WAIT"
+    score=0; checks=[]; reasons=[]
+    def add(name,pts,ok,reason):
+        nonlocal score
+        if ok:
+            score += pts; checks.append({"name":name,"points":pts,"status":"PASS"}); reasons.append(reason)
+        else:
+            checks.append({"name":name,"points":0,"status":"MISS"})
+    if direction=="WAIT":
+        return {"signal":"WAIT","score":0,"confidence":0,"reason":"No fresh M5 liquidity sweep","confirmed":False,
+                "bias":{"H4":b4,"H1":b1,"M15":b15}}
+    add("H4 Bias",15,(direction=="BUY" and b4=="BULLISH") or (direction=="SELL" and b4=="BEARISH"),f"H4 {b4}")
+    add("H1 Bias",15,(direction=="BUY" and b1=="BULLISH") or (direction=="SELL" and b1=="BEARISH"),f"H1 {b1}")
+    add("M15 Bias",10,(direction=="BUY" and b15=="BULLISH") or (direction=="SELL" and b15=="BEARISH"),f"M15 {b15}")
+    sweep_ok=(direction=="BUY" and sweep["type"]=="SSL_SWEEP") or (direction=="SELL" and sweep["type"]=="BSL_SWEEP")
+    add("Liquidity Sweep",15,sweep_ok,f"{sweep['type']} at {sweep['level']}")
+    mss,mss_level=_ict_mss(c5,direction)
+    add("MSS / CHoCH",10,mss,f"M5 {'bullish' if direction=='BUY' else 'bearish'} structure shift")
+    disp,disp_ratio=_ict_displacement(c5,direction)
+    add("Displacement",10,disp,f"M5 displacement {disp_ratio:.2f} ATR")
+    fvg=_ict_fvg(c5)
+    ob=_ict_order_block(c5,direction,a5)
+    fvg_ok=fvg.get("type")==('BULLISH' if direction=='BUY' else 'BEARISH') and _m5_zone_near(price,fvg,a5)
+    ob_ok=ob.get("type")==('BULLISH' if direction=='BUY' else 'BEARISH') and _m5_zone_near(price,ob,a5)
+    add("FVG Retest",5,fvg_ok,f"M5 {fvg.get('type')} FVG retest")
+    add("Order Block Retest",5,ob_ok,f"M5 {ob.get('type')} OB retest")
+    # Require both structure shift and displacement, plus at least one institutional zone.
+    structure_ok=mss and disp and (fvg_ok or ob_ok)
+    if not structure_ok:
+        return {"signal":"WAIT","score":score,"confidence":score,"confirmed":False,
+                "reason":"; ".join(dict.fromkeys(reasons)) or "Incomplete M5 structure", "checks":checks,
+                "bias":{"H4":b4,"H1":b1,"M15":b15},"liquidity":sweep,
+                "fvg":fvg,"order_block":ob,"mss":mss,"displacement":disp}
+    # Entry at the retested zone midpoint when possible; otherwise live price.
+    zone=ob if ob_ok else fvg if fvg_ok else None
+    entry=price if not zone else (float(zone["low"])+float(zone["high"])) / 2.0
+    # Structural stop: beyond sweep extreme and/or zone, with a small ATR buffer.
+    buffer=a5*0.18
+    if direction=="BUY":
+        structural=min(float(sweep["extreme"]), float(zone["low"]) if zone else price-a5)
+        sl=structural-buffer
+        risk=entry-sl
+    else:
+        structural=max(float(sweep["extreme"]), float(zone["high"]) if zone else price+a5)
+        sl=structural+buffer
+        risk=sl-entry
+    if risk <= 0 or risk > a5*2.2:
+        return {"signal":"WAIT","score":score,"confidence":score,"confirmed":False,
+                "reason":"Structural risk invalid/too wide", "checks":checks,
+                "bias":{"H4":b4,"H1":b1,"M15":b15},"liquidity":sweep}
+    target=_ict_target_liquidity(c5,direction,entry)
+    if direction=="BUY":
+        tp1=target if target and target>entry+risk*1.5 else entry+risk*1.5
+        tp2=entry+risk*2.5
+        if target and target>tp1: tp2=max(tp2,target)
+        rr=(tp1-entry)/risk
+    else:
+        tp1=target if target and target<entry-risk*1.5 else entry-risk*1.5
+        tp2=entry-risk*2.5
+        if target and target<tp1: tp2=min(tp2,target)
+        rr=(entry-tp1)/risk
+    add("RR >= 1.5",5,rr>=1.5,f"RR {rr:.2f}")
+    confirmed=score>=85 and rr>=1.5
+    return {
+        "signal":direction if confirmed else "WAIT","score":score,"confidence":min(99,score),"confirmed":confirmed,
+        "entry":round(entry,4),"stop_loss":round(sl,4),"take_profit":[round(tp1,4),round(tp2,4)],"risk_reward":round(rr,2),
+        "bias":{"H4":b4,"H1":b1,"M15":b15},"liquidity":sweep,"mss":mss,"mss_level":mss_level,
+        "displacement":disp,"displacement_atr":round(disp_ratio,2),"fvg":fvg,"order_block":ob,
+        "checks":checks,"reason":"; ".join(dict.fromkeys(reasons)),"model":"M5 Strategic Pro",
+        "strategy_engine":"SignalX M5 Strategic Pro","strategy_version":"SP1",
+        "strategy_chain":["H4 Bias","H1 Bias","M15 Bias","Liquidity Sweep","MSS/CHoCH","Displacement","Order Block/FVG Retest","RR Validation","AutoTrade"],
+    }
+
+def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[dict[str, Any]]],
+                                  news_blocked: bool = False) -> dict[str, Any]:
+    """Dedicated Strategic Pro gate for every timeframe.
+
+    Chain: HTF bias -> session/liquidity -> structure shift -> displacement ->
+    OB/FVG proximity -> volatility -> RR. The exact thresholds adapt to TF.
+    """
+    profile=_strategy_profile(interval)
+    candles=candles_by_tf.get(interval) or []
+    if len(candles)<40:
+        return {"signal":"WAIT","score":0,"confirmed":False,"reason":"Insufficient candles","strategy_engine":"SignalX Strategic Pro","strategy_version":"TF-SP1"}
+    price=float(candles[-1]["close"]); a=max(atr(candles),1e-9)
+    closes=[float(c["close"]) for c in candles]
+    ema_fast=_ema(closes[-100:],20); ema_slow=_ema(closes[-160:],50)
+    local_bias="BUY" if ema_fast>ema_slow else "SELL" if ema_fast<ema_slow else "WAIT"
+    # Higher-timeframe alignment. Each TF looks to the nearest meaningful parent.
+    parent_map={"5min":"15min","15min":"1h","30min":"1h","1h":"4h","4h":"1day","1day":None,"1min":"5min"}
+    parent=parent_map.get(interval)
+    parent_bias="WAIT"
+    if parent and len(candles_by_tf.get(parent) or [])>=40:
+        pc=candles_by_tf[parent]; pclose=[float(c["close"]) for c in pc]
+        pe20=_ema(pclose[-100:],20); pe50=_ema(pclose[-160:],50)
+        parent_bias="BUY" if pe20>pe50 else "SELL" if pe20<pe50 else "WAIT"
+    direction=local_bias if local_bias==parent_bias or parent is None else "WAIT"
+    checks=[]; reasons=[]; score=0; confirms=0
+    def add(name,pts,ok,reason):
+        nonlocal score,confirms
+        checks.append({"name":name,"ok":bool(ok),"points":pts,"reason":reason})
+        if ok: score+=pts; confirms+=1
+        else: reasons.append(reason)
+    add("Local Trend",12,direction in {"BUY","SELL"},f"{interval} trend={local_bias}")
+    add("HTF Bias",15,direction in {"BUY","SELL"} and (parent is None or parent_bias==direction),f"parent={parent or 'none'} bias={parent_bias}")
+    # Session filter: active only during liquid London/NY overlap windows in UTC.
+    now=candles[-1].get("time")
+    session_ok=True
+    try:
+        dt=datetime.fromisoformat(str(now).replace("Z","+00:00")) if now else datetime.now(timezone.utc)
+        if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
+        h=dt.astimezone(timezone.utc).hour
+        session_ok=(7<=h<17)
+    except Exception: pass
+    # For 4H/D1, session timing is not a hard filter.
+    if interval in {"5min","15min","30min","1h"}:
+        add("Liquid Session",8,session_ok,"London/NY liquid session" if session_ok else "Outside liquid London/NY window")
+    else:
+        add("Session Context",5,True,"Higher timeframe session-neutral")
+    # Sweep against recent structure.
+    lb={"1min":12,"5min":18,"15min":20,"30min":24,"1h":30,"4h":36,"1day":40}.get(interval,20)
+    recent=candles[-(lb+2):-1] if len(candles)>lb+2 else candles[:-1]
+    rh=max(float(c["high"]) for c in recent); rl=min(float(c["low"]) for c in recent)
+    last=candles[-1]; high=float(last["high"]); low=float(last["low"]); close=float(last["close"]); op=float(last["open"])
+    if direction=="BUY": sweep=(low<rl and close>rl)
+    elif direction=="SELL": sweep=(high>rh and close<rh)
+    else: sweep=False
+    add("Liquidity Sweep",15,sweep,"bullish/bearish recent liquidity sweep")
+    # Structure shift: latest close breaks a short structure in direction.
+    struct=candles[-7:-1]
+    sh=max(float(c["high"]) for c in struct); sl=min(float(c["low"]) for c in struct)
+    bos=(close>sh if direction=="BUY" else close<sl if direction=="SELL" else False)
+    add("BOS / CHoCH",12,bos,"directional structure break")
+    # Displacement: body relative to ATR.
+    body=abs(close-op); disp=body/a
+    disp_req={"1min":0.75,"5min":0.95,"15min":1.0,"30min":1.05,"1h":1.10,"4h":1.15,"1day":1.20}.get(interval,1.0)
+    displacement=disp>=disp_req and ((close>op) if direction=="BUY" else (close<op) if direction=="SELL" else False)
+    add("Displacement",10,displacement,f"body={disp:.2f} ATR; need {disp_req:.2f}")
+    # OB/FVG style zone: latest three-candle imbalance or prior opposite candle.
+    c1,c2,c3=candles[-3],candles[-2],candles[-1]
+    bull_fvg=float(c3["low"])>float(c1["high"]); bear_fvg=float(c3["high"])<float(c1["low"])
+    ob_bull=float(c2["close"])<float(c2["open"]) and float(c3["close"])>float(c3["open"]) and body>=a*0.8
+    ob_bear=float(c2["close"])>float(c2["open"]) and float(c3["close"])<float(c3["open"]) and body>=a*0.8
+    zone_ok=(bull_fvg or ob_bull) if direction=="BUY" else (bear_fvg or ob_bear) if direction=="SELL" else False
+    add("OB / FVG",10,zone_ok,"institutional zone/imbalance confirmation")
+    # Volatility must be tradable, not dead market or extreme shock.
+    ranges=[abs(float(c["high"])-float(c["low"])) for c in candles[-20:]]
+    avg_range=sum(ranges)/max(len(ranges),1); vol_ratio=avg_range/a
+    vol_ok=0.55<=vol_ratio<=2.75
+    add("Volatility",5,vol_ok,f"range/ATR={vol_ratio:.2f}")
+    # News is a hard block for lower TFs; higher TF keeps the setup visible but no AutoTrade.
+    if news_blocked and interval in {"5min","15min","30min"}:
+        add("News Guard",8,False,"high-impact news blackout")
+    else:
+        add("News Guard",8,True,"news clear / higher-TF context")
+    confirmed=(direction in {"BUY","SELL"} and score>=profile["min_score"] and confirms>=profile["min_confirmations"] and not (news_blocked and interval in {"5min","15min","30min"}))
+    # Structural levels and RR.
+    if direction=="BUY":
+        sl=min(rl,float(c2["low"]),float(last["low"]))-a*0.18; risk=price-sl
+        target=rh; rr=(target-price)/max(risk,1e-9)
+    elif direction=="SELL":
+        sl=max(rh,float(c2["high"]),float(last["high"]))+a*0.18; risk=sl-price
+        target=rl; rr=(price-target)/max(risk,1e-9)
+    else: sl=price; target=price; risk=0; rr=0
+    risk_ok=0<risk<=a*profile["max_risk_atr"]
+    rr_ok=rr>=1.5
+    add("Structural Risk",5,risk_ok,f"risk={risk/a:.2f} ATR")
+    add("RR >= 1.5",8,rr_ok,f"RR={rr:.2f}")
+    confirmed=confirmed and risk_ok and rr_ok
+    if not confirmed: direction_out="WAIT"
+    else: direction_out=direction
+    # Conservative TP ladder: first structural target, second extension.
+    if confirmed:
+        if direction=="BUY": t1=max(price+risk*1.5,target); t2=max(price+risk*2.5,t1+risk*0.5)
+        else: t1=min(price-risk*1.5,target); t2=min(price-risk*2.5,t1-risk*0.5)
+    else: t1=t2=price
+    return {"signal":direction_out,"score":score,"confidence":min(99,score),"confirmed":confirmed,
+            "entry":round(price,4),"stop_loss":round(sl,4),"take_profit":[round(t1,4),round(t2,4)],"risk_reward":round(rr,2),
+            "strategy_engine":"SignalX Strategic Pro","strategy_version":"TF-SP1","timeframe":interval,
+            "profile":profile,"parent_timeframe":parent,"parent_bias":parent_bias,"local_bias":local_bias,
+            "checks":checks,"reason":"; ".join(dict.fromkeys(reasons)) or "All Strategic Pro gates passed",
+            "session_filter":session_ok,"volatility_ratio":round(vol_ratio,2)}
 
 def _autotrade_source_excluded(source: str) -> bool:
     normalized = re.sub(r"[\s_\-/]+", " ", str(source or "").strip().lower()).strip()
@@ -3988,8 +4242,29 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             if not consensus:
                 continue
             direction = consensus["signal"]
+            # Every tradable timeframe has its own Strategic Pro gate.
+            if tf in {"5min","15min","30min","1h","4h","1day"} and direction in {"BUY","SELL"}:
+                try:
+                    strategic=_strategic_pro_for_timeframe(tf, {k:v[0] for k,v in live_by_tf.items()}, news_blocked=False)
+                    consensus["strategic_pro"]=strategic
+                    if strategic.get("signal") != direction or not strategic.get("confirmed"):
+                        print(f"[TF STRATEGIC PRO] BLOCKED tf={tf} consensus={direction} strategic={strategic.get('signal')} score={strategic.get('score',0)} rr={strategic.get('risk_reward',0)} reason={strategic.get('reason','')}")
+                        continue
+                    consensus.update({
+                        "entry": strategic.get("entry"),
+                        "stop_loss": strategic.get("stop_loss"),
+                        "take_profit": strategic.get("take_profit",[]),
+                        "risk_reward": strategic.get("risk_reward",0),
+                        "confidence": strategic.get("confidence",consensus.get("confidence",0)),
+                        "strategy_engine": f"SignalX {tf} Strategic Pro",
+                        "strategy_version": "TF-SP1",
+                        "strategy_chain": ["HTF Bias","Liquid Session","Liquidity Sweep","BOS/CHoCH","Displacement","OB/FVG","Volatility","News Guard","RR Validation","AutoTrade"],
+                    })
+                except Exception as exc:
+                    print(f"[TF STRATEGIC PRO] ERROR tf={tf}: {exc}")
+                    continue
             try:
-                entry, sl, tp, repaired = _normalize_auto_trade_levels(consensus, current_candles, direction)
+                entry, sl, tp, repaired = _normalize_auto_trade_levels(consensus, current_candles, direction, tf)
             except Exception:
                 continue
             consensus.update({

@@ -15,6 +15,7 @@ input long   SignalXMagic=26091401;
 input int    DuplicateCooldownSeconds=30;
 input int    MaxDeviationPoints=100; // wider XAU execution tolerance for normal market movement
 input int    ExecutionRetries=2; // retry transient price/quote errors only
+input int    MaxSpreadPoints=80; // XAUUSDm maximum bid/ask spread in points
 input string BridgeClientId=""; // blank = account-specific client id
 input bool   SingleSession=true; // only one EA instance per MT5 terminal/account
 input int    SessionLeaseSeconds=15;
@@ -529,6 +530,16 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
       ulong ord=0;
       bool brokerAccepted=false;
       int attempts=MathMax(1,MathMin(3,ExecutionRetries));
+
+      double spread_points=(liveTick.ask-liveTick.bid)/SymbolInfoDouble(execSymbol,SYMBOL_POINT);
+      if(MaxSpreadPoints>0 && spread_points>MaxSpreadPoints)
+      {
+         string msg=StringFormat("BLOCKED: spread %.1f points > max %d",spread_points,MaxSpreadPoints);
+         Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," ",msg);
+         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,msg);
+         pos+=MathMax(1,StringLen(order_id));
+         continue;
+      }
 
       if(dir!="BUY" && dir!="SELL")
       {
