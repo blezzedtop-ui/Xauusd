@@ -3934,27 +3934,60 @@ def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[di
     recent=candles[-(lb+2):-1] if len(candles)>lb+2 else candles[:-1]
     rh=max(float(c["high"]) for c in recent); rl=min(float(c["low"]) for c in recent)
     last=candles[-1]; high=float(last["high"]); low=float(last["low"]); close=float(last["close"]); op=float(last["open"])
-    if direction=="BUY": sweep=(low<rl and close>rl)
-    elif direction=="SELL": sweep=(high>rh and close<rh)
-    else: sweep=False
-    add("Liquidity Sweep",15,sweep,"bullish/bearish recent liquidity sweep")
-    # Structure shift: latest close breaks a short structure in direction.
-    struct=candles[-7:-1]
-    sh=max(float(c["high"]) for c in struct); sl=min(float(c["low"]) for c in struct)
-    bos=(close>sh if direction=="BUY" else close<sl if direction=="SELL" else False)
-    add("BOS / CHoCH",12,bos,"directional structure break")
-    # Displacement: body relative to ATR.
-    body=abs(close-op); disp=body/a
+
+    # Confirmation events are allowed to occur in a short recent window instead of
+    # requiring every institutional event to happen on the exact same candle. This
+    # preserves the strict ensemble while preventing a practically-zero signal rate.
+    sweep_window=candles[-4:-1] if len(candles)>=4 else candles[:-1]
+    sweep=False
+    if direction=="BUY":
+        for sc in sweep_window:
+            if float(sc["low"]) < rl and float(sc["close"]) > rl:
+                sweep=True; break
+    elif direction=="SELL":
+        for sc in sweep_window:
+            if float(sc["high"]) > rh and float(sc["close"]) < rh:
+                sweep=True; break
+    add("Liquidity Sweep",15,sweep,"recent bullish/bearish liquidity sweep")
+
+    # Structure shift: a directional close break seen within the last 3 completed bars.
+    bos=False
+    for idx in range(max(1,len(candles)-4), len(candles)):
+        cc=candles[idx]
+        struct=candles[max(0,idx-7):idx]
+        if not struct:
+            continue
+        sh=max(float(c["high"]) for c in struct); ss=min(float(c["low"]) for c in struct)
+        cc_close=float(cc["close"])
+        if direction=="BUY" and cc_close>sh:
+            bos=True; break
+        if direction=="SELL" and cc_close<ss:
+            bos=True; break
+    add("BOS / CHoCH",12,bos,"recent directional structure break")
+
+    # Displacement: any recent completed candle can provide the impulse.
+    body=abs(close-op)
     disp_req={"1min":0.75,"5min":0.95,"15min":1.0,"30min":1.05,"1h":1.10,"4h":1.15,"1day":1.20}.get(interval,1.0)
-    displacement=disp>=disp_req and ((close>op) if direction=="BUY" else (close<op) if direction=="SELL" else False)
-    add("Displacement",10,displacement,f"body={disp:.2f} ATR; need {disp_req:.2f}")
-    # OB/FVG style zone: latest three-candle imbalance or prior opposite candle.
-    c1,c2,c3=candles[-3],candles[-2],candles[-1]
-    bull_fvg=float(c3["low"])>float(c1["high"]); bear_fvg=float(c3["high"])<float(c1["low"])
-    ob_bull=float(c2["close"])<float(c2["open"]) and float(c3["close"])>float(c3["open"]) and body>=a*0.8
-    ob_bear=float(c2["close"])>float(c2["open"]) and float(c3["close"])<float(c3["open"]) and body>=a*0.8
-    zone_ok=(bull_fvg or ob_bull) if direction=="BUY" else (bear_fvg or ob_bear) if direction=="SELL" else False
-    add("OB / FVG",10,zone_ok,"institutional zone/imbalance confirmation")
+    displacement=False; best_disp=0.0
+    for dc in candles[-4:-1] if len(candles)>=4 else candles[:-1]:
+        dc_body=abs(float(dc["close"])-float(dc["open"])) / a
+        best_disp=max(best_disp,dc_body)
+        if dc_body>=disp_req and ((float(dc["close"])>float(dc["open"])) if direction=="BUY" else (float(dc["close"])<float(dc["open"])) if direction=="SELL" else False):
+            displacement=True
+    add("Displacement",10,displacement,f"recent best body={best_disp:.2f} ATR; need {disp_req:.2f}")
+
+    # OB/FVG confirmation can also be recent (last 5 completed candles).
+    zone_ok=False
+    for idx in range(max(2,len(candles)-6), len(candles)-1):
+        c1,c2,c3=candles[idx-2],candles[idx-1],candles[idx]
+        c3_open=float(c3["open"]); c3_close=float(c3["close"])
+        bull_fvg=float(c3["low"])>float(c1["high"]); bear_fvg=float(c3["high"])<float(c1["low"])
+        ob_body=abs(c3_close-c3_open)
+        ob_bull=float(c2["close"])<float(c2["open"]) and c3_close>c3_open and ob_body>=a*0.8
+        ob_bear=float(c2["close"])>float(c2["open"]) and c3_close<c3_open and ob_body>=a*0.8
+        if (direction=="BUY" and (bull_fvg or ob_bull)) or (direction=="SELL" and (bear_fvg or ob_bear)):
+            zone_ok=True; break
+    add("OB / FVG",10,zone_ok,"recent institutional zone/imbalance confirmation")
     # Volatility must be tradable, not dead market or extreme shock.
     ranges=[abs(float(c["high"])-float(c["low"])) for c in candles[-20:]]
     avg_range=sum(ranges)/max(len(ranges),1); vol_ratio=avg_range/a
@@ -4075,7 +4108,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     queued = []
     seen_queue_keys = set()
 
-    async def load_symbol_candidates(key: str) -> list[dict[str, Any]]:
+    async def load_symbol_candidates(key: str) -> tuple[list[dict[str, Any]], dict[str, tuple[list[dict[str, Any]], str, str | None]]]:
         candidates: list[dict[str, Any]] = []
         # One canonical live candle series per timeframe. Every module below consumes
         # the same timeframe candles, so the signal chain cannot mix symbols or TF data.
@@ -4243,9 +4276,33 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             candle_time = str(current_candles[-1].get("time"))
             consensus = _build_consensus(candidates, tf, candle_time)
             if not consensus:
+                print(f"[SIGNAL FLOW] WAIT tf={tf} candle={candle_time} reason=no_consensus")
                 continue
             direction = consensus["signal"]
-            # Every tradable timeframe has its own Strategic Pro gate.
+
+            # Persist every confirmed consensus signal to Signal History BEFORE the
+            # stricter AutoTrade Strategic-Pro gate. This keeps the history useful even
+            # when a high-quality signal is intentionally rejected for execution.
+            confidence = float(consensus.get("confidence") or 0)
+            entry = consensus.get("entry")
+            sl = consensus.get("stop_loss")
+            tp = consensus.get("take_profit") or []
+            if entry is None or sl is None or len(tp) < 1:
+                print(f"[SIGNAL FLOW] HISTORY BLOCKED tf={tf} dir={direction} reason=missing_levels entry={entry} sl={sl} tp={tp}")
+                continue
+            source = str(consensus.get("consensus_source") or "Signal Consensus")
+            payload = {"type":"CONSENSUS","signal":direction,"confidence":confidence,"strategy_engine":consensus.get("strategy_engine"),"strategy_version":consensus.get("strategy_version"),"reason":consensus.get("reason"),"consensus":consensus}
+            headline=f"CONSENSUS {direction} · {tf.upper()} · {confidence:.1f}%"
+            history_row = SignalHistory(
+                user_id=user.id, symbol=key, interval=tf, signal=direction,
+                headline=headline, price=float(entry), payload=json.dumps(payload, ensure_ascii=False),
+                outcome="OPEN", created_at=now, source=source, candle_time=candle_time
+            )
+            session.add(history_row)
+            created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction,"confidence":confidence,"agreement":consensus["consensus_agreement"],"history_recorded":True})
+            print(f"[SIGNAL HISTORY] RECORDED market={key} tf={tf} dir={direction} confidence={confidence:.1f} candle={candle_time}")
+
+            # Every tradable timeframe has its own Strategic Pro gate for AutoTrade.
             if tf in {"5min","15min","30min","1h","4h","1day"} and direction in {"BUY","SELL"}:
                 try:
                     strategic=_strategic_pro_for_timeframe(tf, {k:v[0] for k,v in live_by_tf.items()}, news_blocked=False)
