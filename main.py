@@ -3425,9 +3425,9 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 1
             payload = json.loads(row.payload or "{}")
         except Exception:
             payload = {}
-        setup = payload.get("setup") or {}
+        setup = payload.get("setup") if isinstance(payload.get("setup"), dict) else {}
         # Support current auto-record schema, legacy advanced schema and signal-module schema.
-        adv = payload.get("advanced") or payload.get("signal") or {}
+        adv = payload.get("advanced") if isinstance(payload.get("advanced"), dict) else (payload.get("signal") if isinstance(payload.get("signal"), dict) else {})
         setup = {
             "entry": setup.get("entry", adv.get("entry", payload.get("entry", row.price))),
             "stop_loss": setup.get("stop_loss", adv.get("stop_loss", payload.get("stop_loss", payload.get("sl")))),
@@ -4898,10 +4898,10 @@ async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Que
         payload = {}
         try: payload = json.loads(r.payload)
         except Exception: pass
-        setup = payload.get("setup") or {}
+        setup = payload.get("setup") if isinstance(payload.get("setup"), dict) else {}
         # Current auto-trade records keep execution levels at the payload root; older records keep them under setup/advanced.
         if not setup:
-            adv = payload.get("advanced") or payload.get("signal") or {}
+            adv = payload.get("advanced") if isinstance(payload.get("advanced"), dict) else (payload.get("signal") if isinstance(payload.get("signal"), dict) else {})
             setup = {
                 "entry": adv.get("entry", payload.get("entry", r.price)),
                 "stop_loss": adv.get("stop_loss", payload.get("stop_loss", payload.get("sl"))),
@@ -4914,17 +4914,23 @@ async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Que
                 "take_profit": setup.get("take_profit", payload.get("take_profit", payload.get("tp", []))),
             }
         result = payload.get("result", {}) or {}
-        created_at = r.created_at if r.created_at.tzinfo else r.created_at.replace(tzinfo=timezone.utc)
-        closed_at = r.closed_at if r.closed_at and r.closed_at.tzinfo else (r.closed_at.replace(tzinfo=timezone.utc) if r.closed_at else None)
+        created_at = r.created_at
+        if created_at is None:
+            created_at = datetime.now(timezone.utc)
+        elif created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=timezone.utc)
+        closed_at = r.closed_at
+        if closed_at and closed_at.tzinfo is None:
+            closed_at = closed_at.replace(tzinfo=timezone.utc)
         duration_seconds = result.get("duration_seconds")
         if duration_seconds is None and closed_at:
             duration_seconds = max(0, int((closed_at - created_at).total_seconds()))
-        setup_strength, setup_grade, strong_setup = _setup_strength_from_payload(payload, payload.get("confidence_at_entry", payload.get("signal",{}).get("confidence")))
+        setup_strength, setup_grade, strong_setup = _setup_strength_from_payload(payload, payload.get("confidence_at_entry", ((payload.get("signal") or {}).get("confidence") if isinstance(payload.get("signal"), dict) else None)))
         entry_value = setup.get("entry", r.price)
         tp_value = setup.get("take_profit", [])
         sl_value = setup.get("stop_loss")
         tp_pips, tp_pips_total, sl_pips = history_level_pips(r.symbol, entry_value, tp_value, sl_value)
-        items.append({"id": r.id, "symbol": r.symbol, "interval": r.interval, "source": getattr(r, "source", None) or "Signals", "candle_time": getattr(r, "candle_time", None), "direction": r.direction, "entry": entry_value, "tp": tp_value, "sl": sl_value, "tp_pips": tp_pips, "tp_pips_total": tp_pips_total, "sl_pips": sl_pips, "pip_size": history_pip_size(r.symbol), "headline": r.headline, "price": r.price, "outcome": r.outcome, "result_price": result.get("price"), "duration_seconds": duration_seconds, "duration_minutes": round(duration_seconds/60,2) if duration_seconds is not None else None, "auto_entry": bool(payload.get("auto_entry")), "confidence": payload.get("confidence_at_entry", payload.get("signal",{}).get("confidence")), "setup_strength": payload.get("setup_strength", setup_strength), "setup_grade": payload.get("setup_grade", setup_grade), "strong_setup": bool(payload.get("strong_setup", strong_setup)), "created_at": created_at.isoformat(), "closed_at": closed_at.isoformat() if closed_at else None})
+        items.append({"id": r.id, "symbol": r.symbol, "interval": r.interval, "source": getattr(r, "source", None) or "Signals", "candle_time": getattr(r, "candle_time", None), "direction": r.direction, "entry": entry_value, "tp": tp_value, "sl": sl_value, "tp_pips": tp_pips, "tp_pips_total": tp_pips_total, "sl_pips": sl_pips, "pip_size": history_pip_size(r.symbol), "headline": r.headline, "price": r.price, "outcome": r.outcome, "result_price": result.get("price"), "duration_seconds": duration_seconds, "duration_minutes": round(duration_seconds/60,2) if duration_seconds is not None else None, "auto_entry": bool(payload.get("auto_entry")), "confidence": payload.get("confidence_at_entry", ((payload.get("signal") or {}).get("confidence") if isinstance(payload.get("signal"), dict) else None)), "setup_strength": payload.get("setup_strength", setup_strength), "setup_grade": payload.get("setup_grade", setup_grade), "strong_setup": bool(payload.get("strong_setup", strong_setup)), "created_at": created_at.isoformat(), "closed_at": closed_at.isoformat() if closed_at else None})
     return {"items": items}
 
 
