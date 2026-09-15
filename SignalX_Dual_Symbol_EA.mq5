@@ -1,5 +1,5 @@
 #property strict
-#property version   "1.4"
+#property version   "1.6"
 #property description "SignalX dual-symbol XAUUSD + EURUSD MT5 bridge"
 
 #include <Trade/Trade.mqh>
@@ -15,9 +15,51 @@ input string EURTradeSymbol="EURUSDm";
 input long   SignalXMagic=26091401;
 input int    DuplicateCooldownSeconds=30;
 input string BridgeClientId=""; // blank = account-specific client id
+input bool   SingleSession=true; // only one EA instance per MT5 terminal/account
+input int    SessionLeaseSeconds=15;
 
 string Url(string path){ return ApiBase+path; }
 datetime g_last_state=0;
+bool g_session_owner=false;
+string SessionKey()
+{
+   return "SignalX.session."+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN));
+}
+
+bool AcquireSession()
+{
+   if(!SingleSession) return true;
+   string key=SessionKey();
+   datetime now=TimeCurrent();
+   if(GlobalVariableCheck(key))
+   {
+      double stamp=GlobalVariableGet(key);
+      if((now-(datetime)stamp) < SessionLeaseSeconds)
+      {
+         Print("[MT5 BRIDGE] DUPLICATE INSTANCE BLOCKED key=",key);
+         return false;
+      }
+   }
+   if(!GlobalVariableSet(key,(double)now))
+   {
+      Print("[MT5 BRIDGE] SESSION LOCK FAILED key=",key);
+      return false;
+   }
+   g_session_owner=true;
+   return true;
+}
+
+void RefreshSession()
+{
+   if(g_session_owner) GlobalVariableSet(SessionKey(),(double)TimeCurrent());
+}
+
+void ReleaseSession()
+{
+   if(g_session_owner && GlobalVariableCheck(SessionKey()))
+      GlobalVariableDel(SessionKey());
+   g_session_owner=false;
+}
 
 string JsonEscape(string s)
 {
@@ -308,6 +350,7 @@ int OnInit()
    if(ApiBase=="" || StringFind(ApiBase,"http")!=0) return(INIT_PARAMETERS_INCORRECT);
    if(BridgeToken=="" || BridgeToken=="CHANGE_ME") return(INIT_PARAMETERS_INCORRECT);
    if(XAUTradeSymbol!="XAUUSDm" || EURTradeSymbol!="EURUSDm") return(INIT_PARAMETERS_INCORRECT);
+   if(!AcquireSession()) return(INIT_FAILED);
    trade.SetExpertMagicNumber(SignalXMagic);
    trade.SetAsyncMode(false);
    Print("[MT5 BRIDGE] STARTED chart=",_Symbol," ApiBase=",ApiBase," PollSeconds=",PollSeconds," Lot=",DoubleToString(DefaultLot,2)," Magic=",SignalXMagic);
@@ -321,6 +364,7 @@ int OnInit()
 void OnDeinit(const int reason)
 {
    EventKillTimer();
+   ReleaseSession();
    Print("[MT5 BRIDGE] STOPPED reason=",reason);
 }
 
@@ -337,8 +381,12 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
    }
 
    if(StringFind(out,"\"orders\":[]")>=0)
+   {
+      Print("[MT5 BRIDGE] POLL RECEIVED market=",requestedMarket," orders=0");
       return true;
+   }
 
+   Print("[MT5 BRIDGE] POLL RECEIVED market=",requestedMarket," response_len=",StringLen(out));
    int pos=0;
    while((pos=StringFind(out,"\"id\":\"",pos))>=0)
    {
@@ -351,6 +399,7 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
       double sl=ExtractNumber(out,"sl",pos);
       double tp=ExtractFirstTP(out,pos);
       double vol=ExtractNumber(out,"volume",pos);
+      Print("[AUTO TRADE] RECEIVED order_id=",order_id," market=",order_market," symbol=",requested_symbol," direction=",dir," entry=",DoubleToString(entry,5)," sl=",DoubleToString(sl,5)," tp=",DoubleToString(tp,5)," source=",source);
       if(vol<=0) vol=DefaultLot;
 
       if(IsBlockedSource(source))
@@ -409,15 +458,92 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
          continue;
       }
 
+      // Explicitly surface terminal/account trade permissions before sending.
+      if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
+      {
+         string msg="BLOCKED: MT5 terminal AutoTrading is disabled";
+         Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," ",msg);
+         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,msg);
+         pos+=MathMax(1,StringLen(order_id));
+         continue;
+      }
+      if(!MQLInfoInteger(MQL_TRADE_ALLOWED))
+      {
+         string msg="BLOCKED: EA trading permission is disabled";
+         Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," ",msg);
+         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,msg);
+         pos+=MathMax(1,StringLen(order_id));
+         continue;
+      }
+      if(!AccountInfoInteger(ACCOUNT_TRADE_ALLOWED))
+      {
+         string msg="BLOCKED: account trading is disabled";
+         Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," ",msg);
+         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,msg);
+         pos+=MathMax(1,StringLen(order_id));
+         continue;
+      }
+      if(!AccountInfoInteger(ACCOUNT_TRADE_EXPERT))
+      {
+         string msg="BLOCKED: broker disallows Expert Advisor trading on this account";
+         Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," ",msg);
+         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,msg);
+         pos+=MathMax(1,StringLen(order_id));
+         continue;
+      }
+
+      MqlTick liveTick;
+      if(!SymbolInfoTick(execSymbol,liveTick))
+      {
+         string msg="BLOCKED: live broker tick unavailable";
+         Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," ",msg);
+         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,msg);
+         pos+=MathMax(1,StringLen(order_id));
+         continue;
+      }
+
+      trade.SetTypeFillingBySymbol(execSymbol);
+      trade.SetDeviationInPoints(20);
       string comment="SignalX "+(source==""?"AUTO":source);
       bool ok=false;
       if(dir=="BUY")  ok=trade.Buy(vol,execSymbol,0,sl,tp,comment);
-      if(dir=="SELL") ok=trade.Sell(vol,execSymbol,0,sl,tp,comment);
+      else if(dir=="SELL") ok=trade.Sell(vol,execSymbol,0,sl,tp,comment);
+      else
+      {
+         string msg="BLOCKED: invalid direction "+dir;
+         Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," ",msg);
+         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,msg);
+         pos+=MathMax(1,StringLen(order_id));
+         continue;
+      }
 
+      uint retcode=trade.ResultRetcode();
       string desc=trade.ResultRetcodeDescription();
+      ulong deal=trade.ResultDeal();
+      ulong ord=trade.ResultOrder();
+      bool brokerAccepted=(retcode==TRADE_RETCODE_DONE || retcode==TRADE_RETCODE_DONE_PARTIAL || retcode==TRADE_RETCODE_PLACED);
+      Print("[AUTO TRADE] EXECUTION order_id=",order_id,
+            " symbol=",execSymbol,
+            " volume=",DoubleToString(vol,2),
+            " bid=",DoubleToString(liveTick.bid,SymbolInfoInteger(execSymbol,SYMBOL_DIGITS)),
+            " ask=",DoubleToString(liveTick.ask,SymbolInfoInteger(execSymbol,SYMBOL_DIGITS)),
+            " request_ok=",ok?"true":"false",
+            " broker_accepted=",brokerAccepted?"true":"false",
+            " retcode=",retcode,
+            " desc=",desc,
+            " deal=",(long)deal,
+            " order=",(long)ord);
       MarkOrderGuard(order_id);
-      if(ok) SendReport(order_id,dir,"ORDER_SENT",execSymbol,desc);
-      else   SendReport(order_id,dir,"ORDER_FAILED",execSymbol,desc);
+      if(brokerAccepted)
+      {
+         Print("[AUTO TRADE] ORDER_SENT order_id=",order_id," symbol=",execSymbol," retcode=",retcode," deal=",(long)deal," order=",(long)ord);
+         SendReport(order_id,dir,"ORDER_SENT",execSymbol,StringFormat("retcode=%u deal=%I64u order=%I64u %s",retcode,deal,ord,desc));
+      }
+      else
+      {
+         Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," symbol=",execSymbol," retcode=",retcode," desc=",desc);
+         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,StringFormat("retcode=%u deal=%I64u order=%I64u %s",retcode,deal,ord,desc));
+      }
 
       pos+=MathMax(1,StringLen(order_id));
    }
@@ -426,6 +552,7 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
 
 void OnTimer()
 {
+   RefreshSession();
    if(g_last_state==0 || (TimeCurrent()-g_last_state)>=StateSeconds)
    {
       ReportState();

@@ -938,6 +938,29 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
     const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',signalEngineSection:'Signal Engine',aiFallbackSection:'AI Fallback Network',classicSection:'Classic Trade',snrSection:'SNR',trendLineSection:'Auto Trend Line',signalSection:'Signal Lab',ictSection:'ICT Signals',signalsSection:'Signals',mtfSection:'Multi-Timeframe Analysis',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',mt5Section:'MetaTrader 5'};
     const t=document.getElementById('pageTitle'); if(t) t.textContent=titles[id]||'Trading SaaS';
     closeMobile();
+    // Every dashboard section, especially Signal History, opens from the top.
+    // Also reset the component's own scroll containers so revisiting the section
+    // never restores an old vertical position.
+    try{
+      if(id==='historySection'){
+        window.scrollTo({top:0,left:0,behavior:'auto'});
+        document.documentElement.scrollTop=0;
+        document.body.scrollTop=0;
+        target.scrollTop=0;
+        target.querySelectorAll('.scroll,.history-wrap,.table-wrap,.table-scroll').forEach(function(el){ el.scrollTop=0; });
+        requestAnimationFrame(function(){
+          window.scrollTo(0,0);
+          document.documentElement.scrollTop=0;
+          document.body.scrollTop=0;
+          target.scrollIntoView({block:'start',inline:'nearest',behavior:'auto'});
+          window.scrollTo(0,0);
+        });
+      } else {
+        window.scrollTo({top:0,left:0,behavior:'auto'});
+        document.documentElement.scrollTop=0;
+        document.body.scrollTop=0;
+      }
+    }catch(e){ console.warn('SignalX scroll reset:',e); }
     try{ if(typeof window.openSection==='function' && window.openSection!==robustOpen) window.openSection(id); }catch(e){ console.warn('SignalX section loader:',e); }
     return true;
   }
@@ -1385,6 +1408,24 @@ body:not(.sx-menu-open) .sidebar{pointer-events:auto!important;}
 }
 </style>
 
+<script id="signalx-history-scroll-top-final-20260915">
+(function(){
+  document.documentElement.style.scrollBehavior='auto';
+  if('scrollRestoration' in history) history.scrollRestoration='manual';
+  function resetHistoryTop(){
+    var sec=document.getElementById('historySection');
+    if(!sec || !sec.classList.contains('active')) return;
+    window.scrollTo(0,0); document.documentElement.scrollTop=0; document.body.scrollTop=0; sec.scrollTop=0;
+    sec.querySelectorAll('.scroll,.history-wrap,.table-wrap,.table-scroll').forEach(function(el){el.scrollTop=0;});
+  }
+  document.addEventListener('click',function(e){
+    var b=e.target.closest('.sidebar .nav button[data-section="historySection"]');
+    if(b){ setTimeout(resetHistoryTop,0); requestAnimationFrame(resetHistoryTop); }
+  },true);
+  window.addEventListener('pageshow',function(){ setTimeout(resetHistoryTop,0); });
+  window.addEventListener('hashchange',function(){ setTimeout(resetHistoryTop,0); });
+})();
+</script>
 </body></html>
 
 <style id="signalx-phone-final-v2-20260913">
