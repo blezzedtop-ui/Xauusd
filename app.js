@@ -637,7 +637,7 @@ async function loadMT5Status(){ if(!IS_ADMIN)return;
   setText('mt5Status', connLabel);
   setText('mt5Balance', st.balance==null?'—':fmt(st.balance)); setText('mt5Equity',st.equity==null?'—':fmt(st.equity)); setText('mt5FreeMargin',st.free_margin==null?'—':fmt(st.free_margin)); setText('mt5Positions',st.positions??0); setText('mt5Lot', d.lot==null?'0.01':String(d.lot));
   const hb=st.heartbeat_age_sec==null?'—':`${Number(st.heartbeat_age_sec).toFixed(1)} s`; setText('mt5Heartbeat',hb); setText('mt5LastError',st.last_error|| (connState==='CONNECTED'?'Heartbeat OK':'MT5 terminal/EA heartbeat kutilyapti…'));
-  const on=!!(d.market_auto_trading ?? d.auto_trading); const dual=!!d.auto_dual;
+  const on=!!d.auto_trading; const dual=!!d.auto_dual;
   localStorage.setItem('signalx_mt5_dual_mode', dual?'1':'0');
   setText('mt5AutoState',on?'🟢 ON':'🔴 OFF');
   setText('mt5AutoInfo',on ? (dual ? 'DUAL MODE: XAU/USD + EUR/USD. Ikkala symbolning mos setup’lari bitta MT5 EA orqali bir vaqtda navbatga yuboriladi.' : 'SINGLE MODE: faqat ochilgan symbol uchun auto orderlar navbatga tushadi.') : "OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.");
@@ -653,7 +653,7 @@ async function connectMT5(){ requireAdminClient();
   $('mt5Password').value=''; await loadMT5Status(); showToast(d.message||'MT5 ma’lumotlari qabul qilindi');
 }
 async function saveMT5Lot(){ requireAdminClient(); const raw=parseFloat(String($('mt5Lot')?.value||'0')); if(!Number.isFinite(raw)||raw<0.01||raw>100) throw Error('Lot 0.01 dan 100 gacha bo‘lishi kerak.'); const d=await api('/api/v1/mt5/lot',{method:'POST',body:JSON.stringify({lot:raw})}); setText('mt5Lot',String(d.lot??raw)); showToast('Lot saqlandi: '+(d.lot??raw)); await loadMT5Status(); }
-async function setMT5Auto(enabled){ requireAdminClient(); await api('/api/v1/mt5/auto-trading?enabled='+(enabled?'true':'false')+'&market='+encodeURIComponent(symbol),{method:'POST'}); await loadMT5Status(); showToast((symbol==='EUR/USD'?'EURUSD':'XAUUSD')+' AUTO TRADING '+(enabled?'ON':'OFF')); }
+async function setMT5Auto(enabled){ requireAdminClient(); await api('/api/v1/mt5/auto-trading?enabled='+(enabled?'true':'false'),{method:'POST'}); await loadMT5Status(); showToast(enabled?'AUTO TRADING ON':'AUTO TRADING OFF'); }
 async function setMT5Dual(enabled){ requireAdminClient(); await api('/api/v1/mt5/auto-dual?enabled='+(enabled?'true':'false'),{method:'POST'}); localStorage.setItem('signalx_mt5_dual_mode',enabled?'1':'0'); await loadMT5Status(); showToast(enabled?'DUAL AUTO TRADE: XAUUSD + EURUSD':'SINGLE AUTO TRADE'); }
 function bindCriticalButtons(){
   const run=(id,fn)=>{const b=$(id);if(!b||b.dataset.directBound==='1')return;b.dataset.directBound='1';b.addEventListener('click',async e=>{e.preventDefault();e.stopPropagation();if(b.disabled)return;const old=b.innerHTML;b.disabled=true;b.innerHTML='⟳ Ishlanmoqda…';try{await fn();showToast(id==='authBtn'?'':'Yangilandi')}catch(err){console.error('DIRECT BUTTON',id,err);showToast((err?.message||'Server xatosi'))}finally{b.disabled=false;b.innerHTML=old}});};
