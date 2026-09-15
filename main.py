@@ -320,6 +320,8 @@ AUTOTRADE_INTERNAL_TOKEN = os.getenv("AUTOTRADE_INTERNAL_TOKEN", "").strip() or 
 MT5_LOT_SIZE = float(os.getenv("MT5_DEFAULT_LOT", "0.01"))
 MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "symbol": None, "candles": {}, "markets": {}}
 MT5_ORDER_QUEUE: list[dict[str, Any]] = []
+# Prevent re-queuing the same XAU/USD source/timeframe/candle/direction after a successful fill.
+MT5_EXECUTED_KEYS: set[tuple[str, str, str, str, str]] = set()
 MT5_ORDER_ATTEMPTS: dict[str, int] = {}
 # MT5 V4 bridge client leases prevent multiple terminals sharing the same token from
 # stealing each other's claimed orders. A dead client lease expires automatically.
@@ -4049,6 +4051,11 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     if market != "XAU/USD":
         return None
     key = (market, source.strip(), interval, str(candle_time), direction.upper())
+    # Once an order for this exact market/source/timeframe/candle/direction is reported
+    # successful, do not open the same signal again during the same process lifetime.
+    if key in MT5_EXECUTED_KEYS:
+        print(f"[AUTO TRADE QUEUE] EXECUTED KEY BLOCKED market={market} source={source} tf={interval} candle={candle_time} dir={direction}")
+        return None
     for q in MT5_ORDER_QUEUE:
         qkey = (_mt5_market_key(q.get("symbol") or q.get("market")),
                 str(q.get("source") or "").strip(), str(q.get("interval") or ""),
@@ -4079,6 +4086,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
         "created_at": datetime.now(timezone.utc).isoformat(),
         "claimed": False,
         "status": "QUEUED",
+        "queue_key": [market, source.strip(), interval, str(candle_time), direction.upper()],
     }
     MT5_ORDER_ATTEMPTS[order_id] = 0
     MT5_ORDER_QUEUE.append(order)
@@ -4264,6 +4272,47 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     async def process_symbol(key: str):
         nonlocal created_history, queued
         candidates, live_by_tf = await load_symbol_candidates(key)
+        print(f"[SIGNAL FLOW] candidates={len(candidates)} market={key}")
+
+        # Persist valid module-level BUY/SELL signals independently of the stricter
+        # execution gate. This guarantees Signal History remains populated even when
+        # the final AutoTrade consensus is WAIT/BLOCKED.
+        for c in candidates:
+            tf = str(c.get("interval") or "")
+            item = c.get("item") or {}
+            direction = str(item.get("signal") or item.get("direction") or "WAIT").upper()
+            if tf not in {"5min", "15min", "30min", "1h", "4h", "1day"} or direction not in {"BUY", "SELL"}:
+                continue
+            candles = live_by_tf.get(tf, ([], "error", None))[0]
+            if len(candles) < 40:
+                continue
+            candle_time = str(candles[-1].get("time"))
+            entry = item.get("entry")
+            sl = item.get("stop_loss")
+            tp = item.get("take_profit") or []
+            if entry is None or sl is None or not tp:
+                continue
+            source = str(c.get("source") or "Signals")[:40]
+            recent = session.scalars(select(SignalHistory).where(
+                SignalHistory.user_id == user.id,
+                SignalHistory.symbol == key,
+                SignalHistory.interval == tf,
+                SignalHistory.candle_time == candle_time,
+                SignalHistory.direction == direction,
+                SignalHistory.source == source,
+            ).order_by(SignalHistory.id.desc())).first()
+            if recent is None:
+                conf = float(item.get("confidence") or item.get("trend_power") or 0)
+                payload = {"source": source, "module_signal": item, "symbol": key, "interval": tf, "candle_time": candle_time}
+                session.add(SignalHistory(
+                    user_id=user.id, symbol=key, interval=tf, direction=direction,
+                    headline=f"{source} · {direction} · {conf:.1f}%", price=float(entry),
+                    payload=json.dumps(payload, ensure_ascii=False, default=str), outcome="OPEN",
+                    created_at=now, source=source, candle_time=candle_time
+                ))
+                created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction,"confidence":conf,"module_history":True})
+                print(f"[SIGNAL HISTORY] MODULE RECORDED source={source} market={key} tf={tf} dir={direction} candle={candle_time}")
+
         # Final AutoTrade decision: one consensus signal per timeframe and live candle.
         # Reuse the exact live candle snapshots already used to build candidates.
         # This prevents a second fetch from drifting to another candle and fixes the
@@ -4275,9 +4324,56 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 continue
             candle_time = str(current_candles[-1].get("time"))
             consensus = _build_consensus(candidates, tf, candle_time)
+
+            # Execution fallback: when ensemble consensus is unavailable, the dedicated
+            # timeframe Strategic Pro engine can still authorize AutoTrade only when it
+            # is fully confirmed AND at least one independent module agrees on direction.
+            # This prevents a dead queue caused by an over-strict ensemble while keeping
+            # a structural, RR-validated execution gate.
             if not consensus:
-                print(f"[SIGNAL FLOW] WAIT tf={tf} candle={candle_time} reason=no_consensus")
-                continue
+                try:
+                    strategic_probe = _strategic_pro_for_timeframe(tf, {k:v[0] for k,v in live_by_tf.items()}, news_blocked=False)
+                except Exception as exc:
+                    strategic_probe = {"signal":"WAIT","confirmed":False,"reason":f"probe_error={exc}"}
+                if strategic_probe.get("confirmed") and strategic_probe.get("signal") in {"BUY","SELL"}:
+                    strategic_dir = str(strategic_probe.get("signal"))
+                    agreeing = []
+                    for c in candidates:
+                        if str(c.get("interval")) != tf:
+                            continue
+                        item = c.get("item") or {}
+                        d = str(item.get("signal") or item.get("direction") or "WAIT").upper()
+                        if d == strategic_dir:
+                            agreeing.append(c)
+                    families = {({"signal lab":"Signal Engine","signals":"Signal Engine"}.get(str(c.get("source") or "").strip().lower(), str(c.get("source") or "").strip())) for c in agreeing}
+                    families.discard("")
+                    if agreeing and len(families) >= 1:
+                        best = max(agreeing, key=lambda c: float((c.get("item") or {}).get("confidence") or (c.get("item") or {}).get("trend_power") or 0))
+                        bi = best.get("item") or {}
+                        consensus = {
+                            "signal": strategic_dir,
+                            "confidence": float(strategic_probe.get("confidence") or 0),
+                            "entry": strategic_probe.get("entry"),
+                            "stop_loss": strategic_probe.get("stop_loss"),
+                            "take_profit": strategic_probe.get("take_profit") or [],
+                            "risk_reward": strategic_probe.get("risk_reward") or 0,
+                            "reason": f"Strategic Pro + {len(families)} independent module family confirmed {strategic_dir}.",
+                            "consensus_agreement": 100.0,
+                            "consensus_families": sorted(families),
+                            "consensus_source": str(best.get("source") or "Signal Module"),
+                            "consensus_source_confidence": float(bi.get("confidence") or bi.get("trend_power") or 0),
+                            "candle_time": candle_time,
+                            "strategy_engine": f"SignalX {tf} Strategic Pro Execution Fallback",
+                            "strategy_version": "TF-SP-FB1",
+                            "decision_state": "CONFIRMED",
+                            "strategy_chain": _strategy_chain(tf),
+                            "strategic_pro": strategic_probe,
+                            "execution_fallback": True,
+                        }
+                        print(f"[SIGNAL FLOW] EXECUTION FALLBACK tf={tf} dir={strategic_dir} strategic_score={strategic_probe.get('score',0)} families={sorted(families)}")
+                if not consensus:
+                    print(f"[SIGNAL FLOW] WAIT tf={tf} candle={candle_time} reason=no_consensus_no_strategic_fallback")
+                    continue
             direction = consensus["signal"]
 
             # Persist every confirmed consensus signal to Signal History BEFORE the
@@ -5051,6 +5147,9 @@ async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, 
             if claimed_by and report_client and claimed_by != report_client:
                 break
             if status in {"order_sent", "sent", "success", "filled"}:
+                qk = item.get("queue_key")
+                if isinstance(qk, list) and len(qk) == 5:
+                    MT5_EXECUTED_KEYS.add(tuple(str(x) for x in qk))
                 MT5_ORDER_QUEUE.pop(idx)
                 MT5_ORDER_ATTEMPTS.pop(str(body.ticket), None)
             elif status in {"error", "failed", "order_failed"}:
