@@ -3775,6 +3775,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
         "id": order_id,
         "symbol": market,
         "market": market,
+        "execution_symbol": "XAUUSDm",
         "interval": interval,
         "direction": direction.upper(),
         "entry": float(entry),
