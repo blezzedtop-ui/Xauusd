@@ -23,7 +23,6 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi import WebSocket, WebSocketDisconnect
@@ -527,17 +526,6 @@ def initialize_database() -> None:
 # Production hardening: keep the algorithm server-side and expose only derived results.
 # The public browser never receives Python source or provider secrets.
 ENABLE_API_DOCS = os.getenv("ENABLE_API_DOCS", "false").strip().lower() == "true"
-# Lightweight process-local abuse protection. It is intentionally conservative so
-# normal chart polling/MT5 heartbeats are not blocked. Railway replicas each keep
-# their own bucket; persistent authorization still happens server-side.
-RATE_LIMIT_WINDOW_SECONDS = max(10, int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")))
-RATE_LIMIT_MAX_REQUESTS = max(30, int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "180")))
-MAX_REQUEST_BODY_BYTES = max(65536, int(os.getenv("MAX_REQUEST_BODY_BYTES", "1048576")))
-RATE_LIMIT_EXEMPT_PATHS = {"/", "/eurusd", "/eurusd/", "/eurusd.html", "/health", "/favicon.ico"}
-_RATE_BUCKETS: dict[str, tuple[float, int]] = {}
-_LOGIN_FAILS: dict[str, tuple[float, int]] = {}
-LOGIN_LOCK_SECONDS = max(30, int(os.getenv("LOGIN_LOCK_SECONDS", "300")))
-LOGIN_MAX_FAILURES = max(3, int(os.getenv("LOGIN_MAX_FAILURES", "8")))
 app = FastAPI(
     title=APP_TITLE,
     version="19.0.0",
@@ -563,34 +551,9 @@ app.add_middleware(
 
 
 @app.middleware("http")
-async def abuse_protection_middleware(request: Request, call_next):
-    path=request.url.path
-    if path not in RATE_LIMIT_EXEMPT_PATHS:
-        now=asyncio.get_running_loop().time()
-        host=request.client.host if request.client else "unknown"
-        key=f"{host}:{request.method}:{path.split('/')[1] if path.startswith('/') and len(path)>1 else path}"
-        started,count=_RATE_BUCKETS.get(key,(now,0))
-        if now-started >= RATE_LIMIT_WINDOW_SECONDS:
-            started,count=now,0
-        count += 1
-        _RATE_BUCKETS[key]=(started,count)
-        if count > RATE_LIMIT_MAX_REQUESTS:
-            retry=max(1,int(RATE_LIMIT_WINDOW_SECONDS-(now-started)))
-            return JSONResponse({"detail":"Too many requests. Try again shortly."}, status_code=429, headers={"Retry-After":str(retry),"Cache-Control":"no-store"})
-    if request.headers.get("content-length"):
-        try:
-            if int(request.headers["content-length"]) > MAX_REQUEST_BODY_BYTES:
-                return JSONResponse({"detail":"Request body too large."}, status_code=413)
-        except ValueError:
-            pass
-    return await call_next(request)
-
-@app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("X-Permitted-Cross-Domain-Policies", "none")
-    response.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
     response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
@@ -795,22 +758,11 @@ def generate_credentials() -> tuple[str, str]:
 async def auth_login(body: AuthBody, request: Request, session: Session = Depends(db)) -> dict[str, Any]:
     """Stable username/password login endpoint used by the dashboard."""
     identity = body.username.strip()
-    client_ip = request.client.host if request.client else "unknown"
-    lock_key = f"{client_ip}|{identity.lower()}"
-    now_mono = asyncio.get_running_loop().time()
-    fail_started, fail_count = _LOGIN_FAILS.get(lock_key, (now_mono, 0))
-    if now_mono - fail_started >= LOGIN_LOCK_SECONDS:
-        fail_started, fail_count = now_mono, 0
-    if fail_count >= LOGIN_MAX_FAILURES:
-        retry = max(1, int(LOGIN_LOCK_SECONDS - (now_mono - fail_started)))
-        raise HTTPException(status_code=429, detail=f"Too many login attempts. Try again in {retry}s.")
     user = session.scalar(select(User).where(User.username == identity))
     if user is None and valid_email(identity):
         user = session.scalar(select(User).where(User.email == identity.lower()))
     if user is None or not verify_password(body.password, user.password_hash):
-        _LOGIN_FAILS[lock_key]=(fail_started, fail_count+1)
         raise HTTPException(status_code=401, detail="Login yoki parol noto‘g‘ri")
-    _LOGIN_FAILS.pop(lock_key, None)
     raw = create_session(user.id, session, request.headers.get("user-agent"))
     plan = user.subscription.plan if user.subscription else "free"
     return {"token": raw, "user": {"id": user.id, "username": user.username, "email": user.email, "plan": plan, "role": getattr(user, "role", "user"), "is_admin": is_admin_user(user)}}
@@ -2000,85 +1952,6 @@ def news_blackout(events: list[dict[str, Any]]) -> tuple[bool, str | None]:
     return False, None
 
 
-
-def _adaptive_regime(candles: list[dict[str, Any]]) -> dict[str, Any]:
-    """Deterministic market-regime layer used by the upgraded strategy engines.
-    It is deliberately based only on the supplied timeframe candles."""
-    closes=[float(c["close"]) for c in candles]
-    if len(closes)<40:
-        return {"regime":"UNKNOWN","trend_strength":0,"volatility":"UNKNOWN","momentum":"NEUTRAL"}
-    av=max(atr(candles), 1e-9)
-    fast=_linear_slope(closes[-30:]); slow=_linear_slope(closes[-100:])
-    price=closes[-1]
-    slope_ratio=abs(fast)/max(av/10.0,1e-9)
-    recent_ranges=[max(float(c["high"])-float(c["low"]),0.0) for c in candles[-20:]]
-    base_ranges=[max(float(c["high"])-float(c["low"]),0.0) for c in candles[-100:-20]] or recent_ranges
-    vr=sum(recent_ranges)/max(len(recent_ranges),1) / max(sum(base_ranges)/max(len(base_ranges),1),1e-9)
-    trend_strength=int(max(0,min(100,round(min(1.0,slope_ratio/3.0)*100))))
-    if vr>=1.55: vol="HIGH"
-    elif vr<=0.72: vol="LOW"
-    else: vol="NORMAL"
-    if trend_strength>=62 and fast*slow>0: regime="TRENDING_UP" if fast>0 else "TRENDING_DOWN"
-    elif vr>=1.35 and trend_strength<55: regime="BREAKOUT_VOLATILE"
-    else: regime="RANGE"
-    mom="BULLISH" if fast>0 and price>=_ema(closes[-80:],20) else "BEARISH" if fast<0 and price<=_ema(closes[-80:],20) else "NEUTRAL"
-    return {"regime":regime,"trend_strength":trend_strength,"volatility":vol,"volatility_ratio":round(vr,2),"momentum":mom}
-
-def _strategy_profile(interval: str) -> dict[str, Any]:
-    # Every timeframe uses the new Strategy Engine V2. 1M/5M have dedicated
-    # microstructure/noise controls; higher TFs emphasize structure and regime.
-    return {
-        "1min":{"strategy":"Microstructure Momentum + Liquidity V2","min_confirmations":5,"min_quality":72,"max_volatility":"NORMAL"},
-        "5min":{"strategy":"M5 Liquidity + Displacement V2","min_confirmations":5,"min_quality":70,"max_volatility":"HIGH"},
-        "15min":{"strategy":"Intraday Structure + Confluence V2","min_confirmations":4,"min_quality":66,"max_volatility":"HIGH"},
-        "30min":{"strategy":"Institutional Structure + SNR V2","min_confirmations":4,"min_quality":64,"max_volatility":"HIGH"},
-        "1h":{"strategy":"HTF Trend + Momentum V2","min_confirmations":4,"min_quality":62,"max_volatility":"HIGH"},
-        "4h":{"strategy":"Macro Structure + Liquidity V2","min_confirmations":3,"min_quality":58,"max_volatility":"HIGH"},
-        "1day":{"strategy":"Daily Regime + Structural Bias V2","min_confirmations":3,"min_quality":55,"max_volatility":"HIGH"},
-    }.get(interval,{"strategy":"Adaptive Strategy V2","min_confirmations":4,"min_quality":65,"max_volatility":"HIGH"})
-
-def _strategy_chain(interval: str) -> list[str]:
-    return [
-        "Live OHLC", "Market Regime", "Technical", "SNR", "Trend Line",
-        "Fibonacci", "Liquidity", "Order Block", "FVG", "BOS/CHOCH",
-        "ICT", "MTF Context", "AI Validation", "Final Signal", "MT5 AutoTrade"
-    ]
-
-def _enhance_strategy_result(item: dict[str, Any], candles: list[dict[str, Any]], interval: str) -> dict[str, Any]:
-    """Common quality/anti-noise layer. It does not expose formulas to the client."""
-    out=dict(item)
-    regime=_adaptive_regime(candles); profile=_strategy_profile(interval)
-    direction=str(out.get("signal") or out.get("direction") or "WAIT").upper()
-    components=out.get("components") or {}
-    confirms=int(out.get("confirmations") or 0)
-    quality=int(out.get("confidence") or out.get("trend_power") or 0)
-    # Penalize regime conflict instead of forcing a trade.
-    conflict=False
-    if direction=="BUY" and regime["regime"]=="TRENDING_DOWN": conflict=True
-    if direction=="SELL" and regime["regime"]=="TRENDING_UP": conflict=True
-    if conflict:
-        quality=max(0,quality-18)
-        out["pre_strategy_signal"]=direction
-        direction="WAIT"
-    # High volatility on 1M/5M requires a stronger candle/structure confirmation.
-    if direction in {"BUY","SELL"} and interval in {"1min","5min"} and regime["volatility"]=="HIGH" and confirms < profile["min_confirmations"]+1:
-        out["pre_strategy_signal"]=direction; direction="WAIT"
-    if direction in {"BUY","SELL"} and confirms < profile["min_confirmations"]:
-        out["pre_strategy_signal"]=direction; direction="WAIT"
-    if direction in {"BUY","SELL"} and quality < profile["min_quality"]:
-        out["pre_strategy_signal"]=direction; direction="WAIT"
-    out["signal"]=direction
-    out["strategy_engine"]="SignalX Strategy Engine V2"
-    out["strategy_version"]="V2"
-    out["market_regime"]=regime
-    out["strategy_profile"]=profile
-    out["strategy_chain"]=_strategy_chain(interval)
-    out["chain_timeframe"]=interval
-    out["strategy_quality"]=quality
-    out["strategy_conflict"]=conflict
-    out["decision_state"]="CONFIRMED" if direction in {"BUY","SELL"} else "WAIT"
-    return out
-
 def technical_analysis(candles_data: list[dict[str, Any]], levels: dict[str, Any], setup: dict[str, Any]) -> dict[str, Any]:
     current = candles_data[-1]["close"]
     r = rsi(candles_data)
@@ -2089,19 +1962,12 @@ def technical_analysis(candles_data: list[dict[str, Any]], levels: dict[str, Any
         rsi_state = "OVERSOLD"
     else:
         rsi_state = "NEUTRAL"
-    regime=_adaptive_regime(candles_data)
-    closes=[float(c["close"]) for c in candles_data]
-    ema20=_ema(closes[-80:],20); ema50=_ema(closes[-120:],50)
-    macd=_ema(closes[-120:],12)-_ema(closes[-120:],26)
-    technical_bias="BULLISH" if ema20>ema50 and macd>=0 else "BEARISH" if ema20<ema50 and macd<=0 else "MIXED"
     return {
         "rsi": round(r, 2), "rsi_state": rsi_state, "atr": round(a, 4),
-        "ema20":round(ema20,4), "ema50":round(ema50,4), "macd":round(macd,6),
         "pivot": levels["pivot"], "support": [levels["s1"], levels["s2"], levels["s3"]],
         "resistance": [levels["r1"], levels["r2"], levels["r3"]],
-        "trend": levels["bias"], "technical_bias":technical_bias, "signal": setup["signal"],
-        "market_regime":regime,
-        "summary": f"RSI {r:.1f} ({rsi_state}); EMA20/50 {technical_bias}; Pivot {levels['pivot']:.2f}; trend {levels['bias']}; setup {setup['setup']}."
+        "trend": levels["bias"], "signal": setup["signal"],
+        "summary": f"RSI {r:.1f} ({rsi_state}); Pivot {levels['pivot']:.2f}; trend {levels['bias']}; setup {setup['setup']}.",
     }
 
 
@@ -2160,11 +2026,7 @@ def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dic
     # Classic entries are only permitted from a strong zone, never in the middle of a range.
     if direction=="BUY" and not near_strong_support: direction="WAIT"; reasons.append("no strong entry zone")
     if direction=="SELL" and not near_strong_resistance: direction="WAIT"; reasons.append("no strong entry zone")
-    regime=_adaptive_regime(candles)
-    if direction=="BUY" and regime["regime"]=="TRENDING_DOWN": direction="WAIT"; reasons.append("adaptive regime conflict")
-    if direction=="SELL" and regime["regime"]=="TRENDING_UP": direction="WAIT"; reasons.append("adaptive regime conflict")
     confidence = min(97, 50 + abs(score)*7 + (5 if (near_strong_support or near_strong_resistance) else 0))
-    strategy_quality=int(max(0,min(100,confidence + (8 if abs(score)>=6 else 0) + (5 if regime["trend_strength"]>=65 else 0))))
     entry = round(price, 2)
     if direction == "BUY":
         sl = round(min(float(cur["low"]), levels["s1"]) - max(a*0.15, 0.1), 2)
@@ -2177,8 +2039,7 @@ def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dic
             "trend":trend,"rsi":round(r,2),"rsi_state":"OVERBOUGHT" if r>=70 else "OVERSOLD" if r<=30 else "NEUTRAL",
             "ema20":round(ema20,2),"ema50":round(ema50,2),"macd":round(macd_line,5),"macd_state":macd_state,
             "pattern":pattern,"pivot":levels["pivot"],"support":[levels["s1"],levels["s2"],levels["s3"]],"resistance":[levels["r1"],levels["r2"],levels["r3"]],
-            "reason":"; ".join(reasons),"method":"Classic · Adaptive Trend/Pivot/SNR/Momentum/Candlestick",
-            "market_regime":regime,"strategy_engine":"Adaptive Classic Strategy","strategy_quality":strategy_quality,"decision_state":"CONFIRMED" if direction in {"BUY","SELL"} else "WAIT"}
+            "reason":"; ".join(reasons),"method":"Classic · Trend + Pivot + SNR + RSI + MACD + EMA + Candlestick"}
 
 async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict[str, Any], str | None]:
     """Classic Pivot levels based on the previous completed candle of the selected timeframe.
@@ -2320,8 +2181,7 @@ async def ai_validate_module_signal(source: str, symbol: str, interval: str, can
             "technical": {k:v for k,v in deterministic.items() if k not in {"recent_candles","candles"}},
         }
         result=None
-        if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY,
-                CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, DEEPSEEK_API_KEY, OPENAI_API_KEY, HF_TOKEN)) and now >= OPENAI_GLOBAL_RATE_LIMIT_UNTIL:
+        if (GROQ_API_KEY or OPENAI_API_KEY) and now >= OPENAI_GLOBAL_RATE_LIMIT_UNTIL:
             try:
                 prompt=("You are the validation layer of a quantitative XAU/USD trading system. "
                     "Evaluate ONLY the supplied deterministic analysis. Do not invent prices or external news. "
@@ -2364,18 +2224,6 @@ def merge_ai_validation(deterministic: dict[str, Any], ai: dict[str, Any]) -> di
         out["ai_consensus"]="WAIT"
     out["reason"]=((out.get("reason") or "") + f" | AI validation: {out['ai_consensus']} ({ai.get('confidence',0)}%).").strip()
     return out
-
-
-async def _module_ai_advisory(source: str, symbol: str, interval: str, candle_time: Any, module_result: dict[str, Any]) -> dict[str, Any]:
-    """Shared AI advisory for individual dashboard modules.
-    It assists analysis but never acts as an AutoTrade quality gate.
-    """
-    ai = await ai_validate_module_signal(source, symbol, interval, candle_time, module_result)
-    return {"enabled": True, "mode": ai.get("mode", "rule_based"),
-            "signal": ai.get("signal", "WAIT"), "confidence": ai.get("confidence", 0),
-            "agreement": ai.get("agreement", 50), "risk_flags": ai.get("risk_flags", []),
-            "reasoning": ai.get("reasoning", "Shared AI advisory."),
-            "role": "analysis_advisory_only", "autotrade_gate": False}
 
 
 def _normalize_swing_point(point: Any) -> tuple[int, float] | None:
@@ -2999,7 +2847,7 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
     ]) if direction!="WAIT" else 0
     setup="ULTRA_CONFLUENCE" if direction!="WAIT" and confirmations>=5 and rr>=1.5 else ("ICT+SNR+CONFLUENCE" if direction!="WAIT" else ("NEWS_BLACKOUT" if news_blocked else "WAIT_CONFLUENCE"))
     quality="A+" if direction!="WAIT" and confidence>=90 and max(zone_gate["support"]["strength"],zone_gate["resistance"]["strength"])>=88 and confirmations>=5 and rr>=1.5 else "A" if direction!="WAIT" else "WAIT"
-    result = {
+    return {
         "interval":interval,"signal":direction,"entry":round(entry,4),"stop_loss":round(sl,4) if sl is not None else None,
         "take_profit":[round(x,4) for x in tp],"confidence":confidence,"score":score,"setup":setup,
         "components":{"ICT":ict_bias,"SNR":snr,"Strong SNR Zone":zone_gate,"SNR Malaysia":msnr,"Order Block":ob,"FVG":fvg,"Liquidity":liq,
@@ -3015,7 +2863,6 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
         "rsi":round(r,2),"atr":round(avtr,4),"current_price":round(current,4),
         "evaluated_at":datetime.now(timezone.utc).isoformat()
     }
-    return _enhance_strategy_result(result, candles, interval)
 
 
 async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[str, Any]:
@@ -3029,14 +2876,6 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
             candle_time=analysis_candles[-1].get("time")
             ai=await ai_validate_module_signal("Signal Lab",symbol,tf,candle_time,item)
             item=merge_ai_validation(item,ai)
-            # Shared AI validation assists every strategy component, but never gates AutoTrade.
-            for _component in (item.get("components") or {}).values():
-                if isinstance(_component, dict):
-                    _component.setdefault("ai_assisted", True)
-                    _component.setdefault("ai_layer", "Shared AI Validation")
-                    _component.setdefault("ai_advisory_only", True)
-            item["ai_layer"]="Shared AI Validation"
-            item["ai_advisory_only"]=True
             item["candle_time"]=candle_time
             # Every timeframe and signal component is calculated from the same
             # TradingView OHLC series returned by get_candles(). No secondary
@@ -3200,8 +3039,6 @@ async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
         "pivot": levels["pivot"],
         "support": [levels["s1"], levels["s2"], levels["s3"]],
         "resistance": [levels["r1"], levels["r2"], levels["r3"]],
-        "market_regime": _adaptive_regime(candles_data),
-        "strategy_layers": ["MTF context","Structure","Liquidity","SNR","Trendline","Momentum","Volatility","Scenario validation"],
     }
     ai = {"mode":"confirmation-only","summary":"AI faqat Auto Trading signal tasdig‘ida chaqiriladi.","bias":"—","confidence":0,"advice":"Oddiy sahifa/grafik refresh AI request yubormaydi."}
     return {
@@ -3299,12 +3136,7 @@ async def get_snr(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[
         if len(candles)<35: raise MarketDataError("SNR uchun candle yetarli emas")
         candle_time=candles[-2].get("time") if len(candles)>1 else candles[-1].get("time")
         snr=_snr_zone_analysis(candles)
-        regime=_adaptive_regime(candles)
-        ai_advisory = await _module_ai_advisory("SNR", symbol, interval, candle_time, {**snr, "signal": "WAIT"})
-        snr["ai_validation"] = ai_advisory
-        snr["strategy_engine"]="Adaptive Institutional SNR"
-        snr["market_regime"]=regime
-        snr["strategy_quality"]=max(int(snr.get("confidence") or 0), int(max(snr.get("support",{}).get("strength",0), snr.get("resistance",{}).get("strength",0))))
+        snr["ai_validation"] = None
         return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(float(candles[-1]["close"]),4),"candle_time":candle_time,"snr":snr,"generated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as exc: raise HTTPException(status_code=503,detail="SNR unavailable: "+str(exc))
 
@@ -3317,8 +3149,7 @@ async def get_classic_trade(symbol: str, interval: str = Query(DEFAULT_INTERVAL)
         ref = candles[-2]; price = float(candles[-1]["close"])
         levels = calculate_pivot_levels(float(ref["high"]), float(ref["low"]), float(ref["close"]), price)
         classic = _classic_trade(candles, levels)
-        ai_advisory = await _module_ai_advisory("Classic Trade", symbol, interval, ref.get("time"), classic)
-        classic["ai_validation"] = ai_advisory
+        classic["ai_validation"] = None
         return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(price,4),"candle_time":ref.get("time"),"classic":classic,"generated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Classic Trade unavailable: "+str(exc))
@@ -3810,75 +3641,73 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
 
     async def load_symbol_candidates(key: str) -> list[dict[str, Any]]:
         candidates: list[dict[str, Any]] = []
-        # One canonical live candle series per timeframe. Every module below consumes
-        # the same timeframe candles, so the signal chain cannot mix XAU/EUR or TF data.
-        intervals=["1min","5min","15min","30min","1h","4h","1day"]
-        live_by_tf: dict[str, tuple[list[dict[str, Any]],str,str|None]] = {}
-        async def load_tf(tf: str):
-            try:
-                live_by_tf[tf]=await get_candles(key,tf,260)
-            except Exception:
-                live_by_tf[tf]=([],"error",None)
-        await asyncio.gather(*(load_tf(tf) for tf in intervals))
+        # 1) Signal Lab / Signals: use the full seven-timeframe engine.
+        advanced = await build_advanced_signals(key, news_blocked=False)
+        for tf, item in (advanced.get("timeframes") or {}).items():
+            candidates.append({"source": "Signal Lab", "interval": tf, "item": item, "response": advanced})
+            candidates.append({"source": "Signals", "interval": tf, "item": item, "response": advanced})
 
-        # Signal Lab + Signals are the master strategy output for every timeframe.
-        advanced=await build_advanced_signals(key, news_blocked=False)
-        for tf in intervals:
-            item=(advanced.get("timeframes") or {}).get(tf) or {}
-            if item.get("signal") in {"BUY","SELL"}:
-                candidates.append({"source":"Signal Lab","interval":tf,"item":item,"response":advanced})
-                candidates.append({"source":"Signals","interval":tf,"item":item,"response":advanced})
+        # 2) Shared selected-timeframe candles power the other signal modules.
+        candles, mode, warning = await get_candles(key, selected_interval, 260)
+        analysis_candles = candles
+        if len(analysis_candles) < 40:
+            return candidates
+        candle_time = analysis_candles[-1].get("time")
 
-        # All remaining modules are also evaluated on ALL seven timeframes.
-        for tf in intervals:
-            candles, mode, warning = live_by_tf.get(tf,([],"error",None))
-            if len(candles)<40:
-                continue
-            ct=candles[-1].get("time")
-            try:
-                ref=candles[-2] if len(candles)>1 else candles[-1]
-                price=float(candles[-1]["close"])
-                levels=calculate_pivot_levels(float(ref["high"]),float(ref["low"]),float(ref["close"]),price)
-                technical=build_key_level_signal(candles,levels,news_blocked=False)
-                technical=_enhance_strategy_result(technical,candles,tf)
-                candidates.append({"source":"Technical Analysis","interval":tf,"item":technical,"response":{"mode":mode,"warning":warning,"candle_time":ct}})
-            except Exception:
-                technical={}
-            try:
-                classic=_classic_trade(candles,calculate_pivot_levels(float(candles[-2]["high"]),float(candles[-2]["low"]),float(candles[-2]["close"]),float(candles[-1]["close"])))
-                classic["strategy_chain"]=_strategy_chain(tf); classic["strategy_version"]="V2"
-                candidates.append({"source":"Classic Trade","interval":tf,"item":classic,"response":{"mode":mode,"warning":warning,"candle_time":ct}})
-            except Exception:
-                pass
-            try:
-                snr=_snr_zone_analysis(candles); snr["strategy_engine"]="Adaptive Institutional SNR V2"; snr["strategy_version"]="V2"; snr["strategy_chain"]=_strategy_chain(tf)
-                candidates.append({"source":"SNR","interval":tf,"item":snr,"response":{"mode":mode,"warning":warning,"candle_time":ct}})
-            except Exception:
-                pass
-            try:
-                trend=_trendline_analysis(candles); fib=_fibonacci_analysis(candles)
-                trend["strategy_engine"]="Market Structure Trendline V2"; trend["strategy_version"]="V2"; trend["strategy_chain"]=_strategy_chain(tf)
-                trend["take_profit"]=[v for v in [fib.get("extension_targets",{}).get("1.272"),fib.get("extension_targets",{}).get("1.618")] if v is not None]
-                candidates.append({"source":"Auto Trend Line","interval":tf,"item":trend,"response":{"mode":mode,"warning":warning,"candle_time":ct,"fibonacci":fib}})
-            except Exception:
-                pass
-            # ICT uses its dedicated M30→M5 structure. For every TF, expose the same
-            # canonical ICT result in that TF's chain so AutoTrade can receive any TF.
-            try:
-                c30=live_by_tf.get("30min",([],"",None))[0]; c5=live_by_tf.get("5min",([],"",None))[0]
-                if len(c30)>=40 and len(c5)>=40:
-                    ict=build_ict_m30_m5(c30,c5); ict["interval"]=tf; ict["strategy_engine"]="ICT M30→M5 V2"; ict["strategy_version"]="V2"; ict["strategy_chain"]=_strategy_chain(tf)
-                    candidates.append({"source":"ICT Signals","interval":tf,"item":ict,"response":{"mode":"tradingview","candle_time":ct}})
-            except Exception:
-                pass
-            # AI Smart Analysis remains chained to the same TF's technical result plus MTF context.
-            try:
-                mtf=await multi_timeframe(key)
-                smart={"signal":technical.get("signal","WAIT"),"confidence":technical.get("confidence",0),"entry":technical.get("entry"),"stop_loss":technical.get("stop_loss"),"take_profit":technical.get("take_profit",[]),"reason":f"Technical V2 + MTF {mtf.get('overall','MIXED')}","strategy_engine":"Multi-scenario AI Decision V2","strategy_version":"V2","strategy_chain":_strategy_chain(tf),"interval":tf}
-                if smart["signal"] in {"BUY","SELL"}:
-                    candidates.append({"source":"AI Smart Analysis","interval":tf,"item":smart,"response":{"mode":"confirmation-only","multi_timeframe":mtf,"candle_time":ct}})
-            except Exception:
-                pass
+        try:
+            ref = analysis_candles[-2] if len(analysis_candles) > 1 else analysis_candles[-1]
+            price = float(analysis_candles[-1]["close"])
+            levels = calculate_pivot_levels(float(ref["high"]), float(ref["low"]), float(ref["close"]), price)
+            technical = build_key_level_signal(analysis_candles, levels, news_blocked=False)
+            candidates.append({"source": "Technical Analysis", "interval": selected_interval, "item": technical, "response": {"mode": mode, "warning": warning, "candle_time": candle_time}})
+        except Exception:
+            pass
+
+        try:
+            classic = _classic_trade(analysis_candles, calculate_pivot_levels(float(analysis_candles[-2]["high"]), float(analysis_candles[-2]["low"]), float(analysis_candles[-2]["close"]), float(analysis_candles[-1]["close"])))
+            candidates.append({"source": "Classic Trade", "interval": selected_interval, "item": classic, "response": {"mode": mode, "warning": warning, "candle_time": candle_time}})
+        except Exception:
+            pass
+
+        try:
+            snr = _snr_zone_analysis(analysis_candles)
+            candidates.append({"source": "SNR", "interval": selected_interval, "item": snr, "response": {"mode": mode, "warning": warning, "candle_time": candle_time}})
+        except Exception:
+            pass
+
+        try:
+            trend = _trendline_analysis(analysis_candles)
+            fib = _fibonacci_analysis(analysis_candles)
+            candidates.append({"source": "Auto Trend Line", "interval": selected_interval, "item": {**trend, "take_profit": [v for v in [fib.get("extension_targets", {}).get("1.272"), fib.get("extension_targets", {}).get("1.618")] if v is not None]}, "response": {"mode": mode, "warning": warning, "candle_time": candle_time, "fibonacci": fib}})
+        except Exception:
+            pass
+
+        # 3) ICT Signals is its own source and is intentionally independent of Book + OpenAI.
+        try:
+            c30, _, _ = await get_candles(key, "30min", 260)
+            c5 = candles
+            ict = build_ict_m30_m5(c30, c5)
+            ict_ct = c5[-2].get("time") if len(c5) > 1 else c5[-1].get("time")
+            candidates.append({"source": "ICT Signals", "interval": "30min", "item": ict, "response": {"mode": "tradingview", "candle_time": ict_ct}})
+        except Exception:
+            pass
+
+        # 4) AI Smart Analysis uses the existing non-Book signal layer. It is included here,
+        # but the dedicated Book + OpenAI endpoint is never called by auto trading.
+        try:
+            mtf = await multi_timeframe(key)
+            smart = {
+                "signal": technical.get("signal", "WAIT"),
+                "confidence": technical.get("confidence", 0),
+                "entry": technical.get("entry"),
+                "stop_loss": technical.get("stop_loss"),
+                "take_profit": technical.get("take_profit", []),
+                "reason": f"Technical signal + MTF {mtf.get('overall', 'MIXED')}",
+            }
+            if smart["signal"] in {"BUY", "SELL"}:
+                candidates.append({"source": "AI Smart Analysis", "interval": selected_interval, "item": smart, "response": {"mode": "confirmation-only", "multi_timeframe": mtf, "candle_time": candle_time}})
+        except Exception:
+            pass
         return candidates
 
     async def process_symbol(key: str):
@@ -3982,7 +3811,7 @@ async def _autotrade_worker() -> None:
         try:
             if MT5_AUTO_TRADING and MT5_AUTO_DUAL and AUTO_ENTRY_ENABLED:
                 result = await auto_record_signals(
-                    symbol="XAU/USD", interval="1min",
+                    symbol="XAU/USD", interval=DEFAULT_INTERVAL,
                     authorization=f"Bearer {AUTOTRADE_INTERNAL_TOKEN}", session=session
                 )
                 queued_count = int(result.get("queued") or 0)
@@ -4078,12 +3907,6 @@ async def trend_lines(symbol: str, interval: str = DEFAULT_INTERVAL) -> dict[str
         closed = candles_data[:-1] if len(candles_data) > 1 else candles_data
         tl = _trendline_analysis(closed)
         fib = _fibonacci_analysis(closed)
-        ai_advisory = await _module_ai_advisory("Trend Line + Fibonacci", key, interval, closed[-1].get("time") if closed else None, {"signal": tl.get("signal", "WAIT"), "trend": tl.get("trend"), "trend_power": tl.get("trend_power", 0), "fibonacci": fib, "reason": tl.get("reason", "")})
-        tl["ai_validation"] = ai_advisory
-        fib["ai_validation"] = ai_advisory
-        tl["strategy_engine"]="Market Structure Trendline Engine"
-        tl["market_regime"]=_adaptive_regime(closed)
-        tl["strategy_quality"]=int(tl.get("trend_power") or 0)
         return {"symbol": key, "interval": interval, "candles": candles_data[-260:], "trendline": tl, "fibonacci": fib,
                 "mode": "mt5", "warning": None, "provider": "Exness MT5", "source": f"MT5 {key} terminal candles",
                 "generated_at": datetime.now(timezone.utc).isoformat()}
