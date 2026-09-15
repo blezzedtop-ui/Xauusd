@@ -322,6 +322,10 @@ MT5_LOT_SIZE = float(os.getenv("MT5_DEFAULT_LOT", "0.01"))
 MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server": None, "balance": None, "equity": None, "free_margin": None, "margin": None, "positions": 0, "last_seen": None, "last_error": "", "symbol": None, "candles": {}, "markets": {}}
 MT5_ORDER_QUEUE: list[dict[str, Any]] = []
 MT5_ORDER_ATTEMPTS: dict[str, int] = {}
+# MT5 V4 bridge client leases prevent multiple terminals sharing the same token from
+# stealing each other's claimed orders. A dead client lease expires automatically.
+MT5_BRIDGE_CLIENTS: dict[str, dict[str, Any]] = {}
+MT5_CLAIM_LEASE_SECONDS = max(10, int(os.getenv("MT5_CLAIM_LEASE_SECONDS", "20")))
 TRADINGVIEW_CACHE_TTL = float(os.getenv("TRADINGVIEW_CACHE_TTL", "2.0"))
 TV_CANDLE_CACHE: dict[tuple[str,str], tuple[float, list[dict[str,Any]]]] = {}
 TV_CANDLE_LOCKS: dict[tuple[str,str], asyncio.Lock] = {}
@@ -4181,6 +4185,7 @@ class MT5StateBody(BaseModel):
     error: str = ""
     candles: dict[str, list[dict[str, Any]]] = {}
     markets: dict[str, dict[str, Any]] = {}
+    client_id: str = ""
 
 class MT5ReportBody(BaseModel):
     action: str = ""
@@ -4190,6 +4195,7 @@ class MT5ReportBody(BaseModel):
     price: float | None = None
     profit: float | None = None
     message: str = ""
+    client_id: str = ""
 
 class ModuleSignalBody(BaseModel):
     symbol: str = DEFAULT_SYMBOL
@@ -4520,7 +4526,7 @@ async def mt5_auto_dual(enabled: bool = Query(...), authorization: str | None = 
     return {"ok": True, "auto_dual": MT5_AUTO_DUAL, "symbols": ["XAU/USD", "EUR/USD"] if MT5_AUTO_DUAL else ["current"], "demo_only": True}
 
 @app.get("/api/v1/mt5/poll")
-async def mt5_poll(token: str = Query(...), market: str = Query(...)) -> dict[str, Any]:
+async def mt5_poll(token: str = Query(...), market: str = Query(...), client_id: str = Query("")) -> dict[str, Any]:
     """Return ONLY orders for the requested canonical market.
 
     The bridge must poll XAU/USD and EUR/USD separately. This is a hard transport
@@ -4533,10 +4539,21 @@ async def mt5_poll(token: str = Query(...), market: str = Query(...)) -> dict[st
     if requested_market not in {"XAU/USD", "EUR/USD"}:
         raise HTTPException(status_code=400, detail="Unsupported MT5 market")
     MT5_BRIDGE_STATE["last_seen"] = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc).timestamp()
+    client = re.sub(r"[^A-Za-z0-9._:-]+", "_", str(client_id or "").strip())[:100]
+    if not client:
+        client = "legacy"
+    # Expire dead-client leases so a crashed terminal cannot permanently hold an order.
+    for item in MT5_ORDER_QUEUE:
+        if item.get("claimed") and float(item.get("claim_expires", 0) or 0) <= now:
+            item["claimed"] = False
+            item.pop("claimed_by", None)
+            item.pop("claim_expires", None)
     if not MT5_AUTO_TRADING or not MT5_ORDER_QUEUE:
-        return {"ok": True, "market": requested_market, "orders": []}
-    # Claim a small batch for THIS market only. The EA reports success/failure; failed
-    # orders are released for limited retry by /mt5/report.
+        return {"ok": True, "market": requested_market, "orders": [], "client_id": client}
+    MT5_BRIDGE_CLIENTS[client] = {"last_seen": now, "market": requested_market}
+    # Claim a small batch for THIS market and THIS bridge client. A second terminal
+    # using the same token cannot take an active lease away from the first one.
     orders = []
     for item in MT5_ORDER_QUEUE:
         if item.get("claimed"):
@@ -4545,11 +4562,13 @@ async def mt5_poll(token: str = Query(...), market: str = Query(...)) -> dict[st
         if item_market != requested_market:
             continue
         item["claimed"] = True
+        item["claimed_by"] = client
+        item["claim_expires"] = now + MT5_CLAIM_LEASE_SECONDS
         MT5_ORDER_ATTEMPTS[item["id"]] = MT5_ORDER_ATTEMPTS.get(item["id"], 0) + 1
         orders.append(item)
         if len(orders) >= 10:
             break
-    return {"ok": True, "market": requested_market, "orders": orders}
+    return {"ok": True, "market": requested_market, "orders": orders, "client_id": client, "lease_seconds": MT5_CLAIM_LEASE_SECONDS}
 
 @app.post("/api/v1/mt5/state")
 async def mt5_state(body: MT5StateBody, token: str = Query(...)) -> dict[str, Any]:
@@ -4593,6 +4612,9 @@ async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, 
     if not secrets.compare_digest(token, MT5_BRIDGE_TOKEN):
         raise HTTPException(status_code=401, detail="Invalid MT5 bridge token")
     MT5_BRIDGE_STATE["last_seen"] = datetime.now(timezone.utc).isoformat()
+    report_client = re.sub(r"[^A-Za-z0-9._:-]+", "_", str(body.client_id or "").strip())[:100]
+    if report_client:
+        MT5_BRIDGE_CLIENTS.setdefault(report_client, {})["last_seen"] = datetime.now(timezone.utc).timestamp()
     status = body.status.lower()
     if status in {"error", "failed", "order_failed"}:
         MT5_BRIDGE_STATE["last_error"] = body.message
@@ -4602,6 +4624,10 @@ async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, 
         for idx, item in enumerate(list(MT5_ORDER_QUEUE)):
             if str(item.get("id")) != str(body.ticket):
                 continue
+            claimed_by = str(item.get("claimed_by") or "")
+            report_client = re.sub(r"[^A-Za-z0-9._:-]+", "_", str(body.client_id or "").strip())[:100]
+            if claimed_by and report_client and claimed_by != report_client:
+                break
             if status in {"order_sent", "sent", "success", "filled"}:
                 MT5_ORDER_QUEUE.pop(idx)
                 MT5_ORDER_ATTEMPTS.pop(str(body.ticket), None)
@@ -4612,6 +4638,8 @@ async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, 
                     MT5_ORDER_ATTEMPTS.pop(str(body.ticket), None)
                 else:
                     item["claimed"] = False
+                    item.pop("claimed_by", None)
+                    item.pop("claim_expires", None)
             break
     return {"ok": True, "queue": len(MT5_ORDER_QUEUE)}
 

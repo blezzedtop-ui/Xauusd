@@ -14,6 +14,7 @@ input string XAUTradeSymbol="XAUUSDm";
 input string EURTradeSymbol="EURUSDm";
 input long   SignalXMagic=26091401;
 input int    DuplicateCooldownSeconds=30;
+input string BridgeClientId=""; // blank = account-specific client id
 
 string Url(string path){ return ApiBase+path; }
 datetime g_last_state=0;
@@ -87,11 +88,6 @@ bool ValidSignalLevels(string symbol,string dir,double sl,double tp)
    return false;
 }
 
-bool TradeResultAccepted(uint retcode)
-{
-   return (retcode==TRADE_RETCODE_DONE || retcode==TRADE_RETCODE_DONE_PARTIAL || retcode==TRADE_RETCODE_PLACED);
-}
-
 double NormalizeVolume(string symbol,double requested)
 {
    double minv=SymbolInfoDouble(symbol,SYMBOL_VOLUME_MIN);
@@ -161,6 +157,24 @@ string RatesJson(string symbol,ENUM_TIMEFRAMES tf,int count)
    }
    out+="]";
    return out;
+}
+
+string ClientId()
+{
+   if(StringLen(BridgeClientId)>0) return BridgeClientId;
+   return "SignalX-"+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN));
+}
+
+string UrlEncodeSimple(string s)
+{
+   StringReplace(s,"%","%25");
+   StringReplace(s," ","%20");
+   StringReplace(s,"/","%2F");
+   StringReplace(s,"+","%2B");
+   StringReplace(s,"#","%23");
+   StringReplace(s,"?","%3F");
+   StringReplace(s,"&","%26");
+   return s;
 }
 
 int Http(string method,string url,string body,string &out)
@@ -282,8 +296,8 @@ double ExtractFirstTP(string json,int from_pos)
 void SendReport(string order_id,string action,string status,string symbol,string message)
 {
    string rb=StringFormat(
-      "{\"action\":\"%s\",\"ticket\":\"%s\",\"symbol\":\"%s\",\"status\":\"%s\",\"message\":\"%s\"}",
-      JsonEscape(action),JsonEscape(order_id),JsonEscape(symbol),JsonEscape(status),JsonEscape(message)
+      "{\"action\":\"%s\",\"ticket\":\"%s\",\"symbol\":\"%s\",\"status\":\"%s\",\"message\":\"%s\",\"client_id\":\"%s\"}",
+      JsonEscape(action),JsonEscape(order_id),JsonEscape(symbol),JsonEscape(status),JsonEscape(message),JsonEscape(ClientId())
    );
    string out;
    Http("POST",Url("/api/v1/mt5/report?token="+BridgeToken),rb,out);
@@ -299,6 +313,7 @@ int OnInit()
    Print("[MT5 BRIDGE] STARTED chart=",_Symbol," ApiBase=",ApiBase," PollSeconds=",PollSeconds," Lot=",DoubleToString(DefaultLot,2)," Magic=",SignalXMagic);
    Print("[MT5 BRIDGE] Broker-safe execution: arbitrage/latency/bonus-abuse logic disabled; exact symbols only.");
    Print("[MT5 BRIDGE] WebRequest allow URL: ",ApiBase);
+   Print("[MT5 BRIDGE] ClientId=",ClientId());
    EventSetTimer(MathMax(1,PollSeconds));
    return(INIT_SUCCEEDED);
 }
@@ -314,7 +329,7 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
    string out;
    string encoded=requestedMarket;
    StringReplace(encoded,"/","%2F");
-   int code=Http("GET",Url("/api/v1/mt5/poll?token="+BridgeToken+"&market="+encoded),"",out);
+   int code=Http("GET",Url("/api/v1/mt5/poll?token="+BridgeToken+"&market="+encoded+"&client_id="+UrlEncodeSimple(ClientId())),"",out);
    if(code!=200)
    {
       Print("[MT5 BRIDGE] POLL FAILED market=",requestedMarket," HTTP=",code);
@@ -395,20 +410,14 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
       }
 
       string comment="SignalX "+(source==""?"AUTO":source);
-      trade.SetTypeFillingBySymbol(execSymbol);
-      trade.SetDeviationInPoints(20);
-      bool request_ok=false;
-      if(dir=="BUY")  request_ok=trade.Buy(vol,execSymbol,0,sl,tp,comment);
-      if(dir=="SELL") request_ok=trade.Sell(vol,execSymbol,0,sl,tp,comment);
+      bool ok=false;
+      if(dir=="BUY")  ok=trade.Buy(vol,execSymbol,0,sl,tp,comment);
+      if(dir=="SELL") ok=trade.Sell(vol,execSymbol,0,sl,tp,comment);
 
-      uint retcode=trade.ResultRetcode();
       string desc=trade.ResultRetcodeDescription();
-      bool executed=request_ok && TradeResultAccepted(retcode);
-      PrintFormat("[AUTO TRADE] order_id=%s market=%s symbol=%s dir=%s lot=%.2f request_ok=%s retcode=%u desc=%s deal=%I64u order=%I64u",
-                  order_id,requestedMarket,execSymbol,dir,vol,request_ok?"true":"false",retcode,desc,trade.ResultDeal(),trade.ResultOrder());
       MarkOrderGuard(order_id);
-      if(executed) SendReport(order_id,dir,"ORDER_SENT",execSymbol,desc);
-      else         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,desc);
+      if(ok) SendReport(order_id,dir,"ORDER_SENT",execSymbol,desc);
+      else   SendReport(order_id,dir,"ORDER_FAILED",execSymbol,desc);
 
       pos+=MathMax(1,StringLen(order_id));
    }
