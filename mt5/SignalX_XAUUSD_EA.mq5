@@ -6,7 +6,7 @@
 CTrade trade;
 
 input string ApiBase="https://signalx.asia";
-input string BridgeToken="e9ea78449cf5bb28414875b57d61e489a5e766a4836be013b332c6a4e509dc21";
+input string BridgeToken="PASTE_MT5_BRIDGE_TOKEN";
 input int    PollSeconds=2;
 input int    StateSeconds=5;
 input double DefaultLot=0.01;
@@ -71,7 +71,7 @@ string JsonEscape(string s)
 
 void UpperInPlace(string &s)
 {
-   s=StringToUpper(s);
+   StringToUpper(s);
 }
 
 double NormalizePrice(string symbol,double price)

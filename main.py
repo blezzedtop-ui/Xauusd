@@ -3754,6 +3754,10 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     """
     if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
         return None
+    # M1 is analysis/history-only. Never allow 1-minute signals into AutoTrade.
+    if str(interval).strip().lower() in {"1min", "1m", "m1"}:
+        print(f"[AUTO TRADE QUEUE] M1 BLOCKED market={symbol} source={source} tf={interval}")
+        return None
     market = _mt5_market_key(symbol)
     if market != "XAU/USD":
         return None
@@ -3775,6 +3779,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
         "id": order_id,
         "symbol": market,
         "market": market,
+        "execution_symbol": "XAUUSDm",
         "interval": interval,
         "direction": direction.upper(),
         "entry": float(entry),
@@ -3820,7 +3825,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         candidates: list[dict[str, Any]] = []
         # One canonical live candle series per timeframe. Every module below consumes
         # the same timeframe candles, so the signal chain cannot mix symbols or TF data.
-        intervals=["1min","5min","15min","30min","1h","4h","1day"]
+        intervals=["5min","15min","30min","1h","4h","1day"]
         live_by_tf: dict[str, tuple[list[dict[str, Any]],str,str|None]] = {}
         async def load_tf(tf: str):
             try:
@@ -3973,7 +3978,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         nonlocal created_history, queued
         candidates = await load_symbol_candidates(key)
         # Final AutoTrade decision: one consensus signal per timeframe and live candle.
-        intervals = ["1min", "5min", "15min", "30min", "1h", "4h", "1day"]
+        intervals = ["5min", "15min", "30min", "1h", "4h", "1day"]
         for tf in intervals:
             current_candles = (await get_candles(key, tf, 260))[0]
             if len(current_candles) < 40:
@@ -4627,6 +4632,9 @@ async def mt5_poll(token: str = Query(...), market: str = Query(...), client_id:
             continue
         item_market = _mt5_market_key(item.get("market") or item.get("symbol"))
         if item_market != requested_market:
+            continue
+        if str(item.get("interval") or "").strip().lower() in {"1min", "1m", "m1"}:
+            print(f"[MT5 POLL] M1 ORDER BLOCKED id={item.get('id')} market={item_market}")
             continue
         item["claimed"] = True
         item["claimed_by"] = client
