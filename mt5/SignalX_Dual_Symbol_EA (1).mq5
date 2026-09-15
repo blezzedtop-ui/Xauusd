@@ -86,6 +86,16 @@ bool IsExactAllowedSymbol(string symbol)
    return (symbol=="XAUUSDm" || symbol=="EURUSDm");
 }
 
+string NormalizeInstrumentKey(string s)
+{
+   UpperInPlace(s);
+   StringReplace(s,"/","");
+   StringReplace(s,"_","");
+   StringReplace(s,"-","");
+   StringReplace(s,".","");
+   return s;
+}
+
 bool IsBlockedSource(string source)
 {
    string x=source;
@@ -418,16 +428,20 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
       string req=requested_symbol;
       string mkt=order_market;
       string expected=expectedSymbol;
-      UpperInPlace(req);
-      UpperInPlace(mkt);
-      UpperInPlace(expected);
+      string reqKey=NormalizeInstrumentKey(req);
+      string mktKey=NormalizeInstrumentKey(mkt);
+      string expectedKey=NormalizeInstrumentKey(expected);
 
-      bool isEUR=(StringFind(requestedMarket,"EUR")>=0);
-      bool marketMatches=isEUR ? (StringFind(mkt,"EUR")>=0) : (StringFind(mkt,"XAU")>=0);
-      bool symbolMatches=isEUR ? (StringFind(req,"EURUSD")>=0) : (StringFind(req,"XAUUSD")>=0);
-      if(!marketMatches || !symbolMatches)
+      bool isEUR=(StringFind(NormalizeInstrumentKey(requestedMarket),"EUR")>=0);
+      string expectedMarketKey=isEUR ? "EURUSD" : "XAUUSD";
+      bool marketMatches=(mktKey==expectedMarketKey || StringFind(mktKey,expectedMarketKey)>=0);
+      bool symbolMatches=(reqKey==expectedMarketKey || StringFind(reqKey,expectedMarketKey)>=0);
+      bool expectedMatches=(expectedKey==expectedMarketKey || StringFind(expectedKey,expectedMarketKey)>=0);
+      if(!marketMatches || !symbolMatches || !expectedMatches)
       {
-         SendReport(order_id,dir,"ORDER_FAILED",expectedSymbol,"BLOCKED: cross-symbol order rejected by EA");
+         string msg=StringFormat("BLOCKED: cross-symbol order rejected by EA req=%s market=%s expected=%s",reqKey,mktKey,expectedKey);
+         Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," ",msg);
+         SendReport(order_id,dir,"ORDER_FAILED",expectedSymbol,msg);
          pos+=MathMax(1,StringLen(order_id));
          continue;
       }
