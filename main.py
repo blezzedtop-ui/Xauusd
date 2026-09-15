@@ -4342,7 +4342,7 @@ async def _autotrade_worker() -> None:
         try:
             if MT5_AUTO_TRADING and AUTO_ENTRY_ENABLED:
                 result = await auto_record_signals(
-                    symbol="XAU/USD", interval="1min",
+                    symbol="XAU/USD", interval="5min",
                     authorization=f"Bearer {AUTOTRADE_INTERNAL_TOKEN}", session=session
                 )
                 queued_count = int(result.get("queued") or 0)
