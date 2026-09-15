@@ -4146,7 +4146,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                     candidates.append({"source":"AI Smart Analysis","interval":tf,"item":smart,"response":{"mode":"confirmation-only","multi_timeframe":mtf,"candle_time":ct}})
             except Exception:
                 pass
-        return candidates
+        return candidates, live_by_tf
 
     def _build_consensus(candidates: list[dict[str, Any]], interval: str, candle_time: str) -> dict[str, Any] | None:
         """Collapse all module outputs into ONE directional decision per XAU timeframe/candle.
@@ -4230,11 +4230,14 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
 
     async def process_symbol(key: str):
         nonlocal created_history, queued
-        candidates = await load_symbol_candidates(key)
+        candidates, live_by_tf = await load_symbol_candidates(key)
         # Final AutoTrade decision: one consensus signal per timeframe and live candle.
+        # Reuse the exact live candle snapshots already used to build candidates.
+        # This prevents a second fetch from drifting to another candle and fixes the
+        # Strategic-Pro scope bug that previously left Signal History empty.
         intervals = ["5min", "15min", "30min", "1h", "4h", "1day"]
         for tf in intervals:
-            current_candles = (await get_candles(key, tf, 260))[0]
+            current_candles = live_by_tf.get(tf, ([], "error", None))[0]
             if len(current_candles) < 40:
                 continue
             candle_time = str(current_candles[-1].get("time"))
