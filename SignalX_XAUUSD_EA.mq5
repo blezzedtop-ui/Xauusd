@@ -1,5 +1,5 @@
 #property strict
-#property version   "1.7"
+#property version   "1.8"
 #property description "SignalX XAUUSD MT5 bridge"
 
 #include <Trade/Trade.mqh>
@@ -13,6 +13,8 @@ input double DefaultLot=0.01;
 input string XAUTradeSymbol="XAUUSDm";
 input long   SignalXMagic=26091401;
 input int    DuplicateCooldownSeconds=30;
+input int    MaxDeviationPoints=100; // wider XAU execution tolerance for normal market movement
+input int    ExecutionRetries=2; // retry transient price/quote errors only
 input string BridgeClientId=""; // blank = account-specific client id
 input bool   SingleSession=true; // only one EA instance per MT5 terminal/account
 input int    SessionLeaseSeconds=15;
@@ -69,7 +71,16 @@ string JsonEscape(string s)
 
 void UpperInPlace(string &s)
 {
-   StringToUpper(s);
+   s=StringToUpper(s);
+}
+
+double NormalizePrice(string symbol,double price)
+{
+   if(price<=0 || !MathIsValidNumber(price)) return 0.0;
+   double tick_size=SymbolInfoDouble(symbol,SYMBOL_TRADE_TICK_SIZE);
+   int digits=(int)SymbolInfoInteger(symbol,SYMBOL_DIGITS);
+   if(tick_size>0) price=MathRound(price/tick_size)*tick_size;
+   return NormalizeDouble(price,digits);
 }
 
 bool IsUsableSymbol(string symbol)
@@ -119,13 +130,19 @@ bool ValidSignalLevels(string symbol,string dir,double sl,double tp)
 {
    if(!IsExactAllowedSymbol(symbol) || !IsUsableSymbol(symbol)) return false;
    if(sl<=0 || tp<=0 || !MathIsValidNumber(sl) || !MathIsValidNumber(tp)) return false;
+   sl=NormalizePrice(symbol,sl);
+   tp=NormalizePrice(symbol,tp);
    MqlTick tick;
    if(!SymbolInfoTick(symbol,tick)) return false;
    double point=SymbolInfoDouble(symbol,SYMBOL_POINT);
+   double tick_size=SymbolInfoDouble(symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(tick_size<=0) tick_size=point;
    int stops=(int)SymbolInfoInteger(symbol,SYMBOL_TRADE_STOPS_LEVEL);
-   double minDist=stops*point;
-   if(dir=="BUY") return (sl < tick.bid-minDist && tp > tick.ask+minDist);
-   if(dir=="SELL") return (sl > tick.ask+minDist && tp < tick.bid-minDist);
+   int freeze=(int)SymbolInfoInteger(symbol,SYMBOL_TRADE_FREEZE_LEVEL);
+   double minDist=MathMax(stops,freeze)*point;
+   if(minDist<tick_size) minDist=tick_size;
+   if(dir=="BUY") return (sl <= tick.bid-minDist && tp >= tick.ask+minDist);
+   if(dir=="SELL") return (sl >= tick.ask+minDist && tp <= tick.bid-minDist);
    return false;
 }
 
@@ -345,7 +362,7 @@ int OnInit()
    if(!AcquireSession()) return(INIT_FAILED);
    trade.SetExpertMagicNumber(SignalXMagic);
    trade.SetAsyncMode(false);
-   Print("[MT5 BRIDGE] STARTED chart=",_Symbol," ApiBase=",ApiBase," PollSeconds=",PollSeconds," Lot=",DoubleToString(DefaultLot,2)," Magic=",SignalXMagic);
+   Print("[MT5 BRIDGE] STARTED chart=",_Symbol," ApiBase=",ApiBase," PollSeconds=",PollSeconds," Lot=",DoubleToString(DefaultLot,2)," Magic=",SignalXMagic," Deviation=",MaxDeviationPoints," Retries=",ExecutionRetries);
    Print("[MT5 BRIDGE] Broker-safe execution: arbitrage/latency/bonus-abuse logic disabled; exact symbols only.");
    Print("[MT5 BRIDGE] WebRequest allow URL: ",ApiBase);
    Print("[MT5 BRIDGE] ClientId=",ClientId());
@@ -441,10 +458,21 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
          pos+=MathMax(1,StringLen(order_id));
          continue;
       }
+      // Normalize execution prices to the broker's tick size/digits before validation and send.
+      sl=NormalizePrice(execSymbol,sl);
+      tp=NormalizePrice(execSymbol,tp);
       if(!ValidSignalLevels(execSymbol,dir,sl,tp))
       {
-         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,"BLOCKED: invalid/stale SL/TP relative to live broker price");
-         MarkOrderGuard(order_id);
+         MqlTick checkTick;
+         SymbolInfoTick(execSymbol,checkTick);
+         int digs=(int)SymbolInfoInteger(execSymbol,SYMBOL_DIGITS);
+         string msg=StringFormat("BLOCKED: invalid/stale SL/TP bid=%.*f ask=%.*f sl=%.*f tp=%.*f stops=%d freeze=%d",
+                                 digs,checkTick.bid,digs,checkTick.ask,digs,sl,digs,tp,
+                                 (int)SymbolInfoInteger(execSymbol,SYMBOL_TRADE_STOPS_LEVEL),
+                                 (int)SymbolInfoInteger(execSymbol,SYMBOL_TRADE_FREEZE_LEVEL));
+         Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," ",msg);
+         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,msg);
+         // Do not poison the local duplicate guard for a price/level validation failure.
          pos+=MathMax(1,StringLen(order_id));
          continue;
       }
@@ -493,13 +521,16 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
          continue;
       }
 
-      trade.SetTypeFillingBySymbol(execSymbol);
-      trade.SetDeviationInPoints(20);
       string comment="SignalX "+(source==""?"AUTO":source);
       bool ok=false;
-      if(dir=="BUY")  ok=trade.Buy(vol,execSymbol,0,sl,tp,comment);
-      else if(dir=="SELL") ok=trade.Sell(vol,execSymbol,0,sl,tp,comment);
-      else
+      uint retcode=0;
+      string desc="";
+      ulong deal=0;
+      ulong ord=0;
+      bool brokerAccepted=false;
+      int attempts=MathMax(1,MathMin(3,ExecutionRetries));
+
+      if(dir!="BUY" && dir!="SELL")
       {
          string msg="BLOCKED: invalid direction "+dir;
          Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," ",msg);
@@ -508,30 +539,73 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
          continue;
       }
 
-      uint retcode=trade.ResultRetcode();
-      string desc=trade.ResultRetcodeDescription();
-      ulong deal=trade.ResultDeal();
-      ulong ord=trade.ResultOrder();
-      bool brokerAccepted=(retcode==TRADE_RETCODE_DONE || retcode==TRADE_RETCODE_DONE_PARTIAL || retcode==TRADE_RETCODE_PLACED);
+      for(int attempt=0; attempt<attempts; attempt++)
+      {
+         if(!SymbolInfoTick(execSymbol,liveTick))
+         {
+            desc="live broker tick unavailable";
+            retcode=TRADE_RETCODE_PRICE_OFF;
+            break;
+         }
+         sl=NormalizePrice(execSymbol,sl);
+         tp=NormalizePrice(execSymbol,tp);
+         if(!ValidSignalLevels(execSymbol,dir,sl,tp))
+         {
+            desc="SL/TP became invalid against refreshed broker price";
+            retcode=TRADE_RETCODE_INVALID_STOPS;
+            break;
+         }
+
+         trade.SetTypeFillingBySymbol(execSymbol);
+         trade.SetDeviationInPoints(MaxDeviationPoints);
+         if(dir=="BUY")  ok=trade.Buy(vol,execSymbol,0,sl,tp,comment);
+         else             ok=trade.Sell(vol,execSymbol,0,sl,tp,comment);
+
+         retcode=trade.ResultRetcode();
+         desc=trade.ResultRetcodeDescription();
+         deal=trade.ResultDeal();
+         ord=trade.ResultOrder();
+         brokerAccepted=(retcode==TRADE_RETCODE_DONE || retcode==TRADE_RETCODE_DONE_PARTIAL || retcode==TRADE_RETCODE_PLACED);
+         Print("[AUTO TRADE] ATTEMPT order_id=",order_id,
+               " #",attempt+1,"/",attempts,
+               " symbol=",execSymbol,
+               " dir=",dir,
+               " vol=",DoubleToString(vol,2),
+               " bid=",DoubleToString(liveTick.bid,SymbolInfoInteger(execSymbol,SYMBOL_DIGITS)),
+               " ask=",DoubleToString(liveTick.ask,SymbolInfoInteger(execSymbol,SYMBOL_DIGITS)),
+               " sl=",DoubleToString(sl,SymbolInfoInteger(execSymbol,SYMBOL_DIGITS)),
+               " tp=",DoubleToString(tp,SymbolInfoInteger(execSymbol,SYMBOL_DIGITS)),
+               " request_ok=",ok?"true":"false",
+               " retcode=",retcode,
+               " desc=",desc);
+         if(brokerAccepted) break;
+
+         bool transient=(retcode==TRADE_RETCODE_REQUOTE ||
+                          retcode==TRADE_RETCODE_PRICE_CHANGED ||
+                          retcode==TRADE_RETCODE_PRICE_OFF ||
+                          retcode==TRADE_RETCODE_TIMEOUT ||
+                          retcode==TRADE_RETCODE_CONNECTION);
+         if(!transient || attempt+1>=attempts) break;
+         Sleep(150);
+      }
+
       Print("[AUTO TRADE] EXECUTION order_id=",order_id,
             " symbol=",execSymbol,
-            " volume=",DoubleToString(vol,2),
-            " bid=",DoubleToString(liveTick.bid,SymbolInfoInteger(execSymbol,SYMBOL_DIGITS)),
-            " ask=",DoubleToString(liveTick.ask,SymbolInfoInteger(execSymbol,SYMBOL_DIGITS)),
             " request_ok=",ok?"true":"false",
             " broker_accepted=",brokerAccepted?"true":"false",
             " retcode=",retcode,
             " desc=",desc,
             " deal=",(long)deal,
             " order=",(long)ord);
-      MarkOrderGuard(order_id);
       if(brokerAccepted)
       {
+         MarkOrderGuard(order_id);
          Print("[AUTO TRADE] ORDER_SENT order_id=",order_id," symbol=",execSymbol," retcode=",retcode," deal=",(long)deal," order=",(long)ord);
          SendReport(order_id,dir,"ORDER_SENT",execSymbol,StringFormat("retcode=%u deal=%I64u order=%I64u %s",retcode,deal,ord,desc));
       }
       else
       {
+         // Only successful orders enter the local duplicate guard; transient failures can retry from the backend.
          Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," symbol=",execSymbol," retcode=",retcode," desc=",desc);
          SendReport(order_id,dir,"ORDER_FAILED",execSymbol,StringFormat("retcode=%u deal=%I64u order=%I64u %s",retcode,deal,ord,desc));
       }
