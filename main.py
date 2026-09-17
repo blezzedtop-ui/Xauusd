@@ -30,7 +30,6 @@ from fastapi import WebSocket, WebSocketDisconnect
 from book_openai_engine import book_signal, _atr as _atr_local
 from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select, func
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 load_dotenv()
@@ -749,45 +748,9 @@ def ensure_admin_user() -> None:
         s.commit()
 
 
-HISTORY_LIVE_VERSION = os.getenv("HISTORY_LIVE_VERSION", "live-only-2026-09-17-v3").strip() or "live-only-2026-09-17-v3"
-
-def _prepare_live_history_once() -> None:
-    """Start the new journal from live data only, once per persistent DB version.
-
-    Existing history is intentionally removed because the journal schema/semantics have
-    been changed and legacy rows were not reliable live-signal records. A DB marker makes
-    this destructive cleanup one-time across Railway restarts.
-    """
-    with engine.begin() as conn:
-        conn.exec_driver_sql("CREATE TABLE IF NOT EXISTS signal_history_runtime_state (key VARCHAR(100) PRIMARY KEY, value VARCHAR(255))")
-        row = conn.exec_driver_sql("SELECT value FROM signal_history_runtime_state WHERE key='history_live_version'").fetchone()
-        if row and str(row[0]) == HISTORY_LIVE_VERSION:
-            return
-        conn.exec_driver_sql("DELETE FROM signal_history")
-        backend = engine.url.get_backend_name()
-        if backend == "sqlite":
-            conn.exec_driver_sql("INSERT OR REPLACE INTO signal_history_runtime_state (key,value) VALUES (?,?)", ("history_live_version", HISTORY_LIVE_VERSION))
-        else:
-            conn.exec_driver_sql("DELETE FROM signal_history_runtime_state WHERE key='history_live_version'")
-            conn.exec_driver_sql("INSERT INTO signal_history_runtime_state (key,value) VALUES (%s,%s)", ("history_live_version", HISTORY_LIVE_VERSION))
-    print(f"[HISTORY LIVE-ONLY] legacy history cleared; version={HISTORY_LIVE_VERSION}")
-
-def _ensure_live_history_unique_index() -> None:
-    """Enforce one History row per user/symbol/timeframe/module/live-candle."""
-    # All legacy data has already been cleared by _prepare_live_history_once on the
-    # first boot of this version, so the unique index can be created safely.
-    with engine.begin() as conn:
-        try:
-            conn.exec_driver_sql("DROP INDEX IF EXISTS uq_signal_history_identity")
-        except Exception:
-            pass
-        conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_signal_history_live_identity ON signal_history (user_id, symbol, interval, source, candle_time)")
-
 def initialize_database() -> None:
     ensure_schema()
     ensure_admin_user()
-    _prepare_live_history_once()
-    _ensure_live_history_unique_index()
 
 
 # Production hardening: keep the algorithm server-side and expose only derived results.
@@ -1293,34 +1256,6 @@ class MarketDataError(RuntimeError):
 
 def clean_symbol(symbol: str) -> str:
     return symbol.strip().upper().replace("-", "/")
-
-def _normalize_history_candle_time(value: Any) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    try:
-        return str(int(float(raw)))
-    except Exception:
-        pass
-    try:
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return str(int(dt.timestamp()))
-    except Exception:
-        return raw
-
-def _normalize_history_source(value: str | None) -> str:
-    raw = str(value or "Signals").strip()
-    aliases = {
-        "signal lab":"Signal Lab", "signals":"Signals", "technical analysis":"Technical Analysis",
-        "ai smart analysis":"AI Smart Analysis", "ai fallback network":"AI Fallback Network",
-        "auto trend line":"Auto Trend Line", "trend line":"Trend Line", "ict signals":"ICT Signals",
-        "multi timeframe":"Multi-Timeframe", "multi-timeframe":"Multi-Timeframe", "classic trade":"Classic Trade",
-        "algotrade":"AlgoTrade", "consensus":"Consensus", "snr":"SNR",
-        "economic calendar":"Economic Calendar", "market sessions":"Market Sessions"
-    }
-    return aliases.get(raw.lower(), raw)[:40]
 
 def history_pip_size(symbol: str) -> float:
     """Return the user-facing pip size for history distance display.
@@ -3806,45 +3741,24 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 5
     for row in open_rows:
         try: payload=json.loads(row.payload or "{}")
         except Exception: payload={}
-        if not isinstance(payload, dict):
-            payload = {"raw_payload": payload}
         _history_sync_row(row,payload)
         entry,sl,tp1,tp2=row.entry_price,row.stop_loss,row.take_profit_1,row.take_profit_2
         if entry is None or sl is None or tp1 is None or row.direction not in {"BUY","SELL"}: continue
         if tp2 is None: tp2=tp1
-        try:
-            normalized_interval = validate_interval(row.interval)
-        except Exception:
-            # A malformed historical row must not turn the entire journal into HTTP 500.
-            continue
-        key=(clean_symbol(row.symbol), normalized_interval)
+        key=(clean_symbol(row.symbol),validate_interval(row.interval))
         if key not in cache:
-            try:
-                raw_candles = await get_candles(row.symbol, key[1], 260)
-                if isinstance(raw_candles, tuple):
-                    cache[key] = raw_candles[0] if raw_candles and isinstance(raw_candles[0], list) else []
-                elif isinstance(raw_candles, list):
-                    cache[key] = raw_candles
-                else:
-                    cache[key] = []
-            except Exception:
-                cache[key]=[]
+            try: cache[key]=await get_candles(row.symbol,key[1],260)
+            except Exception: cache[key]=[]
         candles=cache[key]
         if not candles: continue
-        created=row.created_at
-        if created is None: continue
-        if created.tzinfo is None: created=created.replace(tzinfo=timezone.utc)
+        created=row.created_at if row.created_at.tzinfo else row.created_at.replace(tzinfo=timezone.utc)
         tp1_hit=None; tp1_time=None; final=None; final_price=None; final_time=None
         for c in candles:
-            if not isinstance(c, dict): continue
             ct=c.get("time")
             try: cdt=datetime.fromtimestamp(float(ct),tz=timezone.utc) if isinstance(ct,(int,float)) else datetime.fromisoformat(str(ct).replace("Z","+00:00"))
             except Exception: continue
             if cdt<=created: continue
-            try:
-                high=float(c.get("high")); low=float(c.get("low"))
-            except (TypeError, ValueError):
-                continue
+            high=float(c.get("high")); low=float(c.get("low"))
             if row.direction=="BUY":
                 hit1=high>=tp1; hit2=high>=tp2; hit_sl=low<=sl
             else:
@@ -4673,23 +4587,24 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             candles = live_by_tf.get(tf, ([], "error", None))[0]
             if len(candles) < 40:
                 continue
-            candle_time = _normalize_history_candle_time(candles[-1].get("time"))
+            candle_time = str(candles[-1].get("time"))
             entry = item.get("entry")
             sl = item.get("stop_loss")
             tp = item.get("take_profit") or []
             if entry is None or sl is None or not tp:
                 continue
-            source = _normalize_history_source(c.get("source") or "Signals")
+            source = str(c.get("source") or "Signals")[:40]
             recent = session.scalars(select(SignalHistory).where(
                 SignalHistory.user_id == user.id,
                 SignalHistory.symbol == key,
                 SignalHistory.interval == tf,
                 SignalHistory.candle_time == candle_time,
+                SignalHistory.direction == direction,
                 SignalHistory.source == source,
             ).order_by(SignalHistory.id.desc())).first()
-            conf = float(item.get("confidence") or item.get("trend_power") or 0)
-            payload = {"source": source, "module_signal": item, "symbol": key, "interval": tf, "candle_time": candle_time, "live_generated": True}
             if recent is None:
+                conf = float(item.get("confidence") or item.get("trend_power") or 0)
+                payload = {"source": source, "module_signal": item, "symbol": key, "interval": tf, "candle_time": candle_time}
                 session.add(SignalHistory(
                     user_id=user.id, symbol=key, interval=tf, direction=direction,
                     headline=f"{source} · {direction} · {conf:.1f}%", price=float(entry),
@@ -4698,8 +4613,6 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 ))
                 created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction,"confidence":conf,"module_history":True})
                 print(f"[SIGNAL HISTORY] MODULE RECORDED source={source} market={key} tf={tf} dir={direction} candle={candle_time}")
-            elif str(recent.status or "ACTIVE").upper() in {"ACTIVE","TP1 HIT","OPEN"} and str(recent.outcome or "OPEN").upper() in {"OPEN","TP1 HIT"}:
-                recent.direction = direction; recent.price=float(entry); recent.headline=f"{source} · {direction} · {conf:.1f}%"; recent.payload=json.dumps(payload,ensure_ascii=False,default=str); _history_sync_row(recent,payload)
 
         # Final AutoTrade decision: one consensus signal per timeframe and live candle.
         # Reuse the exact live candle snapshots already used to build candidates.
@@ -4710,7 +4623,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             current_candles = live_by_tf.get(tf, ([], "error", None))[0]
             if len(current_candles) < 40:
                 continue
-            candle_time = _normalize_history_candle_time(current_candles[-1].get("time"))
+            candle_time = str(current_candles[-1].get("time"))
             consensus = _build_consensus(candidates, tf, candle_time)
 
             # Execution fallback: when ensemble consensus is unavailable, the dedicated
@@ -4774,8 +4687,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             if entry is None or sl is None or len(tp) < 1:
                 print(f"[SIGNAL FLOW] HISTORY BLOCKED tf={tf} dir={direction} reason=missing_levels entry={entry} sl={sl} tp={tp}")
                 continue
-            source = _normalize_history_source(consensus.get("consensus_source") or "Consensus")
-            payload = {"type":"CONSENSUS","signal":direction,"confidence":confidence,"strategy_engine":consensus.get("strategy_engine"),"strategy_version":consensus.get("strategy_version"),"reason":consensus.get("reason"),"consensus":consensus,"live_generated":True}
+            source = str(consensus.get("consensus_source") or "Signal Consensus")
+            payload = {"type":"CONSENSUS","signal":direction,"confidence":confidence,"strategy_engine":consensus.get("strategy_engine"),"strategy_version":consensus.get("strategy_version"),"reason":consensus.get("reason"),"consensus":consensus}
             headline=f"CONSENSUS {direction} · {tf.upper()} · {confidence:.1f}%"
             # Do not duplicate the same consensus history row on the 15-second worker cycle.
             history_recent = session.scalars(select(SignalHistory).where(
@@ -4783,22 +4696,20 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 SignalHistory.symbol == key,
                 SignalHistory.interval == tf,
                 SignalHistory.candle_time == candle_time,
+                SignalHistory.direction == direction,
                 SignalHistory.source == source,
             ).order_by(SignalHistory.id.desc())).first()
             if history_recent is None:
                 history_row = SignalHistory(
                     user_id=user.id, symbol=key, interval=tf, direction=direction,
                     headline=headline, price=float(entry), payload=json.dumps(payload, ensure_ascii=False),
-                    outcome="OPEN", status="ACTIVE", created_at=now, source=source, candle_time=candle_time
+                    outcome="OPEN", created_at=now, source=source, candle_time=candle_time
                 )
                 session.add(history_row)
                 created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction,"confidence":confidence,"agreement":consensus["consensus_agreement"],"history_recorded":True})
                 print(f"[SIGNAL HISTORY] RECORDED market={key} tf={tf} dir={direction} confidence={confidence:.1f} candle={candle_time}")
-            elif str(history_recent.status or "ACTIVE").upper() in {"ACTIVE","TP1 HIT","OPEN"} and str(history_recent.outcome or "OPEN").upper() in {"OPEN","TP1 HIT"}:
-                history_recent.direction=direction; history_recent.headline=headline; history_recent.price=float(entry); history_recent.payload=json.dumps(payload,ensure_ascii=False,default=str); _history_sync_row(history_recent,payload)
-                print(f"[SIGNAL HISTORY] LIVE UPDATE market={key} tf={tf} dir={direction} candle={candle_time} existing_id={history_recent.id}")
             else:
-                print(f"[SIGNAL HISTORY] FINALIZED KEEP market={key} tf={tf} candle={candle_time} existing_id={history_recent.id}")
+                print(f"[SIGNAL HISTORY] DUPLICATE SKIP market={key} tf={tf} dir={direction} candle={candle_time} existing_id={history_recent.id}")
 
             # Consensus is the primary execution gate. The former second Strategic Pro
             # gate could reject a valid consensus a second time and leave MT5 with no order.
@@ -4829,6 +4740,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 SignalHistory.symbol == key,
                 SignalHistory.interval == tf,
                 SignalHistory.candle_time == candle_time,
+                SignalHistory.direction == direction,
             ).order_by(SignalHistory.id.desc())).first()
             payload = {
                 "source": source,
@@ -5040,22 +4952,8 @@ async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = D
     item = {**build_advanced_signal(candles_data, interval, news_blocked=False), "mode":mode, "warning":warning}
     if not item or item.get("signal") not in ("BUY","SELL"):
         raise HTTPException(status_code=400, detail="Bu timeframe uchun tasdiqlangan BUY/SELL signal mavjud emas.")
-    live_ct = _normalize_history_candle_time(candles_data[-1].get("time"))
-    existing = session.scalar(select(SignalHistory).where(
-        SignalHistory.user_id == user.id, SignalHistory.symbol == clean_symbol(symbol), SignalHistory.interval == interval,
-        SignalHistory.source == "Signal Lab", SignalHistory.candle_time == live_ct
-    ).order_by(SignalHistory.id.desc()))
-    payload = {"advanced":item,"setup":{"entry":item.get("entry"),"stop_loss":item.get("stop_loss"),"take_profit":item.get("take_profit",[])},"symbol":clean_symbol(symbol),"interval":interval,"source":"Signal Lab","candle_time":live_ct,"live_generated":True}
-    if existing is not None:
-        existing.direction = item["signal"]
-        existing.headline = f'{item["signal"]} • {item["setup"]}'[:255]
-        existing.price = float(item["entry"])
-        existing.payload = json.dumps(payload, ensure_ascii=False, default=str)
-        existing.outcome = "OPEN"; existing.status = "ACTIVE"; existing.closed_at = None; existing.result = None; existing.profit_loss = None; existing.r_multiple = None
-        _history_sync_row(existing,payload); session.commit()
-        return {"saved":False,"updated":True,"id":existing.id,"signal":item}
-    row = SignalHistory(user_id=user.id, symbol=clean_symbol(symbol), interval=interval, direction=item["signal"], headline=f'{item["signal"]} • {item["setup"]}', price=float(item["entry"]), payload=json.dumps(payload,ensure_ascii=False), outcome="OPEN", status="ACTIVE", created_at=datetime.now(timezone.utc), source="Signal Lab", candle_time=live_ct)
-    _history_sync_row(row,payload); session.add(row); session.commit(); session.refresh(row)
+    row = SignalHistory(user_id=user.id, symbol=clean_symbol(symbol), interval=interval, direction=item["signal"], headline=f'{item["signal"]} • {item["setup"]}', price=float(item["entry"]), payload=json.dumps({"advanced":item,"setup":{"entry":item.get("entry"),"stop_loss":item.get("stop_loss"),"take_profit":item.get("take_profit",[])},"symbol":clean_symbol(symbol),"interval":interval,"source":"Signal Lab","candle_time":candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")}), outcome="OPEN", created_at=datetime.now(timezone.utc), source="Signal Lab", candle_time=str(candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")))
+    session.add(row); session.commit(); session.refresh(row)
     return {"saved":True,"id":row.id,"signal":item}
 
 
@@ -5140,7 +5038,7 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     """
     user = current_user(authorization, session)
     direction = str(body.direction or "WAIT").upper()
-    source = _normalize_history_source(body.source or "Signals")
+    source = str(body.source or "Signals")[:40]
     interval = validate_interval(body.interval)
     symbol = clean_symbol(body.symbol)
     if direction not in {"BUY", "SELL"}:
@@ -5153,15 +5051,15 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         }, live_candles, direction)
     except Exception as exc:
         return {"saved": False, "reason": f"LIVE_LEVELS_UNAVAILABLE: {exc}"}
-    live_candle_time = _normalize_history_candle_time(live_candles[-1].get("time"))
+    live_candle_time = str(live_candles[-1].get("time"))
 
-    # Exactly one record per module/timeframe/live candle. Direction is mutable while
-    # the current candle recalculates; do not create a second row on a BUY↔SELL flip.
+    # One record per module/timeframe/live candle/direction.
     q = select(SignalHistory).where(
         SignalHistory.user_id == user.id,
         SignalHistory.source == source,
         SignalHistory.symbol == symbol,
         SignalHistory.interval == interval,
+        SignalHistory.direction == direction,
         SignalHistory.candle_time == live_candle_time
     ).order_by(SignalHistory.id.desc())
     existing = session.scalar(q)
@@ -5183,22 +5081,9 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     )
     _history_sync_row(row,payload)
     if existing is None:
-        try:
-            session.add(row); session.commit(); session.refresh(row)
-        except IntegrityError:
-            session.rollback()
-            existing = session.scalar(q)
-            if existing is None:
-                raise
-    if existing is not None and str(existing.status or "ACTIVE").upper() in {"ACTIVE", "TP1 HIT", "OPEN"} and str(existing.outcome or "OPEN").upper() in {"OPEN", "TP1 HIT"}:
-        existing.direction = direction
-        existing.headline = (body.headline or f"{source} · {direction}")[:255]
-        existing.price = float(entry)
-        existing.payload = json.dumps(payload, ensure_ascii=False, default=str)
-        existing.status = "ACTIVE" if str(existing.status or "ACTIVE").upper() != "TP1 HIT" else existing.status
-        existing.outcome = "OPEN" if str(existing.outcome or "OPEN").upper() != "TP1 HIT" else existing.outcome
-        _history_sync_row(existing, payload)
-        session.commit()
+        session.add(row); session.commit(); session.refresh(row)
+    else:
+        session.flush()
 
     order = _queue_autotrade_order(
         symbol=symbol, source=source, interval=interval, direction=direction,
@@ -5206,9 +5091,9 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         confidence=body.confidence, candle_time=live_candle_time,
     )
     if existing is not None:
-        return {"saved": False, "updated": str(existing.status or "ACTIVE").upper() in {"ACTIVE", "TP1 HIT", "OPEN"}, "duplicate": True, "id": existing.id, "queued": bool(order),
-                "source": source, "symbol": symbol, "entry": existing.price, "stop_loss": existing.stop_loss,
-                "take_profit": [x for x in (existing.take_profit_1, existing.take_profit_2) if x is not None], "direction": existing.direction, "candle_time": live_candle_time}
+        return {"saved": False, "duplicate": True, "id": existing.id, "queued": bool(order),
+                "source": source, "symbol": symbol, "entry": entry, "stop_loss": sl,
+                "take_profit": tp, "candle_time": live_candle_time}
     return {"saved": True, "id": row.id, "source": source, "outcome": row.outcome,
             "symbol": symbol, "entry": entry, "stop_loss": sl, "take_profit": tp,
             "candle_time": live_candle_time, "queued": bool(order)}
@@ -5371,24 +5256,17 @@ def _history_v2_date_bounds(start_date: str | None, end_date: str | None):
 # History outcome refresh is throttled so opening the journal repeatedly does not
 # trigger repeated candle scans. It does not alter signal generation or execution.
 _HISTORY_V2_REFRESH_TS: dict[int, float] = {}
-_HISTORY_V2_REFRESH_LOCKS: dict[int, asyncio.Lock] = {}
 _HISTORY_V2_REFRESH_COOLDOWN = max(5.0, float(os.getenv("HISTORY_V2_REFRESH_COOLDOWN", "20")))
 
 async def _maybe_refresh_history_v2(session: Session, user_id: int, limit: int = 2000) -> None:
-    uid = int(user_id)
-    lock = _HISTORY_V2_REFRESH_LOCKS.setdefault(uid, asyncio.Lock())
-    async with lock:
-        now_mono = asyncio.get_running_loop().time()
-        last = _HISTORY_V2_REFRESH_TS.get(uid, 0.0)
-        if now_mono - last < _HISTORY_V2_REFRESH_COOLDOWN:
-            return
-        try:
-            await refresh_signal_outcomes(session, uid, limit=limit)
-        except Exception as exc:
-            # Outcome refresh is best-effort; History reads must not become HTTP 500.
-            print(f"[HISTORY V2] outcome refresh skipped: {type(exc).__name__}: {exc}")
-        finally:
-            _HISTORY_V2_REFRESH_TS[uid] = asyncio.get_running_loop().time()
+    now_mono = asyncio.get_running_loop().time()
+    last = _HISTORY_V2_REFRESH_TS.get(int(user_id), 0.0)
+    if now_mono - last < _HISTORY_V2_REFRESH_COOLDOWN:
+        return
+    try:
+        await refresh_signal_outcomes(session, int(user_id), limit=limit)
+    finally:
+        _HISTORY_V2_REFRESH_TS[int(user_id)] = now_mono
 
 @app.get("/api/v2/signal-history")
 async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
@@ -5397,10 +5275,7 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
                             module: str = Query(""), authorization: str | None = Header(default=None),
                             session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
-    try:
-        await _maybe_refresh_history_v2(session, user.id)
-    except Exception as exc:
-        print(f"[HISTORY V2] outcome refresh skipped: {type(exc).__name__}: {exc}")
+    await _maybe_refresh_history_v2(session, user.id)
     q = select(SignalHistory).where(SignalHistory.user_id == user.id)
     if symbol:
         q = q.where(SignalHistory.symbol == clean_symbol(symbol))
@@ -5422,12 +5297,9 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
     for r in rows:
         try: payload=json.loads(r.payload or "{}")
         except Exception: payload={}
-        if not isinstance(payload, dict):
-            payload = {"raw_payload": payload}
         _history_sync_row(r,payload)
         entry,sl,tp1,tp2=r.entry_price,r.stop_loss,r.take_profit_1,r.take_profit_2
-        dt=r.created_at or datetime.now(timezone.utc)
-        if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
+        dt=r.created_at if r.created_at.tzinfo else r.created_at.replace(tzinfo=timezone.utc)
         closed=r.closed_at if r.closed_at and r.closed_at.tzinfo else (r.closed_at.replace(tzinfo=timezone.utc) if r.closed_at else None)
         duration=round(max(0,(closed-dt).total_seconds())/60,2) if closed else None
         status=_history_status(r)
@@ -5445,10 +5317,7 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
                                   direction: str = Query(""), result: str = Query(""), module: str = Query(""),
                                   authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user=current_user(authorization,session)
-    try:
-        await _maybe_refresh_history_v2(session, user.id)
-    except Exception as exc:
-        print(f"[HISTORY V2 STATS] outcome refresh skipped: {type(exc).__name__}: {exc}")
+    await _maybe_refresh_history_v2(session, user.id)
     q=select(SignalHistory).where(SignalHistory.user_id==user.id)
     if symbol: q=q.where(SignalHistory.symbol==clean_symbol(symbol))
     if direction.upper() in {"BUY","SELL"}: q=q.where(SignalHistory.direction==direction.upper())
@@ -5456,7 +5325,6 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
     rows=list(session.scalars(q.order_by(SignalHistory.created_at.desc())).all())
     def date_ok(r):
         dt=r.created_at
-        if dt is None: return False
         if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
         d=dt.astimezone(HISTORY_LOCAL_TZ).date()
         try:
@@ -5473,11 +5341,7 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
     overall=bucket(); by_module={}; by_day={}; by_symbol={}; by_direction={}
     for r in rows:
         s=st(r); k=(r.source or "Signals")
-        dt=r.created_at
-        if dt is None:
-            continue
-        if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
-        day=dt.astimezone(HISTORY_LOCAL_TZ).date().isoformat()
+        dt=r.created_at if r.created_at.tzinfo else r.created_at.replace(tzinfo=timezone.utc); day=dt.astimezone(HISTORY_LOCAL_TZ).date().isoformat()
         targets=[overall, by_module.setdefault(k,bucket()), by_day.setdefault(day,bucket()), by_symbol.setdefault(r.symbol,bucket()), by_direction.setdefault(r.direction,bucket())]
         for b in targets:
             b["signals"]+=1
@@ -5536,9 +5400,7 @@ async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Que
             "stop_loss": setup.get("stop_loss", adv.get("stop_loss", module_signal.get("stop_loss", payload.get("stop_loss", payload.get("sl"))))),
             "take_profit": setup.get("take_profit", adv.get("take_profit", module_signal.get("take_profit", payload.get("take_profit", payload.get("tp", []))))),
         }
-        raw_result = payload.get("result")
-        # Legacy rows sometimes stored result as a string; never assume dict.
-        result = raw_result if isinstance(raw_result, dict) else {}
+        result = payload.get("result", {}) or {}
         created_at = r.created_at
         if created_at is None:
             created_at = datetime.now(timezone.utc)

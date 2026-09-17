@@ -710,12 +710,45 @@ async function loadMT5GatewayAccounts(){
     const d=await api('/api/v1/mt5/gateway/accounts');
     const rows=d.items||[];
     if(!rows.length){grid.innerHTML='<div class="mini">Hali MT5 hisob ulanmagan. Pairing code oling va SignalX_MultiBroker_Gateway_EA.mq5 orqali MT5 terminalni ulang.</div>';return;}
-    grid.innerHTML=rows.map(a=>{
-      const status=a.connected?'🟢 CONNECTED':'🔴 OFFLINE';
+    grid.innerHTML=`<div class="mt5-account-grid">${rows.map(a=>{
+      const connected=!!a.connected;
       const type=(a.account_type||'demo').toUpperCase();
-      const auto=a.auto_trade_enabled?'🟢 AUTO ON':'⚪ AUTO OFF';
-      return `<div class="advanced-card mt5-account-card"><div class="advanced-head"><div><div class="mini">${safeText(a.broker||'Broker')} · ${type}</div><div class="advanced-signal ${a.connected?'buy':'sell'}">${safeText(status)}</div></div><div style="display:flex;gap:6px;flex-wrap:wrap"><span class="pill">${safeText(a.login||'—')}</span><span class="pill">${safeText(auto)}</span></div></div><div class="grid4" style="margin-top:8px"><div class="metric"><small>Server</small><b>${safeText(a.server||'—')}</b></div><div class="metric"><small>Balance</small><b>${a.balance==null?'—':fmt(a.balance)} ${safeText(a.currency||'')}</b></div><div class="metric"><small>Equity</small><b>${a.equity==null?'—':fmt(a.equity)} ${safeText(a.currency||'')}</b></div><div class="metric"><small>Free Margin</small><b>${a.free_margin==null?'—':fmt(a.free_margin)} ${safeText(a.currency||'')}</b></div></div><div class="mini" style="margin-top:7px">Leverage: 1:${safeText(a.leverage||0)} · Trade allowed: ${a.trade_allowed?'YES':'NO'} · EA: ${safeText(a.ea_version||'—')} · Heartbeat: ${a.last_seen_seconds==null?'—':a.last_seen_seconds+'s'}</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn" type="button" data-mt5-gateway-auto="${a.id}" data-enabled="${a.auto_trade_enabled?'0':'1'}">${a.auto_trade_enabled?'🔴 AUTO OFF':'🟢 AUTO ON'}</button><button class="btn danger" type="button" data-mt5-gateway-disconnect="${a.id}">DISCONNECT</button></div></div>`;
-    }).join('');
+      const status=connected?'ONLINE':'OFFLINE';
+      const statusClass=connected?'buy':'sell';
+      const autoOn=!!a.auto_trade_enabled;
+      const canEnable=connected && !!a.trade_allowed;
+      const autoLabel=autoOn?'AUTO TRADE: ON':'AUTO TRADE: OFF';
+      const actionLabel=autoOn?'⏹ AUTO TRADE OFF':'▶ AUTO TRADE ON';
+      const actionDisabled=!autoOn && !canEnable;
+      const disableReason=!connected?'MT5 terminal / EA offline':(!a.trade_allowed?'MT5 trading permission OFF':'');
+      return `<article class="advanced-card mt5-account-card ${connected?'is-online':'is-offline'}">
+        <div class="mt5-account-top">
+          <div>
+            <div class="mt5-account-title"><span class="mt5-type-badge ${type==='REAL'?'real':'demo'}">${type}</span><span>${safeText(a.broker||'Broker')}</span></div>
+            <div class="mt5-account-sub">${safeText(a.label||'MT5 Account')}</div>
+          </div>
+          <div class="mt5-account-status ${statusClass}"><span class="status-dot"></span>${status}</div>
+        </div>
+        <div class="mt5-account-identity"><span>Login <b>${safeText(a.login||'—')}</b></span><span>Server <b>${safeText(a.server||'—')}</b></span></div>
+        <div class="grid4 mt5-account-metrics">
+          <div class="metric"><small>Balance</small><b>${a.balance==null?'—':fmt(a.balance)} ${safeText(a.currency||'')}</b></div>
+          <div class="metric"><small>Equity</small><b>${a.equity==null?'—':fmt(a.equity)} ${safeText(a.currency||'')}</b></div>
+          <div class="metric"><small>Free Margin</small><b>${a.free_margin==null?'—':fmt(a.free_margin)} ${safeText(a.currency||'')}</b></div>
+          <div class="metric"><small>Leverage</small><b>1:${safeText(a.leverage||0)}</b></div>
+        </div>
+        <div class="mt5-account-meta">
+          <span>Trade Allowed: <b>${a.trade_allowed?'YES':'NO'}</b></span>
+          <span>EA: <b>${safeText(a.ea_version||'—')}</b></span>
+          <span>Heartbeat: <b>${a.last_seen_seconds==null?'—':a.last_seen_seconds+'s'}</b></span>
+        </div>
+        <div class="mt5-account-autotrade ${autoOn?'on':'off'}">
+          <div><div class="mt5-autotrade-title">${autoLabel}</div><div class="mini">Faqat shu ${type} account uchun.</div></div>
+          <button class="mt5-auto-toggle ${autoOn?'off':'on'}" type="button" data-mt5-gateway-auto="${a.id}" data-enabled="${autoOn?'0':'1'}" ${actionDisabled?'disabled':''} title="${safeText(disableReason)}">${actionLabel}</button>
+        </div>
+        ${disableReason && !autoOn ? `<div class="mt5-disabled-note">⚠ ${safeText(disableReason)}</div>`:''}
+        <div class="mt5-account-actions"><button class="btn danger" type="button" data-mt5-gateway-disconnect="${a.id}">DISCONNECT</button></div>
+      </article>`;
+    }).join('')}</div>`;
   }catch(e){grid.innerHTML=`<div class="mini">MT5 Gateway xatosi: ${safeText(e.message||'server xatosi')}</div>`;}
 }
 async function createMT5Pairing(){

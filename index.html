@@ -719,6 +719,40 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 .ai-qa-page{max-width:1100px;margin:0 auto}.ai-qa-suggestions{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0}.ai-qa-suggestions .btn{font-size:12px}.ai-qa-chat{min-height:300px;max-height:58vh;overflow:auto;border:1px solid var(--line);border-radius:14px;background:rgba(4,8,13,.68);padding:14px;display:flex;flex-direction:column;gap:10px}.ai-qa-empty{margin:auto;color:var(--muted);text-align:center;max-width:600px;padding:50px 20px}.ai-qa-msg{display:flex}.ai-qa-msg.user{justify-content:flex-end}.ai-qa-bubble{max-width:82%;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:#0b1118;line-height:1.6;white-space:pre-wrap}.ai-qa-msg.user .ai-qa-bubble{background:#102039;border-color:#24436a}.ai-qa-meta{font-size:10px;color:var(--muted);margin-top:5px}.ai-qa-form{margin-top:12px}.ai-qa-input{resize:vertical;min-height:82px;margin-bottom:8px}.ai-qa-actions{display:flex;justify-content:space-between;gap:10px;align-items:center}.ai-qa-actions .mini{max-width:70%}.ai-qa-disclaimer{margin-top:10px;color:var(--muted);font-size:10px;line-height:1.5}.ai-qa-chip{display:inline-flex;gap:5px;align-items:center}.ai-qa-typing{color:var(--muted);font-size:12px;padding:6px}@media(max-width:700px){.ai-qa-actions{align-items:stretch;flex-direction:column}.ai-qa-actions .mini{max-width:none}.ai-qa-bubble{max-width:92%}}
 </style>
 <style id="signalx-history-final-compact-safe">#historySection .sx-history-v2{gap:10px}#historySection .sx-history-filters{padding:9px;gap:7px}#historySection .sx-kpi-grid{gap:7px}#historySection .sx-kpi{padding:9px;border-radius:12px}#historySection .sx-kpi b{font-size:18px}#historySection .sx-day-performance,#historySection .sx-module-grid{gap:7px}#historySection .sx-signal-list{gap:7px}#historySection .sx-signal-card{padding:11px;border-radius:14px}#historySection .sx-signal-levels{gap:5px;margin-top:8px}#historySection .sx-level{padding:7px;border-radius:9px}#historySection .sx-level b{font-size:12px}#historySection .sx-signal-bottom{margin-top:8px}.sx-history-more{text-align:center;padding:6px 0 12px}</style>
+
+<style id="mt5-account-ui-v2">
+.mt5-account-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:10px}
+.mt5-account-card{margin:0;padding:14px;border-radius:14px;overflow:hidden}
+.mt5-account-card.is-online{border-color:rgba(57,239,155,.38)}
+.mt5-account-card.is-offline{border-color:rgba(255,86,109,.38)}
+.mt5-account-top{display:flex;justify-content:space-between;align-items:flex-start;gap:10px}
+.mt5-account-title{display:flex;align-items:center;gap:7px;font-size:15px;font-weight:800}
+.mt5-account-sub{margin-top:3px;font-size:11px;color:var(--muted)}
+.mt5-type-badge{font-size:10px;letter-spacing:.8px;padding:4px 7px;border-radius:999px;border:1px solid var(--line)}
+.mt5-type-badge.real{border-color:rgba(255,86,109,.55);color:#ff8b9a;background:rgba(255,86,109,.09)}
+.mt5-type-badge.demo{border-color:rgba(105,200,255,.55);color:#75d2ff;background:rgba(105,200,255,.09)}
+.mt5-account-status{display:flex;align-items:center;gap:6px;font-weight:800;font-size:11px;padding:5px 8px;border-radius:999px;border:1px solid var(--line)}
+.mt5-account-status.buy{color:#63ef9b;border-color:rgba(99,239,155,.35);background:rgba(99,239,155,.08)}
+.mt5-account-status.sell{color:#ff7183;border-color:rgba(255,113,131,.35);background:rgba(255,113,131,.08)}
+.status-dot{width:7px;height:7px;border-radius:50%;background:currentColor;box-shadow:0 0 9px currentColor}
+.mt5-account-identity{display:flex;flex-wrap:wrap;gap:12px;margin-top:9px;padding:8px 9px;border-radius:9px;background:rgba(6,14,26,.55);border:1px solid rgba(36,73,110,.5);font-size:11px;color:var(--muted)}
+.mt5-account-identity b{color:var(--text);margin-left:3px}
+.mt5-account-metrics{margin-top:9px;gap:7px}
+.mt5-account-metrics .metric{padding:9px 10px}
+.mt5-account-meta{display:flex;flex-wrap:wrap;gap:8px 14px;margin-top:8px;font-size:10px;color:var(--muted)}
+.mt5-account-meta b{color:var(--text)}
+.mt5-account-autotrade{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:10px;padding:9px;border-radius:10px;border:1px solid var(--line);background:rgba(5,12,24,.72)}
+.mt5-account-autotrade.on{border-color:rgba(99,239,155,.36);box-shadow:0 0 14px rgba(99,239,155,.07)}
+.mt5-account-autotrade.off{border-color:rgba(255,255,255,.09)}
+.mt5-autotrade-title{font-size:12px;font-weight:900;letter-spacing:.2px}
+.mt5-account-autotrade.on .mt5-autotrade-title{color:#63ef9b}.mt5-account-autotrade.off .mt5-autotrade-title{color:#d3deea}
+.mt5-auto-toggle{border:1px solid var(--line);border-radius:9px;padding:8px 10px;font-size:10px;font-weight:900;white-space:nowrap;cursor:pointer}
+.mt5-auto-toggle.on{background:rgba(99,239,155,.12);border-color:rgba(99,239,155,.42);color:#63ef9b}.mt5-auto-toggle.off{background:rgba(255,86,109,.10);border-color:rgba(255,86,109,.38);color:#ff7a89}
+.mt5-auto-toggle:disabled{opacity:.45;cursor:not-allowed;filter:grayscale(.4)}
+.mt5-disabled-note{margin-top:6px;font-size:10px;color:#ffc14f}
+.mt5-account-actions{display:flex;justify-content:flex-end;margin-top:7px}
+@media(max-width:720px){.mt5-account-grid{grid-template-columns:1fr}.mt5-account-autotrade{align-items:flex-start;flex-direction:column}.mt5-auto-toggle{width:100%}}
+</style>
 </head>
 <body>
 <div class="gold-3d-orb"></div>
@@ -936,17 +970,17 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
         <div class="mini" style="margin-top:8px">1) MT5 terminalda kerakli broker/account'ga login qiling. 2) <b>SignalX_MultiBroker_Gateway_EA.mq5</b> ni o‘rnating. 3) PairingCode'ni EA'ga kiriting. 4) EA ishlashi bilan hisob shu yerda paydo bo‘ladi.</div>
       </div>
       <div class="card" style="margin:0">
-        <div class="section-head"><h3>AUTO TRADING</h3><span class="pill" id="mt5AutoState">🔴 OFF</span></div>
-        <div class="mini" id="mt5AutoInfo">Gateway orqali ulangan account'ning AutoTrade holati shu yerda ko‘rinadi.</div>
+        <div class="section-head"><h3>ACCOUNT-LEVEL AUTO TRADING</h3><span class="pill">ALOHIDA</span></div>
+        <div class="mini">AutoTrade umumiy emas. Yuqoridagi har bir Demo yoki Real account o‘zining mustaqil ON/OFF tugmasiga ega.</div>
         <div class="grid4" style="margin-top:10px"><div class="metric"><small>Balance</small><b id="mt5Balance">—</b></div><div class="metric"><small>Equity</small><b id="mt5Equity">—</b></div><div class="metric"><small>Free Margin</small><b id="mt5FreeMargin">—</b></div><div class="metric"><small>Open Positions</small><b id="mt5Positions">0</b></div></div>
-        <div class="mini" style="margin-top:8px">Eski MT5 Bridge statusi ham alohida tekshiriladi; yangi Gateway account'lari yuqoridagi ro‘yxatdan boshqariladi.</div>
+        <div class="mini" style="margin-top:8px">Account OFF/Offline bo‘lsa, aynan shu hisobga yangi MT5 order yuborilmaydi. Boshqa ulangan accountlar mustaqil ishlaydi.</div>
       </div>
     </div>
   </div>
 </section>
 <section class="section" id="historySection">
   <div class="sx-history-v2">
-    <div class="sx-history-header"><div><h2>Signal History</h2><div class="mini">LIVE SIGNAL JOURNAL · only current/live signals · signal → analysis → evidence → result → performance</div></div><button class="btn" id="historyV2Refresh" type="button">↻ Yangilash</button></div>
+    <div class="sx-history-header"><div><h2>Signal History</h2><div class="mini">Professional trading journal · signal → analysis → evidence → result → performance</div></div><button class="btn" id="historyV2Refresh" type="button">↻ Yangilash</button></div>
     <div class="sx-history-filters">
       <div class="filter-block wide"><span>DATE</span><div class="filter-row"><button class="h2-date" data-range="today" type="button">Today</button><button class="h2-date" data-range="yesterday" type="button">Yesterday</button><button class="h2-date" data-range="7" type="button">Last 7 Days</button><button class="h2-date" data-range="30" type="button">Last 30 Days</button><button class="h2-date active" data-range="all" type="button">All</button></div></div>
       <label class="filter-block"><span>START DATE</span><input id="historyV2Start" type="date"></label><label class="filter-block"><span>END DATE</span><input id="historyV2End" type="date"></label>
@@ -981,7 +1015,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 </div>
 
 <script src="config.js?v=20260908f"></script>
-<script src="app.js?v=20260917-history-live-v5"></script>
+<script src="app.js?v=20260917-history-mt5-safe-v4"></script>
 
 <script id="signalx-sidebar-fix-20260913">
 (function(){
