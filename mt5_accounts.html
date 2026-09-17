@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="uz">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SignalX · MT5 Accounts</title>
+<style>
+body{margin:0;background:#050912;color:#eaf4ff;font-family:Inter,Arial,sans-serif}.wrap{max-width:1050px;margin:auto;padding:28px}
+.card{background:linear-gradient(145deg,#0b1424,#08101b);border:1px solid #19365b;border-radius:18px;padding:20px;margin:14px 0;box-shadow:0 0 28px #00152b66}
+h1{margin:0 0 6px;color:#69c8ff}.muted{color:#8da7bd}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}
+input,button{width:100%;box-sizing:border-box;padding:12px;border-radius:10px;border:1px solid #24496e;background:#07101b;color:#fff}button{cursor:pointer;background:#0d4164;border-color:#2a8bc2;font-weight:700;margin-top:8px}.danger{background:#491b25;border-color:#9b3447}.ok{color:#63ef9b}.bad{color:#ff6f7f}
+.account{display:flex;justify-content:space-between;gap:12px;align-items:center}.pill{padding:5px 9px;border-radius:999px;background:#102b3f}.actions{display:flex;gap:8px}.actions button{min-width:120px}
+@media(max-width:600px){.wrap{padding:14px}.account{display:block}.actions{margin-top:10px}}
+</style></head>
+<body><div class="wrap">
+<h1>MT5 Account Gateway</h1><div class="muted">Demo va Real hisoblarni brokerdan mustaqil ulash</div>
+
+<div class="card"><h2>Yangi MT5 hisob ulash</h2>
+<div class="grid"><div><label>Account nomi</label><input id="label" value="My MT5 Account"></div></div>
+<button onclick="pair()">PAIRING CODE OLISH</button>
+<div id="pairout" class="muted"></div>
+<p class="muted">Keyin <b>SignalX_MultiBroker_Gateway_EA.mq5</b> ni MT5 ga o‘rnating, PairingCode maydoniga kodni kiriting va EA ni ishga tushiring.</p>
+</div>
+
+<div class="card"><h2>Ulangan hisoblar</h2><div id="accounts">Yuklanmoqda...</div></div>
+</div>
+<script>
+const token=localStorage.getItem('signalx_token')||localStorage.getItem('token')||'';
+const H={'Authorization':'Bearer '+token,'Content-Type':'application/json'};
+async function api(path,opt={}){const r=await fetch('/api/v1/mt5/gateway'+path,{...opt,headers:{...H,...(opt.headers||{})}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.detail||'Xatolik');return d}
+async function pair(){try{const d=await api('/pair',{method:'POST',body:JSON.stringify({label:document.getElementById('label').value})});document.getElementById('pairout').innerHTML='<b>PAIRING CODE: '+d.pairing_code+'</b><br>Kod '+d.expires_in+' soniya amal qiladi.'}catch(e){document.getElementById('pairout').textContent=e.message}}
+async function toggle(id,en){try{await api('/accounts/'+id+'/auto-trade',{method:'POST',body:JSON.stringify({enabled:en})});load()}catch(e){alert(e.message)}}
+async function disconnect(id){if(!confirm('Bu MT5 hisobni uzasizmi?'))return;try{await api('/accounts/'+id,{method:'DELETE'});load()}catch(e){alert(e.message)}}
+async function load(){try{const d=await api('/accounts');document.getElementById('accounts').innerHTML=d.items.length?d.items.map(a=>`<div class="card account"><div><b>${a.broker||'Broker'}</b> · ${a.account_type.toUpperCase()}<br>Login: ${a.login} · ${a.server}<br>Balance: ${Number(a.balance).toFixed(2)} ${a.currency}<br><span class="${a.connected?'ok':'bad'}">${a.connected?'● CONNECTED':'● OFFLINE'}</span> · AutoTrade: ${a.auto_trade_enabled?'ON':'OFF'}</div><div class="actions"><button onclick="toggle(${a.id},${!a.auto_trade_enabled})">${a.auto_trade_enabled?'AUTOTRADE OFF':'AUTOTRADE ON'}</button><button class="danger" onclick="disconnect(${a.id})">DISCONNECT</button></div></div>`).join(''):'Hali MT5 hisob ulanmagan.'}catch(e){document.getElementById('accounts').textContent=e.message}}
+load();setInterval(load,10000);
+</script></body></html>

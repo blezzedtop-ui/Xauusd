@@ -269,33 +269,13 @@ function recordModuleSignal(source, response, item, intervalName, candleTime){
   if(SIGNAL_RECORD_SEEN.size>2000){for(const [k,t] of SIGNAL_RECORD_SEEN){if(now-t>900000) SIGNAL_RECORD_SEEN.delete(k);}}
   api('/api/v1/signals/record-module',{method:'POST',body:JSON.stringify({symbol,interval:tf,source,direction,confidence:x.confidence??response?.ai?.confidence??null,entry:x.entry??response?.setup?.entry??null,stop_loss:x.stop_loss??response?.setup?.stop_loss??null,take_profit:x.take_profit??response?.setup?.take_profit??[],headline:`${source} · ${direction}`,candle_time:ct,payload:{response:item||response}})}).catch(e=>console.warn('Signal history record',source,e));
 }
-async function loadHistory(){
-  syncHistoryPeriodButtons(); syncHistoryDate();
-  const body=$('history');
-  if(!body)return;
-  if(!token){body.innerHTML='<tr><td colspan="14">Kirish kerak.</td></tr>';return;}
-  try{
-    const hq=new URLSearchParams(historyQuery().replace(/^\?/,'&')); hq.set('symbol',symbol); hq.set('limit','50'); const d=await api(`/api/v1/signals/history?${hq.toString()}`);
-    const dateSelect=$('historyDateSelect'); if(dateSelect){ const dates=[...new Set((d.items||[]).map(x=>{try{return new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Tashkent',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(x.created_at))}catch(_){return ''}}).filter(Boolean))].sort().reverse(); dateSelect.innerHTML='<option value="">Barcha kunlar</option>'+dates.map(v=>{const [y,m,dd]=v.split('-'); return `<option value="${v}">${dd}.${m}.${y}</option>`}).join(''); dateSelect.value=historyDate||''; }
-    const items=[...(d.items||[])].sort((a,b)=>String(b.created_at||'').localeCompare(String(a.created_at||'')));
-    let lastDate='', lastSource='';
-    body.innerHTML=items.map(x=>{
-      const src=x.source||'Signals';
-      const dt=new Date(x.created_at);
-      const dateKey=dt.toLocaleDateString('uz-UZ');
-      const dateGroup=dateKey!==lastDate?`<tr class="history-group"><td colspan="14"><b>${dateKey}</b></td></tr>`:''; lastDate=dateKey;
-      const sourceGroup=src!==lastSource?`<tr class="history-group"><td colspan="14"><span>${src}</span></td></tr>`:''; lastSource=src;
-      const dur=x.duration_minutes!=null?(x.duration_minutes<60?`${fmt(x.duration_minutes)} min`:`${fmt(x.duration_minutes/60)} h`):'OPEN';
-      const closed=x.closed_at?new Date(x.closed_at).toLocaleString():'—';
-      const dir=String(x.direction||'').toUpperCase();
-      const out=x.outcome||'OPEN';
-      const oc=out==='TP HIT'?'tp':out==='SL HIT'?'sl':out==='OPEN'?'open':'amb';
-      const tpPips=x.tp_pips_total!=null?`${fmt(x.tp_pips_total)} pips`:'—';
-      const slPips=x.sl_pips!=null?`${fmt(x.sl_pips)} pips`:'—';
-      return dateGroup+sourceGroup+`<tr><td>${dateKey}</td><td>${dt.toLocaleTimeString()}</td><td><b>${src}</b></td><td>${tfName(x.interval)}</td><td class="${dir==='BUY'?'buy':dir==='SELL'?'sell':''}"><b>${dir}</b>${x.auto_entry?' · AUTO':''}${x.confidence!=null?` · ${fmt(x.confidence)}%`:''}</td><td><span class="setup-badge ${x.strong_setup?'strong':''}">${x.setup_grade||'SETUP'} ${x.setup_strength!=null?fmt(x.setup_strength)+'%':''}</span></td><td>${fmt(x.entry)}</td><td>${(x.tp||[]).map(fmt).join(' / ')||'—'}</td><td>${tpPips}</td><td>${fmt(x.sl)}</td><td>${slPips}</td><td class="outcome-${oc}">${out}${x.result_price!=null?` · ${fmt(x.result_price)}`:''}</td><td>${dur}</td><td>${closed}</td></tr>`;
-    }).join('')||'<tr><td colspan="14">Signal yo‘q.</td></tr>';
-  }catch(e){body.innerHTML=`<tr><td colspan="14">History yuklanmadi: ${e?.message||'server xatosi'}</td></tr>`;}
-}
+async function loadHistory(){const list=document.getElementById('historyV2List');if(!list)return;if(!token){list.innerHTML='<div class="sx-empty">Kirish kerak.</div>';return;}const p=new URLSearchParams(),s=document.getElementById('historyV2Start')?.value||'',e=document.getElementById('historyV2End')?.value||'',sym=document.getElementById('historyV2Symbol')?.value||'',dir=document.getElementById('historyV2Direction')?.value||'',res=document.getElementById('historyV2Result')?.value||'',mod=document.getElementById('historyV2Module')?.value||'';if(s)p.set('start_date',s);if(e)p.set('end_date',e);if(sym)p.set('symbol',sym);if(dir)p.set('direction',dir);if(res)p.set('result',res);if(mod)p.set('module',mod);try{const [rows,stats]=await Promise.all([api('/api/v2/signal-history?limit=200&'+p.toString()),api('/api/v2/signal-history/stats?'+p.toString())]),o=stats.overall||{};const K=(l,v,c='')=>`<div class="sx-kpi"><small>${l}</small><b class="${c}">${v}</b></div>`;document.getElementById('historyV2Kpis').innerHTML=[K('TOTAL SIGNALS',o.signals??0),K('WIN RATE',`${Number(o.winrate||0).toFixed(2)}%`),K('WINS',o.wins??0,'buy'),K('LOSSES',o.losses??0,'sell'),K('ACTIVE',o.active??0,'wait'),K('AVG RR',o.avg_rr?`1:${Number(o.avg_rr).toFixed(2)}`:'—'),K('TOTAL R',`${Number(o.total_r||0)>=0?'+':''}${Number(o.total_r||0).toFixed(2)}R`),K('TOTAL PROFIT',`${Number(o.total_profit||0)>=0?'+':''}${Number(o.total_profit||0).toFixed(2)}`)].join('');const days=Object.entries(stats.by_day||{});document.getElementById('historyV2Daily').innerHTML=days.length?days.slice(0,8).map(([d,x])=>`<div class="sx-kpi"><small>${d}</small><b>${Number(x.winrate||0).toFixed(2)}%</b><div class="mini">${x.signals} signals · ${x.wins} wins · ${x.losses} losses · ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)}R</div></div>`).join(''):'<div class="sx-empty">Tanlangan period uchun kunlik statistika yo‘q.</div>';const modules=Object.entries(stats.by_module||{});document.getElementById('historyV2Modules').innerHTML=modules.length?modules.map(([m,x])=>`<div class="sx-module"><small>${escapeHtml(m)}</small><b>${Number(x.winrate||0).toFixed(2)}%</b><div class="line">${x.signals} signals · ${x.wins} wins · ${x.losses} losses</div><div class="line">R: ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)} · Avg RR: ${x.avg_rr?`1:${Number(x.avg_rr).toFixed(2)}`:'—'}</div></div>`).join(''):'<div class="sx-empty">Module statistikasi yo‘q.</div>';document.getElementById('historyV2Count').textContent=`${rows.count||0} ta signal`;list.innerHTML=(rows.items||[]).map(signalCardV2).join('')||'<div class="sx-empty">Signal topilmadi.</div>';}catch(err){list.innerHTML=`<div class="sx-empty">History yuklanmadi: ${escapeHtml(err?.message||'server xatosi')}</div>`;}}
+function escapeHtml(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+function histFmt(v){const n=Number(v);return Number.isFinite(n)?n.toFixed(Math.abs(n)>=100?2:4):'—';}
+function histTime(v){try{return new Date(v).toLocaleString('uz-UZ',{timeZone:'Asia/Tashkent'})}catch(_){return v||'—';}}
+function signalCardV2(x){const cls=x.direction==='BUY'?'buy':x.direction==='SELL'?'sell':'',status=x.status||'ACTIVE',rr=x.rr?`1:${Number(x.rr).toFixed(2)}`:'—',dur=x.duration_minutes!=null?`${Number(x.duration_minutes).toFixed(0)} min`:'ACTIVE';return `<article class="sx-signal-card ${cls}"><div class="sx-signal-top"><div><div class="sx-signal-badge">${x.direction==='BUY'?'🟢':'🔴'} ${escapeHtml(x.direction||'—')}</div><div class="sx-signal-meta">${escapeHtml(x.symbol)} · ${tfName(x.interval)} · ${escapeHtml(x.source||'Signals')} · ${histTime(x.created_at)}</div></div><div class="sx-status">${escapeHtml(status)} ${x.score!=null?`· ${histFmt(x.score)}%`:''}</div></div><div class="sx-signal-levels"><div class="sx-level"><span>ENTRY</span><b>${histFmt(x.entry)}</b></div><div class="sx-level"><span>SL</span><b>${histFmt(x.sl)}</b></div><div class="sx-level"><span>TP1</span><b>${histFmt(x.tp1)}</b></div><div class="sx-level"><span>TP2</span><b>${histFmt(x.tp2)}</b></div><div class="sx-level"><span>RR</span><b>${rr}</b></div><div class="sx-level"><span>R-MULTIPLE</span><b>${x.r_multiple!=null?(Number(x.r_multiple)>=0?'+':'')+Number(x.r_multiple).toFixed(2)+'R':'—'}</b></div></div><div class="sx-signal-bottom"><div class="sx-signal-meta">ID: <b>${escapeHtml(x.signal_id)}</b> · Duration: ${dur}${x.closed_at?` · Closed: ${histTime(x.closed_at)}`:''}</div><button class="btn" data-history-detail="${escapeHtml(x.signal_id)}" type="button">View Details</button></div></article>`}
+function renderHistoryDetail(x){const snap=x.snapshot||{},time=snap.timeline||{},setup=snap.setup||{},entries=[];function walk(obj,p=''){if(!obj||typeof obj!=='object')return;Object.entries(obj).forEach(([k,v])=>{if(k==='history_snapshot'||k==='payload')return;const key=p?p+'.'+k:k;if(v&&typeof v==='object'&&Object.keys(v).length<12)walk(v,key);else entries.push([key,typeof v==='object'?JSON.stringify(v):v]);});}walk(snap);return `<div class="sx-detail-grid"><div class="metric"><small>SYMBOL</small><b>${escapeHtml(x.symbol)}</b></div><div class="metric"><small>DIRECTION</small><b>${escapeHtml(x.direction)}</b></div><div class="metric"><small>SCORE</small><b>${histFmt(x.score)}%</b></div><div class="metric"><small>STRENGTH</small><b>${escapeHtml(x.strength||'—')}</b></div><div class="metric"><small>ENTRY</small><b>${histFmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${histFmt(x.sl)}</b></div><div class="metric"><small>TP1 / TP2</small><b>${histFmt(x.tp1)} / ${histFmt(x.tp2)}</b></div><div class="metric"><small>RR</small><b>${x.rr?`1:${Number(x.rr).toFixed(2)}`:'—'}</b></div></div><div class="sx-detail-section"><h4>Signal Evidence</h4><div class="sx-evidence-grid">${entries.slice(0,30).map(([k,v])=>`<div class="sx-evidence"><small>${escapeHtml(k)}</small><div>${escapeHtml(String(v).slice(0,600))}</div></div>`).join('')||'<div class="sx-empty">Snapshot evidence mavjud emas.</div>'}</div></div><div class="sx-detail-section"><h4>Timeline</h4><div class="sx-timeline">${[['Signal Created',x.created_at],['Entry Activated',setup.entry?x.created_at:null],['TP1 Hit',time.tp1_hit],['Signal Closed',x.closed_at]].filter(a=>a[1]).map(a=>`<div class="sx-timeline-item"><b>${escapeHtml(a[0])}</b><div class="mini">${histTime(a[1])}</div></div>`).join('')||'<div class="sx-empty">Timeline hali bo‘sh.</div>'}</div></div><div class="sx-detail-section"><h4>Performance</h4><div class="sx-detail-grid"><div class="metric"><small>STATUS</small><b>${escapeHtml(x.status)}</b></div><div class="metric"><small>PROFIT / LOSS</small><b>${x.profit_loss!=null?histFmt(x.profit_loss):'—'}</b></div><div class="metric"><small>R-MULTIPLE</small><b>${x.r_multiple!=null?(Number(x.r_multiple)>=0?'+':'')+Number(x.r_multiple).toFixed(2)+'R':'—'}</b></div><div class="metric"><small>DURATION</small><b>${x.duration_minutes!=null?Number(x.duration_minutes).toFixed(0)+' min':'ACTIVE'}</b></div></div></div>`}
+
 function componentText(v){if(v==null)return '—';if(typeof v==='object'){if(v.type)return v.type+(v.low!=null?' · '+fmt(v.low)+'–'+fmt(v.high):'');if(v.support!=null)return 'S '+fmt(v.support)+' · R '+fmt(v.resistance);return JSON.stringify(v)}return String(v)}
 function tfName(tf){return ({'1min':'1 MIN','5min':'5 MIN','15min':'15 MIN','30min':'30 MIN','1h':'1 HOUR','4h':'4 HOUR','1day':'1 DAY'})[tf]||tf;}
 function advCard(tf,x){const sig=x.signal||'WAIT', cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait', badge=sig==='BUY'?'badge-buy':sig==='SELL'?'badge-sell':'badge-wait';const c=x.components||{};return `<div class="advanced-card ${cls}"><div class="advanced-head"><div><div class="mini">${tfName(tf)}</div><div class="advanced-signal ${badge}">${sig}</div></div><span class="pill">${x.confidence||0}%</span></div><div class="mini" style="margin-top:4px">Score ${x.score??0} · ${x.setup||'—'}</div><div class="grid4" style="margin-top:9px"><div class="metric"><small>Entry</small><b>${fmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${fmt(x.stop_loss)}</b></div><div class="metric"><small>TP1</small><b>${fmt((x.take_profit||[])[0])}</b></div><div class="metric"><small>TP2</small><b>${fmt((x.take_profit||[])[1])}</b></div></div><div class="component-grid"><div class="component"><small>ICT</small><b>${componentText(c['ICT'])}</b></div><div class="component"><small>SNR</small><b>${componentText(c['SNR'])}</b></div><div class="component"><small>SNR Malaysia</small><b>${componentText(c['SNR Malaysia'])}</b></div><div class="component"><small>Order Block</small><b>${componentText(c['Order Block'])}</b></div><div class="component"><small>FVG</small><b>${componentText(c['FVG'])}</b></div><div class="component"><small>Liquidity</small><b>${componentText(c['Liquidity'])}</b></div><div class="component"><small>Trend Line</small><b>${componentText(c['Trend Line'])}</b></div><div class="component"><small>Global Trend</small><b>${componentText(c['Global Trend Line'])}</b></div><div class="component"><small>BOS</small><b>${componentText(c['BOS'])}</b></div><div class="component"><small>CHOCH</small><b>${componentText(c['CHOCH'])}</b></div><div class="component"><small>Internal</small><b>${componentText(c['Internal Structure'])}</b></div><div class="component"><small>RSI / ATR</small><b>${fmt(x.rsi)} / ${fmt(x.atr)}</b></div></div><div class="advanced-actions"><div class="mini">${x.reason||'—'}</div>${sig==='BUY'||sig==='SELL'?`<button class="btn" data-save-advanced="${tf}">Saqlash</button>`:''}</div></div>`}
@@ -485,8 +465,86 @@ async function loadTrendLines(tf=trendLineInterval){
     if($('trendChartTf')) $('trendChartTf').textContent=tfName(tf);
   }catch(e){$('trendLineStatus').textContent='Trend Line error: '+e.message;}
 }
-function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section')loadMT5Status().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
 
+const AI_QA_STATE={messages:[],bound:false};
+function renderAiQaMessages(){
+  const el=$('aiQaChat'); if(!el)return;
+  if(!AI_QA_STATE.messages.length){el.innerHTML='<div class="ai-qa-empty">Savolingizni yozing. Masalan: <b>“Bugun XAUUSD qanaqa trendda?”</b></div>';return;}
+  el.innerHTML=AI_QA_STATE.messages.map(m=>{
+    const role=m.role==='user'?'user':'assistant';
+    const meta=m.meta?`<div class="ai-qa-meta">${safeText(m.meta)}</div>`:'';
+    return `<div class="ai-qa-msg ${role}"><div class="ai-qa-bubble">${safeText(m.text)}${meta}</div></div>`;
+  }).join('');
+  el.scrollTop=el.scrollHeight;
+}
+async function askAiQa(question){
+  if(!token){showToast('AI Q&A uchun avval tizimga kiring');$('authModal')?.classList.add('show');return;}
+  const input=$('aiQaInput'), send=$('aiQaSend'), provider=$('aiQaProvider'), ctx=$('aiQaContext');
+  const q=(question||input?.value||'').trim(); if(!q)return;
+  if(input)input.value='';
+  AI_QA_STATE.messages.push({role:'user',text:q});
+  renderAiQaMessages();
+  AI_QA_STATE.messages.push({role:'assistant',text:'AI tahlil qilmoqda…',meta:'Live market context olinmoqda'});
+  renderAiQaMessages();
+  if(send)send.disabled=true;
+  try{
+    const d=await api('/api/v1/ai/chat',{method:'POST',body:JSON.stringify({question:q,symbol,interval})});
+    AI_QA_STATE.messages.pop();
+    const meta=[d.provider?`Provider: ${d.provider}`:'Fallback',d.context?.economic_events_count!=null?`News/events: ${d.context.economic_events_count}`:''].filter(Boolean).join(' · ');
+    AI_QA_STATE.messages.push({role:'assistant',text:d.answer||'AI javob qaytarmadi.',meta});
+    if(provider)provider.textContent=d.provider?`AI · ${d.provider}`:(d.ok?'AI':'FALLBACK');
+    if(ctx)ctx.textContent=d.context?.quote_source?`LIVE · ${d.context.quote_source}`:'LIVE CONTEXT';
+  }catch(e){
+    AI_QA_STATE.messages.pop();
+    AI_QA_STATE.messages.push({role:'assistant',text:'AI Q&A xatosi: '+(e.message||'server error'),meta:'Request bajarilmadi'});
+    if(provider)provider.textContent='AI ERROR';
+  }finally{if(send)send.disabled=false;renderAiQaMessages();}
+}
+function bindAiQa(){
+  if(AI_QA_STATE.bound)return;
+  AI_QA_STATE.bound=true;
+  const form=$('aiQaForm');
+  form?.addEventListener('submit',e=>{e.preventDefault();askAiQa();});
+  document.addEventListener('click',e=>{const b=e.target.closest('[data-aiq]');if(b)askAiQa(b.dataset.aiq);});
+}
+bindAiQa();
+
+async function loadAlgoTrade(){
+  if(!IS_ADMIN)return;
+  const status=$('algoStatus');
+  if(status)status.textContent='CALCULATING…';
+  try{
+    const d=await api(`/api/v1/algotrade/${encodeURIComponent(symbol)}`);
+    const sig=String(d.signal||'WAIT').toUpperCase();
+    const cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
+    $('algoSignal').textContent=sig;
+    $('algoSignal').className='signal-main '+cls;
+    $('algoScore').textContent=`${d.score??0} / 100`;
+    $('algoEntry').textContent=fmt(d.entry); $('algoSL').textContent=fmt(d.stop_loss);
+    $('algoTP1').textContent=fmt((d.take_profit||[])[0]); $('algoTP2').textContent=fmt((d.take_profit||[])[1]);
+    $('algoRR').textContent=d.risk_reward?`1 : ${d.risk_reward}`:'—';
+    $('algoMtf').textContent=d.checks?.mtf_match?'MATCH':'WAIT';
+    $('algoM15').textContent=d.checks?.m15_confirmation?'OK':'WAIT';
+    $('algoM5').textContent=d.checks?.m5_confirmation?'OK':'WAIT';
+    $('algoReason').textContent=d.reason||'—';
+    const order=[['4h','H4'],['1h','H1'],['15min','M15'],['5min','M5']];
+    $('algoTimeframes').innerHTML=order.map(([tf,label])=>{
+      const x=d.timeframes?.[tf]||{}; const s=String(x.signal||'WAIT').toUpperCase(); const c=s==='BUY'?'buy':s==='SELL'?'sell':'wait';
+      const ch=x.checks||{};
+      return `<div class="advanced-card"><div class="advanced-head"><div><div class="mini">${label}</div><div class="advanced-signal ${c}">${s}</div></div><span class="pill">${x.confidence??0}%</span></div><div class="component-grid"><div class="component"><small>Trend</small><b>${x.trend||'—'}</b></div><div class="component"><small>Structure</small><b>${x.structure?.bos||x.structure?.choch||'—'}</b></div><div class="component"><small>Liquidity</small><b>${x.liquidity?.type||'NONE'}</b></div><div class="component"><small>OB / FVG</small><b>${x.order_block?.type||'NONE'} / ${x.fvg?.type||'NONE'}</b></div></div></div>`;
+    }).join('');
+    if(token) await recordModuleSignal('AlgoTrade',d,{...d,signal:sig},'5min',d.timeframes?.['5min']?.candle_time||liveCandle?.time);
+    if(status)status.textContent=`LIVE · ${new Date(d.generated_at).toLocaleTimeString()}`;
+  }catch(e){
+    if(status)status.textContent='ERROR';
+    $('algoSignal').textContent='WAIT'; $('algoSignal').className='signal-main wait';
+    $('algoReason').textContent='AlgoTrade error: '+(e.message||'server error');
+  }
+}
+function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'AlgoTrade'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section')loadMT5Status().catch(()=>{});if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
+if(id==='algotradeSection')loadAlgoTrade().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
+
+document.addEventListener('click',e=>{const b=e.target.closest('#refreshAlgoTrade');if(b)loadAlgoTrade().catch(()=>{})});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-classic-interval]');if(b){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===b));classicInterval=b.dataset.classicInterval;loadClassicTrade(classicInterval)}});
 document.addEventListener('click',e=>{
   const b=e.target.closest('[data-pivot-interval]');
@@ -768,6 +826,7 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
       if($('calendarSection').classList.contains('active')) loadCalendar().catch(()=>{});
       if($('sessionsSection').classList.contains('active')) loadSessions().catch(()=>{});
       if($('trendLineSection').classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{});
+      if(IS_ADMIN && $('algotradeSection').classList.contains('active')) loadAlgoTrade().catch(()=>{});
       if(!phone || $('mt5Section').classList.contains('active')) loadMT5Status().catch(()=>{});
       if(!phone && IS_ADMIN && $('overview').classList.contains('active')) loadAIProviders().then(()=>bindAIControls()).catch(()=>{});
       if(token && $('historySection').classList.contains('active')) loadHistory().catch(()=>{});
@@ -780,3 +839,14 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
     try{mountTradingView('chart', interval)}catch(_){}
   }
 })();;
+
+
+(function bindHistoryV2(){
+  function dateKeyLocal(d){return d.toLocaleDateString('en-CA',{timeZone:'Asia/Tashkent'});}
+  function applyRange(range){const s=document.getElementById('historyV2Start'),e=document.getElementById('historyV2End');const now=new Date();if(range==='all'){s.value='';e.value='';}else if(range==='today'){const k=dateKeyLocal(now);s.value=k;e.value=k;}else if(range==='yesterday'){const d=new Date(now.getTime()-86400000);const k=dateKeyLocal(d);s.value=k;e.value=k;}else{const k=dateKeyLocal(now);const d=new Date(now.getTime()-Number(range)*86400000);s.value=dateKeyLocal(d);e.value=k;}document.querySelectorAll('.h2-date').forEach(b=>b.classList.toggle('active',b.dataset.range===range));loadHistory();}
+  document.addEventListener('click',e=>{const b=e.target.closest('.h2-date');if(b){applyRange(b.dataset.range);return;}if(e.target.closest('#historyV2Refresh')){loadHistory();loadStats?.();return;}const d=e.target.closest('[data-history-detail]');if(d){const id=d.dataset.historyDetail;api('/api/v2/signal-history?limit=500').then(r=>{const x=(r.items||[]).find(i=>i.signal_id===id);if(!x)return;document.getElementById('historyDetailTitle').textContent=`${x.direction} · ${x.symbol}`;document.getElementById('historyDetailMeta').textContent=`${x.signal_id} · ${x.source} · ${tfName(x.interval)}`;document.getElementById('historyDetailBody').innerHTML=renderHistoryDetail(x);document.getElementById('historyDetailModal').setAttribute('aria-hidden','false');}).catch(()=>{});}});
+  document.addEventListener('change',e=>{if(e.target.id&&['historyV2Start','historyV2End','historyV2Symbol','historyV2Direction','historyV2Result','historyV2Module'].includes(e.target.id))loadHistory();});
+  document.addEventListener('click',e=>{if(e.target.closest('#historyDetailClose')||e.target.id==='historyDetailModal')document.getElementById('historyDetailModal')?.setAttribute('aria-hidden','true');});
+})();
+
+(function bindHistoryV2(){function key(d){return d.toLocaleDateString('en-CA',{timeZone:'Asia/Tashkent'});}function range(r){const s=document.getElementById('historyV2Start'),e=document.getElementById('historyV2End'),now=new Date();if(r==='all'){s.value='';e.value='';}else if(r==='today'){const k=key(now);s.value=k;e.value=k;}else if(r==='yesterday'){const d=new Date(now.getTime()-86400000),k=key(d);s.value=k;e.value=k;}else{const k=key(now),d=new Date(now.getTime()-Number(r)*86400000);s.value=key(d);e.value=k;}document.querySelectorAll('.h2-date').forEach(b=>b.classList.toggle('active',b.dataset.range===r));loadHistory();}document.addEventListener('click',e=>{const b=e.target.closest('.h2-date');if(b){range(b.dataset.range);return;}if(e.target.closest('#historyV2Refresh')){loadHistory();return;}const d=e.target.closest('[data-history-detail]');if(d){api('/api/v2/signal-history?limit=500').then(r=>{const x=(r.items||[]).find(i=>i.signal_id===d.dataset.historyDetail);if(!x)return;document.getElementById('historyDetailTitle').textContent=`${x.direction} · ${x.symbol}`;document.getElementById('historyDetailMeta').textContent=`${x.signal_id} · ${x.source} · ${tfName(x.interval)}`;document.getElementById('historyDetailBody').innerHTML=renderHistoryDetail(x);document.getElementById('historyDetailModal').setAttribute('aria-hidden','false');}).catch(()=>{});}});document.addEventListener('change',e=>{if(['historyV2Start','historyV2End','historyV2Symbol','historyV2Direction','historyV2Result','historyV2Module'].includes(e.target.id))loadHistory();});document.addEventListener('click',e=>{if(e.target.closest('#historyDetailClose')||e.target.id==='historyDetailModal')document.getElementById('historyDetailModal')?.setAttribute('aria-hidden','true');});})();
