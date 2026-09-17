@@ -1484,11 +1484,27 @@ def build_key_level_signal(candles: list[dict[str, Any]], levels: dict[str, Any]
     bullish_breakout = current["close"] > levels["r1"] and prev["close"] <= levels["r1"]
 
     if bias == "BEARISH" and (bearish_retest or bearish_breakout):
-        sl = max(current["high"], pivot) * (1 + SL_BUFFER_PCT)
-        result.update(signal="SELL", setup="PIVOT_RETEST" if bearish_retest else "S1_BREAKOUT", entry=round(current["close"], 2), stop_loss=round(sl, 2), take_profit=[levels["s1"], levels["s2"]], reason="Bearish Pivot filter confirmed with rejection/breakdown.")
+        entry = float(current["close"])
+        sl = max(float(current["high"]), float(pivot)) * (1 + SL_BUFFER_PCT)
+        # Never place a SELL target above/at entry. If S1 is already behind price,
+        # advance to the next valid support; if no valid support remains, WAIT.
+        sell_targets = [float(levels["s1"]), float(levels["s2"]), float(levels["s3"])]
+        sell_targets = [x for x in sell_targets if x < entry]
+        if len(sell_targets) >= 2:
+            result.update(signal="SELL", setup="PIVOT_RETEST" if bearish_retest else "S1_BREAKOUT", entry=round(entry, 2), stop_loss=round(sl, 2), take_profit=[round(sell_targets[0], 2), round(sell_targets[1], 2)], reason="Bearish Pivot filter confirmed with rejection/breakdown.")
+        else:
+            result.update(setup="TARGET_REACHED", reason="Bearish setup has no valid support target below entry; fresh SELL entry blocked.")
     elif bias == "BULLISH" and (bullish_retest or bullish_breakout):
-        sl = min(current["low"], pivot) * (1 - SL_BUFFER_PCT)
-        result.update(signal="BUY", setup="PIVOT_RETEST" if bullish_retest else "R1_BREAKOUT", entry=round(current["close"], 2), stop_loss=round(sl, 2), take_profit=[levels["r1"], levels["r2"]], reason="Bullish Pivot filter confirmed with rejection/breakout.")
+        entry = float(current["close"])
+        sl = min(float(current["low"]), float(pivot)) * (1 - SL_BUFFER_PCT)
+        # Never place a BUY target below/at entry. If R1 is already behind price,
+        # advance to the next valid resistance; if no valid resistance remains, WAIT.
+        buy_targets = [float(levels["r1"]), float(levels["r2"]), float(levels["r3"])]
+        buy_targets = [x for x in buy_targets if x > entry]
+        if len(buy_targets) >= 2:
+            result.update(signal="BUY", setup="PIVOT_RETEST" if bullish_retest else "R1_BREAKOUT", entry=round(entry, 2), stop_loss=round(sl, 2), take_profit=[round(buy_targets[0], 2), round(buy_targets[1], 2)], reason="Bullish Pivot filter confirmed with rejection/breakout.")
+        else:
+            result.update(setup="TARGET_REACHED", reason="Bullish setup has no valid resistance target above entry; fresh BUY entry blocked.")
     elif bias == "BEARISH" and current["close"] <= levels["s2"]:
         result.update(setup="TARGET_REACHED", reason="S2/S3 target zone reached; fresh SELL entries are blocked.")
     elif bias == "BULLISH" and current["close"] >= levels["r2"]:
@@ -3835,6 +3851,28 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 5
                 continue
             if tp2 is None:
                 tp2 = tp1
+
+            # A signal with TP/SL on the wrong side of entry is malformed and must
+            # never be classified as a profitable hit. Keep the journal honest.
+            valid_geometry = (
+                row.direction == "BUY" and float(sl) < float(entry) and float(tp1) > float(entry) and float(tp2) > float(entry)
+            ) or (
+                row.direction == "SELL" and float(sl) > float(entry) and float(tp1) < float(entry) and float(tp2) < float(entry)
+            )
+            if not valid_geometry:
+                row.status = "CANCELLED"
+                row.outcome = "CANCELLED"
+                row.result = "CANCELLED"
+                row.closed_at = row.closed_at or datetime.now(timezone.utc)
+                payload["result"] = {
+                    "status": "CANCELLED",
+                    "price": None,
+                    "reason": "INVALID_LEVEL_GEOMETRY",
+                    "message": "Entry/SL/TP levels are inconsistent with signal direction."
+                }
+                row.payload = json.dumps(payload, ensure_ascii=False)
+                changed = True
+                continue
 
             try:
                 normalized_interval = validate_interval(row.interval)
