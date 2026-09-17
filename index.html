@@ -718,66 +718,9 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 <style id="ai-qa-ui">
 .ai-qa-page{max-width:1100px;margin:0 auto}.ai-qa-suggestions{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0}.ai-qa-suggestions .btn{font-size:12px}.ai-qa-chat{min-height:300px;max-height:58vh;overflow:auto;border:1px solid var(--line);border-radius:14px;background:rgba(4,8,13,.68);padding:14px;display:flex;flex-direction:column;gap:10px}.ai-qa-empty{margin:auto;color:var(--muted);text-align:center;max-width:600px;padding:50px 20px}.ai-qa-msg{display:flex}.ai-qa-msg.user{justify-content:flex-end}.ai-qa-bubble{max-width:82%;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:#0b1118;line-height:1.6;white-space:pre-wrap}.ai-qa-msg.user .ai-qa-bubble{background:#102039;border-color:#24436a}.ai-qa-meta{font-size:10px;color:var(--muted);margin-top:5px}.ai-qa-form{margin-top:12px}.ai-qa-input{resize:vertical;min-height:82px;margin-bottom:8px}.ai-qa-actions{display:flex;justify-content:space-between;gap:10px;align-items:center}.ai-qa-actions .mini{max-width:70%}.ai-qa-disclaimer{margin-top:10px;color:var(--muted);font-size:10px;line-height:1.5}.ai-qa-chip{display:inline-flex;gap:5px;align-items:center}.ai-qa-typing{color:var(--muted);font-size:12px;padding:6px}@media(max-width:700px){.ai-qa-actions{align-items:stretch;flex-direction:column}.ai-qa-actions .mini{max-width:none}.ai-qa-bubble{max-width:92%}}
 </style>
-
-<style id="signalx-history-ui-final-20260917">
-/* HISTORY UI FINAL: compact desktop/mobile and no global hero on non-overview sections. */
-.signalx-visual-hero{display:none!important;}
-body.sx-overview-mode .signalx-visual-hero{display:block!important;}
-#historySection{position:relative!important;width:100%!important;min-width:0!important;max-width:none!important;margin:0!important;padding:0!important;}
-#historySection .sx-history-v2{max-width:100%!important;width:100%!important;gap:9px!important;}
-#historySection .sx-history-header{min-height:42px!important;padding:0 2px!important;}
-#historySection .sx-history-header h2{font-size:20px!important;margin:0!important;line-height:1.15!important;}
-#historySection .sx-history-header .mini{font-size:11px!important;}
-#historySection .sx-history-header .btn{min-height:34px!important;padding:6px 10px!important;}
-#historySection .sx-history-filters{grid-template-columns:repeat(6,minmax(110px,1fr))!important;gap:7px!important;padding:9px!important;border-radius:12px!important;}
-#historySection .filter-block{gap:4px!important;}
-#historySection .filter-block>span{font-size:9px!important;}
-#historySection .filter-block select,#historySection .filter-block input{min-height:34px!important;height:34px!important;font-size:12px!important;padding:4px 7px!important;}
-#historySection .filter-row{gap:5px!important;}
-#historySection .h2-date{padding:6px 9px!important;font-size:11px!important;border-radius:8px!important;}
-#historySection .sx-kpi-grid{grid-template-columns:repeat(8,minmax(0,1fr))!important;gap:7px!important;}
-#historySection .sx-kpi,#historySection .sx-module{padding:9px!important;border-radius:11px!important;}
-#historySection .sx-kpi small,#historySection .sx-module small{font-size:9px!important;}
-#historySection .sx-kpi b{font-size:17px!important;margin-top:3px!important;}
-#historySection .sx-history-subhead{min-height:27px!important;margin-top:2px!important;}
-#historySection .sx-history-subhead h3{font-size:14px!important;margin:0!important;}
-#historySection .sx-day-performance,#historySection .sx-module-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:7px!important;}
-#historySection .sx-module b{font-size:16px!important;}
-#historySection .sx-module .line{font-size:10px!important;margin-top:3px!important;}
-#historySection .sx-signal-list{gap:7px!important;}
-#historySection .sx-signal-card{padding:10px!important;border-radius:12px!important;}
-#historySection .sx-signal-top{gap:8px!important;}
-#historySection .sx-signal-badge{font-size:16px!important;}
-#historySection .sx-signal-meta{font-size:10px!important;}
-#historySection .sx-signal-levels{gap:5px!important;margin-top:7px!important;}
-#historySection .sx-level{padding:6px!important;border-radius:8px!important;}
-#historySection .sx-level span{font-size:8px!important;}
-#historySection .sx-level b{font-size:12px!important;margin-top:2px!important;}
-#historySection .sx-signal-bottom{margin-top:7px!important;}
-#historySection .sx-status{padding:4px 7px!important;font-size:9px!important;}
-#historySection .sx-history-loading{padding:16px!important;border:1px dashed rgba(255,255,255,.14);border-radius:12px;text-align:center;color:rgba(255,255,255,.72);}
-#historySection .sx-loading-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#36d7ff;box-shadow:0 0 10px rgba(54,215,255,.55);margin-right:6px;}
-@media(max-width:1100px){
-  #historySection .sx-history-filters{grid-template-columns:repeat(3,minmax(0,1fr))!important;}
-  #historySection .filter-block.wide{grid-column:span 3!important;}
-  #historySection .sx-kpi-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important;}
-  #historySection .sx-day-performance,#historySection .sx-module-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}
-}
-@media(max-width:600px){
-  #historySection .sx-history-header{align-items:flex-start!important;}
-  #historySection .sx-history-filters{grid-template-columns:repeat(2,minmax(0,1fr))!important;}
-  #historySection .filter-block.wide{grid-column:span 2!important;}
-  #historySection .sx-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}
-  #historySection .sx-day-performance,#historySection .sx-module-grid{grid-template-columns:1fr!important;}
-  #historySection .sx-signal-levels{grid-template-columns:repeat(3,minmax(0,1fr))!important;}
-}
-</style>
+<style id="signalx-history-final-compact-safe">#historySection .sx-history-v2{gap:10px}#historySection .sx-history-filters{padding:9px;gap:7px}#historySection .sx-kpi-grid{gap:7px}#historySection .sx-kpi{padding:9px;border-radius:12px}#historySection .sx-kpi b{font-size:18px}#historySection .sx-day-performance,#historySection .sx-module-grid{gap:7px}#historySection .sx-signal-list{gap:7px}#historySection .sx-signal-card{padding:11px;border-radius:14px}#historySection .sx-signal-levels{gap:5px;margin-top:8px}#historySection .sx-level{padding:7px;border-radius:9px}#historySection .sx-level b{font-size:12px}#historySection .sx-signal-bottom{margin-top:8px}.sx-history-more{text-align:center;padding:6px 0 12px}</style>
 </head>
 <body>
-<script id="signalx-overview-mode-init-20260917">
-(function(){function sync(){var a=document.querySelector('.section.active');document.body.classList.toggle('sx-overview-mode',!!a&&a.id==='overview');document.body.dataset.activeSection=a?a.id:'overview';}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',sync,{once:true});else sync();})();
-</script>
-
 <div class="gold-3d-orb"></div>
 <div class="gold-photo-bg" aria-hidden="true"></div>
 <div class="sx-sidebar-overlay" id="sxSidebarOverlay"></div><div class="app">
@@ -1011,7 +954,9 @@ body.sx-overview-mode .signalx-visual-hero{display:block!important;}
       <label class="filter-block"><span>RESULT</span><select id="historyV2Result"><option value="">ALL</option><option>ACTIVE</option><option>TP1 HIT</option><option>TP2 HIT</option><option>SL HIT</option><option>EXPIRED</option><option>CANCELLED</option></select></label>
       <label class="filter-block wide"><span>MODULE</span><select id="historyV2Module"><option value="">ALL</option><option>Technical Analysis</option><option>AI Smart Analysis</option><option>AI Fallback Network</option><option>SNR</option><option>Trend Line</option><option>Signal Lab</option><option>ICT Signals</option><option>Multi-Timeframe</option><option>Classic Trade</option><option>Economic Calendar</option><option>Market Sessions</option><option>AlgoTrade</option><option>Consensus</option><option>Signals</option></select></label>
     </div>
-    <div class="sx-kpi-grid" id="historyV2Kpis"></div><div class="sx-history-subhead"><h3>Daily Performance</h3><div class="mini">Tanlangan sana / period · Asia/Tashkent</div></div><div class="sx-day-performance" id="historyV2Daily"></div>
+    <div class="sx-kpi-grid" id="historyV2Kpis"></div>
+    <div class="sx-history-subhead"><div><h3>Performance</h3><div class="mini">Win Rate faqat yakunlangan TP2 / SL natijalaridan hisoblanadi · Asia/Tashkent</div></div><div class="sx-performance-tabs"><button type="button" class="h2-performance active" data-history-performance="day">DAILY</button><button type="button" class="h2-performance" data-history-performance="week">WEEKLY</button><button type="button" class="h2-performance" data-history-performance="month">MONTHLY</button></div></div>
+    <div class="sx-day-performance" id="historyV2Daily"></div><div class="sx-day-performance" id="historyV2Weekly"></div><div class="sx-day-performance" id="historyV2Monthly"></div>
     <div class="sx-history-subhead"><h3>Module Performance</h3></div><div class="sx-module-grid" id="historyV2Modules"></div>
     <div class="sx-history-subhead"><h3>Signal Journal</h3><div class="mini" id="historyV2Count"></div></div><div class="sx-signal-list" id="historyV2List"></div>
   </div>
@@ -1038,7 +983,7 @@ body.sx-overview-mode .signalx-visual-hero{display:block!important;}
 </div>
 
 <script src="config.js?v=20260908f"></script>
-<script src="app.js?v=20260917-history-ui-v3"></script>
+<script src="app.js?v=20260917-history-mt5-safe-v4"></script>
 
 <script id="signalx-sidebar-fix-20260913">
 (function(){

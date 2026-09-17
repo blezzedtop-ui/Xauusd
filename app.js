@@ -269,25 +269,70 @@ function recordModuleSignal(source, response, item, intervalName, candleTime){
   if(SIGNAL_RECORD_SEEN.size>2000){for(const [k,t] of SIGNAL_RECORD_SEEN){if(now-t>900000) SIGNAL_RECORD_SEEN.delete(k);}}
   api('/api/v1/signals/record-module',{method:'POST',body:JSON.stringify({symbol,interval:tf,source,direction,confidence:x.confidence??response?.ai?.confidence??null,entry:x.entry??response?.setup?.entry??null,stop_loss:x.stop_loss??response?.setup?.stop_loss??null,take_profit:x.take_profit??response?.setup?.take_profit??[],headline:`${source} · ${direction}`,candle_time:ct,payload:{response:item||response}})}).catch(e=>console.warn('Signal history record',source,e));
 }
-async function loadHistory(){
+let historyV2Offset=0;window.historyPerformanceMode=window.historyPerformanceMode||'day';
+async function loadHistory(append=false){
   const list=document.getElementById('historyV2List');
   if(!list)return;
-  const kpi=document.getElementById('historyV2Kpis'),daily=document.getElementById('historyV2Daily'),modules=document.getElementById('historyV2Modules'),count=document.getElementById('historyV2Count');
-  if(!token)token=localStorage.getItem('trading_token')||'';
-  if(!token){list.innerHTML='<div class="sx-empty"><b>Kirish kerak.</b><div class="mini" style="margin-top:6px">Signal History faqat tizimga kirgan foydalanuvchi uchun ochiladi.</div></div>';return;}
-  const p=new URLSearchParams(),s=document.getElementById('historyV2Start')?.value||'',e=document.getElementById('historyV2End')?.value||'',sym=document.getElementById('historyV2Symbol')?.value||'',dir=document.getElementById('historyV2Direction')?.value||'',res=document.getElementById('historyV2Result')?.value||'',mod=document.getElementById('historyV2Module')?.value||'';
+  if(!token){list.innerHTML='<div class="sx-empty">Kirish kerak.</div>';return;}
+  const p=new URLSearchParams();
+  const s=document.getElementById('historyV2Start')?.value||'';
+  const e=document.getElementById('historyV2End')?.value||'';
+  const sym=document.getElementById('historyV2Symbol')?.value||'';
+  const dir=document.getElementById('historyV2Direction')?.value||'';
+  const res=document.getElementById('historyV2Result')?.value||'';
+  const mod=document.getElementById('historyV2Module')?.value||'';
   if(s)p.set('start_date',s);if(e)p.set('end_date',e);if(sym)p.set('symbol',sym);if(dir)p.set('direction',dir);if(res)p.set('result',res);if(mod)p.set('module',mod);
-  list.innerHTML='<div class="sx-history-loading"><span class="sx-loading-dot"></span> Signal History yuklanmoqda…</div>';
-  const setKpis=(o)=>{const K=(l,v,c='')=>`<div class="sx-kpi"><small>${l}</small><b class="${c}">${v}</b></div>`;if(kpi)kpi.innerHTML=[K('SIGNALS',o.signals??0),K('WIN RATE',`${Number(o.winrate||0).toFixed(2)}%`),K('WINS',o.wins??0,'buy'),K('LOSSES',o.losses??0,'sell'),K('ACTIVE',o.active??0,'wait'),K('AVG RR',o.avg_rr?`1:${Number(o.avg_rr).toFixed(2)}`:'—'),K('TOTAL R',`${Number(o.total_r||0)>=0?'+':''}${Number(o.total_r||0).toFixed(2)}R`),K('TOTAL PROFIT',`${Number(o.total_profit||0)>=0?'+':''}${Number(o.total_profit||0).toFixed(2)}`)].join('');};
-  const statsPromise=api('/api/v2/signal-history/stats?'+p.toString()).then(stats=>{setKpis(stats.overall||{});const days=Object.entries(stats.by_day||{});if(daily)daily.innerHTML=days.length?days.slice(0,8).map(([d,x])=>`<div class="sx-kpi"><small>${d}</small><b>${Number(x.winrate||0).toFixed(2)}%</b><div class="mini">${x.signals} signals · ${x.wins} wins · ${x.losses} losses · ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)}R</div></div>`).join(''):'<div class="sx-empty">Tanlangan period uchun kunlik statistika yo‘q.</div>';const ms=Object.entries(stats.by_module||{});if(modules)modules.innerHTML=ms.length?ms.map(([m,x])=>`<div class="sx-module"><small>${escapeHtml(m)}</small><b>${Number(x.winrate||0).toFixed(2)}%</b><div class="line">${x.signals} signals · ${x.wins} wins · ${x.losses} losses</div><div class="line">R: ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)} · Avg RR: ${x.avg_rr?`1:${Number(x.avg_rr).toFixed(2)}`:'—'}</div></div>`).join(''):'<div class="sx-empty">Module statistikasi yo‘q.</div>';}).catch(err=>{if(kpi)kpi.innerHTML='<div class="sx-empty">Statistika yuklanmadi. <button class="btn" type="button" id="historyV2RetryStats">Qayta urinish</button></div>';throw err;});
-  const rowsPromise=api('/api/v2/signal-history?limit=200&'+p.toString()).then(rows=>{if(count)count.textContent=`${rows.count||0} ta signal`;list.innerHTML=(rows.items||[]).map(signalCardV2).join('')||'<div class="sx-empty">Tanlangan filtr bo‘yicha signal topilmadi.</div>';return rows;}).catch(err=>{list.innerHTML=`<div class="sx-empty"><b>History yuklanmadi.</b><div class="mini" style="margin-top:6px">${escapeHtml(err?.message||'Server xatosi')}</div><button class="btn" id="historyV2Retry" type="button" style="margin-top:10px">↻ Qayta urinish</button></div>`;throw err;});
-  await Promise.allSettled([rowsPromise,statsPromise]);
+  try{
+    p.set('offset',String(historyV2Offset));
+    const [rows,stats]=await Promise.all([
+      api('/api/v2/signal-history?limit=20&'+p.toString()),
+      api('/api/v2/signal-history/stats?'+p.toString())
+    ]);
+    const o=stats.overall||{};
+    const K=(l,v,c='')=>`<div class="sx-kpi"><small>${l}</small><b class="${c}">${v}</b></div>`;
+    document.getElementById('historyV2Kpis').innerHTML=[
+      K('TOTAL SIGNALS',o.signals??0),K('WIN RATE',`${Number(o.winrate||0).toFixed(2)}%`),K('WINS',o.wins??0,'buy'),
+      K('LOSSES',o.losses??0,'sell'),K('ACTIVE',o.active??0,'wait'),K('AVG RR',o.avg_rr?`1:${Number(o.avg_rr).toFixed(2)}`:'—'),
+      K('TOTAL R',`${Number(o.total_r||0)>=0?'+':''}${Number(o.total_r||0).toFixed(2)}R`),
+      K('TOTAL PROFIT',`${Number(o.total_profit||0)>=0?'+':''}${Number(o.total_profit||0).toFixed(2)}`)
+    ].join('');
+
+    const renderPeriod=(items,empty)=>Object.entries(items||{}).length
+      ? Object.entries(items).map(([d,x])=>`<div class="sx-period-card"><div class="sx-period-title">${escapeHtml(d)}</div><div class="sx-period-winrate">${Number(x.winrate||0).toFixed(2)}%</div><div class="mini">${x.signals||0} signals · ${x.wins||0} wins · ${x.losses||0} losses · ${x.active||0} active</div><div class="mini">R: ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)} · Avg RR: ${x.avg_rr?`1:${Number(x.avg_rr).toFixed(2)}`:'—'}</div></div>`).join('')
+      : `<div class="sx-empty">${empty}</div>`;
+    const perfMode=window.historyPerformanceMode||'day';
+    const dayBox=document.getElementById('historyV2Daily'),weekBox=document.getElementById('historyV2Weekly'),monthBox=document.getElementById('historyV2Monthly');
+    dayBox.innerHTML=renderPeriod(stats.by_day,'Tanlangan period uchun kunlik statistika yo‘q.');
+    weekBox.innerHTML=renderPeriod(stats.by_week,'Tanlangan period uchun haftalik statistika yo‘q.');
+    monthBox.innerHTML=renderPeriod(stats.by_month,'Tanlangan period uchun oylik statistika yo‘q.');
+    dayBox.style.display=perfMode==='day'?'grid':'none';
+    weekBox.style.display=perfMode==='week'?'grid':'none';
+    monthBox.style.display=perfMode==='month'?'grid':'none';
+    document.querySelectorAll('[data-history-performance]').forEach(b=>b.classList.toggle('active',b.dataset.historyPerformance===perfMode));
+
+    const modules=Object.entries(stats.by_module||{});
+    document.getElementById('historyV2Modules').innerHTML=modules.length
+      ? modules.map(([m,x])=>`<div class="sx-module"><small>${escapeHtml(m)}</small><b>${Number(x.winrate||0).toFixed(2)}%</b><div class="line">${x.signals||0} signals · <span class="buy">${x.wins||0} wins</span> · <span class="sell">${x.losses||0} losses</span> · ${x.active||0} active</div><div class="line">R: ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)} · Avg RR: ${x.avg_rr?`1:${Number(x.avg_rr).toFixed(2)}`:'—'}</div></div>`).join('')
+      : '<div class="sx-empty">Module statistikasi yo‘q.</div>';
+
+    document.getElementById('historyV2Count').textContent=`${rows.count||0} / ${rows.total_count||0} ta signal`;
+    const rendered=(rows.items||[]).map(signalCardV2).join('');
+    list.innerHTML=append
+      ? (list.innerHTML.replace(/<div class="sx-history-more">[\s\S]*?<\/div>$/,'')+rendered)
+      : rendered;
+    if(!list.innerHTML)list.innerHTML='<div class="sx-empty">Signal topilmadi.</div>';
+    if((historyV2Offset+20)<Number(rows.total_count||0))list.insertAdjacentHTML('beforeend',`<div class="sx-history-more"><button class="btn" type="button" id="historyV2LoadMore">Yana 20 ta yuklash</button></div>`);
+  }catch(err){list.innerHTML=`<div class="sx-empty">History yuklanmadi: ${escapeHtml(err?.message||'server xatosi')}</div>`;}
+}
+function escapeHtml(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
+function histFmt(v){if(v===null||v===undefined||v==='')return '—';const n=Number(v);return Number.isFinite(n)&&n!==0?n.toFixed(Math.abs(n)>=100?2:4):'—';}
+function histTime(v){try{return new Date(v).toLocaleString('uz-UZ',{timeZone:'Asia/Tashkent'})}catch(_){return v||'—';}}
+function historyStatusMeta(status){const s=String(status||'ACTIVE').toUpperCase();if(s==='TP2 HIT')return {cls:'status-win',label:'TP2 HIT · WIN',icon:'✓'};if(s==='SL HIT')return {cls:'status-loss',label:'SL HIT · LOSS',icon:'✕'};if(s==='TP1 HIT')return {cls:'status-tp1',label:'TP1 HIT · ACTIVE',icon:'↗'};if(s==='EXPIRED')return {cls:'status-expired',label:'EXPIRED',icon:'⌛'};if(s==='CANCELLED')return {cls:'status-cancelled',label:'CANCELLED',icon:'×'};return {cls:'status-active',label:'ACTIVE',icon:'•'};}
+function signalCardV2(x){
+  const cls=x.direction==='BUY'?'buy':x.direction==='SELL'?'sell':'',status=x.status||'ACTIVE',sm=historyStatusMeta(status),rr=x.rr?`1:${Number(x.rr).toFixed(2)}`:'—',dur=x.duration_minutes!=null?`${Number(x.duration_minutes).toFixed(0)} min`:'ACTIVE';
+  return `<article class="sx-signal-card ${cls} ${sm.cls}"><div class="sx-signal-top"><div><div class="sx-signal-badge">${x.direction==='BUY'?'🟢':'🔴'} ${escapeHtml(x.direction||'—')}</div><div class="sx-signal-meta">${escapeHtml(x.symbol)} · ${tfName(x.interval)} · ${escapeHtml(x.source||'Signals')} · ${histTime(x.created_at)}</div></div><div class="sx-status-pill ${sm.cls}"><span>${sm.icon}</span>${sm.label}${x.score!=null?` · ${histFmt(x.score)}%`:''}</div></div><div class="sx-signal-levels"><div class="sx-level"><span>ENTRY</span><b>${histFmt(x.entry)}</b></div><div class="sx-level"><span>SL</span><b>${histFmt(x.sl)}</b></div><div class="sx-level"><span>TP1</span><b>${histFmt(x.tp1)}</b></div><div class="sx-level"><span>TP2</span><b>${histFmt(x.tp2)}</b></div><div class="sx-level"><span>RR</span><b>${rr}</b></div><div class="sx-level"><span>FINAL RESULT</span><b class="${sm.cls}">${sm.label}</b></div></div><div class="sx-signal-bottom"><div class="sx-signal-meta">ID: <b>${escapeHtml(x.signal_id)}</b> · Duration: ${dur}${x.closed_at?` · Closed: ${histTime(x.closed_at)}`:''}${x.profit_loss!=null?` · P/L: ${Number(x.profit_loss)>=0?'+':''}${Number(x.profit_loss).toFixed(2)}`:''}</div><button class="btn" data-history-detail="${escapeHtml(x.signal_id)}" type="button">View Details</button></div></article>`;
 }
 
-function escapeHtml(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
-function histFmt(v){const n=Number(v);return Number.isFinite(n)?n.toFixed(Math.abs(n)>=100?2:4):'—';}
-function histTime(v){try{return new Date(v).toLocaleString('uz-UZ',{timeZone:'Asia/Tashkent'})}catch(_){return v||'—';}}
-function signalCardV2(x){const cls=x.direction==='BUY'?'buy':x.direction==='SELL'?'sell':'',status=x.status||'ACTIVE',rr=x.rr?`1:${Number(x.rr).toFixed(2)}`:'—',dur=x.duration_minutes!=null?`${Number(x.duration_minutes).toFixed(0)} min`:'ACTIVE';return `<article class="sx-signal-card ${cls}"><div class="sx-signal-top"><div><div class="sx-signal-badge">${x.direction==='BUY'?'🟢':'🔴'} ${escapeHtml(x.direction||'—')}</div><div class="sx-signal-meta">${escapeHtml(x.symbol)} · ${tfName(x.interval)} · ${escapeHtml(x.source||'Signals')} · ${histTime(x.created_at)}</div></div><div class="sx-status">${escapeHtml(status)} ${x.score!=null?`· ${histFmt(x.score)}%`:''}</div></div><div class="sx-signal-levels"><div class="sx-level"><span>ENTRY</span><b>${histFmt(x.entry)}</b></div><div class="sx-level"><span>SL</span><b>${histFmt(x.sl)}</b></div><div class="sx-level"><span>TP1</span><b>${histFmt(x.tp1)}</b></div><div class="sx-level"><span>TP2</span><b>${histFmt(x.tp2)}</b></div><div class="sx-level"><span>RR</span><b>${rr}</b></div><div class="sx-level"><span>R-MULTIPLE</span><b>${x.r_multiple!=null?(Number(x.r_multiple)>=0?'+':'')+Number(x.r_multiple).toFixed(2)+'R':'—'}</b></div></div><div class="sx-signal-bottom"><div class="sx-signal-meta">ID: <b>${escapeHtml(x.signal_id)}</b> · Duration: ${dur}${x.closed_at?` · Closed: ${histTime(x.closed_at)}`:''}</div><button class="btn" data-history-detail="${escapeHtml(x.signal_id)}" type="button">View Details</button></div></article>`}
 function renderHistoryDetail(x){const snap=x.snapshot||{},time=snap.timeline||{},setup=snap.setup||{},entries=[];function walk(obj,p=''){if(!obj||typeof obj!=='object')return;Object.entries(obj).forEach(([k,v])=>{if(k==='history_snapshot'||k==='payload')return;const key=p?p+'.'+k:k;if(v&&typeof v==='object'&&Object.keys(v).length<12)walk(v,key);else entries.push([key,typeof v==='object'?JSON.stringify(v):v]);});}walk(snap);return `<div class="sx-detail-grid"><div class="metric"><small>SYMBOL</small><b>${escapeHtml(x.symbol)}</b></div><div class="metric"><small>DIRECTION</small><b>${escapeHtml(x.direction)}</b></div><div class="metric"><small>SCORE</small><b>${histFmt(x.score)}%</b></div><div class="metric"><small>STRENGTH</small><b>${escapeHtml(x.strength||'—')}</b></div><div class="metric"><small>ENTRY</small><b>${histFmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${histFmt(x.sl)}</b></div><div class="metric"><small>TP1 / TP2</small><b>${histFmt(x.tp1)} / ${histFmt(x.tp2)}</b></div><div class="metric"><small>RR</small><b>${x.rr?`1:${Number(x.rr).toFixed(2)}`:'—'}</b></div></div><div class="sx-detail-section"><h4>Signal Evidence</h4><div class="sx-evidence-grid">${entries.slice(0,30).map(([k,v])=>`<div class="sx-evidence"><small>${escapeHtml(k)}</small><div>${escapeHtml(String(v).slice(0,600))}</div></div>`).join('')||'<div class="sx-empty">Snapshot evidence mavjud emas.</div>'}</div></div><div class="sx-detail-section"><h4>Timeline</h4><div class="sx-timeline">${[['Signal Created',x.created_at],['Entry Activated',setup.entry?x.created_at:null],['TP1 Hit',time.tp1_hit],['Signal Closed',x.closed_at]].filter(a=>a[1]).map(a=>`<div class="sx-timeline-item"><b>${escapeHtml(a[0])}</b><div class="mini">${histTime(a[1])}</div></div>`).join('')||'<div class="sx-empty">Timeline hali bo‘sh.</div>'}</div></div><div class="sx-detail-section"><h4>Performance</h4><div class="sx-detail-grid"><div class="metric"><small>STATUS</small><b>${escapeHtml(x.status)}</b></div><div class="metric"><small>PROFIT / LOSS</small><b>${x.profit_loss!=null?histFmt(x.profit_loss):'—'}</b></div><div class="metric"><small>R-MULTIPLE</small><b>${x.r_multiple!=null?(Number(x.r_multiple)>=0?'+':'')+Number(x.r_multiple).toFixed(2)+'R':'—'}</b></div><div class="metric"><small>DURATION</small><b>${x.duration_minutes!=null?Number(x.duration_minutes).toFixed(0)+' min':'ACTIVE'}</b></div></div></div>`}
 
 function componentText(v){if(v==null)return '—';if(typeof v==='object'){if(v.type)return v.type+(v.low!=null?' · '+fmt(v.low)+'–'+fmt(v.high):'');if(v.support!=null)return 'S '+fmt(v.support)+' · R '+fmt(v.resistance);return JSON.stringify(v)}return String(v)}
@@ -514,14 +559,6 @@ async function askAiQa(question){
   renderAiQaMessages();
   if(send)send.disabled=true;
   try{
-    const status=await api('/api/v1/ai/qa/status');
-    if(!status?.ready){
-      AI_QA_STATE.messages.pop();
-      AI_QA_STATE.messages.push({role:'assistant',text:'AI provider sozlanmagan. Serverda kamida bitta AI API key (masalan GROQ_API_KEY, GEMINI_API_KEY yoki OPENROUTER_API_KEY) kerak.',meta:'AI Q&A konfiguratsiyasi topilmadi'});
-      if(provider)provider.textContent='AI NOT CONFIGURED';
-      if(ctx)ctx.textContent='LIVE CONTEXT';
-      return;
-    }
     const d=await api('/api/v1/ai/chat',{method:'POST',body:JSON.stringify({question:q,symbol,interval})});
     AI_QA_STATE.messages.pop();
     const meta=[d.provider?`Provider: ${d.provider}`:'Context fallback',d.context?.economic_events_count!=null?`News/events: ${d.context.economic_events_count}`:''].filter(Boolean).join(' · ');
@@ -576,39 +613,8 @@ async function loadAlgoTrade(){
     $('algoReason').textContent='AlgoTrade error: '+(e.message||'server error');
   }
 }
-function openSection(id){
-  const target=$(id);
-  if(!target)return false;
-  if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return false;}
-  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
-  target.classList.add('active');
-  document.body.classList.toggle('sx-overview-mode', id==='overview');
-  document.body.dataset.activeSection=id;
-  document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));
-  const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'AlgoTrade'};
-  if($('pageTitle'))$('pageTitle').textContent=titles[id]||'Trading SaaS';
-  if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}
-  if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}
-  if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});
-  if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});
-  if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});
-  if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});
-  if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});
-  if(id==='signalSection')loadSelectedSignal(signalInterval);
-  if(id==='calendarSection')loadCalendar();
-  if(id==='sessionsSection')loadSessions();
-  if(id==='activeSessionsSection')loadActiveSessions();
-  if(id==='mtfSection')loadMtf();
-  if(id==='historySection'){loadHistory().catch(()=>{});}
-  if(id==='signalsSection')loadAutoSignals();
-  if(id==='ictSection')loadICTSignals();
-  if(id==='mt5Section'){loadMT5Status().catch(()=>{});loadMT5GatewayAccounts().catch(()=>{});}
-  if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
-  if(id==='algotradeSection')loadAlgoTrade().catch(()=>{});
-  if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{});if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active'))loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}
-  requestAnimationFrame(()=>{window.scrollTo({top:0,left:0,behavior:'auto'});if(id==='historySection')target.scrollTop=0;});
-  return true;
-}
+function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'AlgoTrade'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section'){loadMT5Status().catch(()=>{});loadMT5GatewayAccounts().catch(()=>{});}if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
+if(id==='algotradeSection')loadAlgoTrade().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
 
 document.addEventListener('click',e=>{const b=e.target.closest('#refreshAlgoTrade');if(b)loadAlgoTrade().catch(()=>{})});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-classic-interval]');if(b){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===b));classicInterval=b.dataset.classicInterval;loadClassicTrade(classicInterval)}});
@@ -935,12 +941,12 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
 })();;
 
 
-(function bindHistoryV2Single(){
-  if(window.__SIGNALX_HISTORY_V2_BOUND__)return;
-  window.__SIGNALX_HISTORY_V2_BOUND__=true;
-  const ids=['historyV2Start','historyV2End','historyV2Symbol','historyV2Direction','historyV2Result','historyV2Module'];
-  const key=d=>d.toLocaleDateString('en-CA',{timeZone:'Asia/Tashkent'});
-  const applyRange=r=>{const s=document.getElementById('historyV2Start'),e=document.getElementById('historyV2End'),now=new Date();if(r==='all'){s.value='';e.value='';}else if(r==='today'){const k=key(now);s.value=k;e.value=k;}else if(r==='yesterday'){const d=new Date(now.getTime()-86400000),k=key(d);s.value=k;e.value=k;}else{const k=key(now),d=new Date(now.getTime()-Number(r)*86400000);s.value=key(d);e.value=k;}document.querySelectorAll('.h2-date').forEach(b=>b.classList.toggle('active',b.dataset.range===r));loadHistory().catch(()=>{});};
-  document.addEventListener('click',e=>{const b=e.target.closest('.h2-date');if(b){applyRange(b.dataset.range);return;}if(e.target.closest('#historyV2Refresh')||e.target.closest('#historyV2Retry')||e.target.closest('#historyV2RetryStats')){loadHistory().catch(()=>{});return;}const d=e.target.closest('[data-history-detail]');if(d){api('/api/v2/signal-history?limit=500').then(r=>{const x=(r.items||[]).find(i=>i.signal_id===d.dataset.historyDetail);if(!x)return;document.getElementById('historyDetailTitle').textContent=`${x.direction} · ${x.symbol}`;document.getElementById('historyDetailMeta').textContent=`${x.signal_id} · ${x.source} · ${tfName(x.interval)}`;document.getElementById('historyDetailBody').innerHTML=renderHistoryDetail(x);document.getElementById('historyDetailModal').setAttribute('aria-hidden','false');}).catch(err=>showToast(err?.message||'Signal detail yuklanmadi'));return;}if(e.target.closest('#historyDetailClose')||e.target.id==='historyDetailModal')document.getElementById('historyDetailModal')?.setAttribute('aria-hidden','true');});
-  document.addEventListener('change',e=>{if(ids.includes(e.target.id))loadHistory().catch(()=>{});});
-})();;
+(function bindHistoryV2(){
+  function dateKeyLocal(d){return d.toLocaleDateString('en-CA',{timeZone:'Asia/Tashkent'});}
+  function applyRange(range){const s=document.getElementById('historyV2Start'),e=document.getElementById('historyV2End');const now=new Date();if(range==='all'){s.value='';e.value='';}else if(range==='today'){const k=dateKeyLocal(now);s.value=k;e.value=k;}else if(range==='yesterday'){const d=new Date(now.getTime()-86400000);const k=dateKeyLocal(d);s.value=k;e.value=k;}else{const k=dateKeyLocal(now);const d=new Date(now.getTime()-Number(range)*86400000);s.value=dateKeyLocal(d);e.value=k;}document.querySelectorAll('.h2-date').forEach(b=>b.classList.toggle('active',b.dataset.range===range));loadHistory();}
+  document.addEventListener('click',e=>{if(e.target.closest('#historyV2LoadMore')){historyV2Offset+=20;loadHistory(true);return;}const pb=e.target.closest('[data-history-performance]');if(pb){window.historyPerformanceMode=pb.dataset.historyPerformance||'day';loadHistory(false);return;}const b=e.target.closest('.h2-date');if(b){historyV2Offset=0;applyRange(b.dataset.range);return;}if(e.target.closest('#historyV2Refresh')){historyV2Offset=0;loadHistory();loadStats?.();return;}const d=e.target.closest('[data-history-detail]');if(d){const id=d.dataset.historyDetail;api('/api/v2/signal-history?limit=500').then(r=>{const x=(r.items||[]).find(i=>i.signal_id===id);if(!x)return;document.getElementById('historyDetailTitle').textContent=`${x.direction} · ${x.symbol}`;document.getElementById('historyDetailMeta').textContent=`${x.signal_id} · ${x.source} · ${tfName(x.interval)}`;document.getElementById('historyDetailBody').innerHTML=renderHistoryDetail(x);document.getElementById('historyDetailModal').setAttribute('aria-hidden','false');}).catch(()=>{});}});
+  document.addEventListener('change',e=>{if(e.target.id&&['historyV2Start','historyV2End','historyV2Symbol','historyV2Direction','historyV2Result','historyV2Module'].includes(e.target.id)){historyV2Offset=0;loadHistory();}});
+  document.addEventListener('click',e=>{if(e.target.closest('#historyDetailClose')||e.target.id==='historyDetailModal')document.getElementById('historyDetailModal')?.setAttribute('aria-hidden','true');});
+})();
+
+;
