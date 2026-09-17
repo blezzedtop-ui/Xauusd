@@ -946,7 +946,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 </section>
 <section class="section" id="historySection">
   <div class="sx-history-v2">
-    <div class="sx-history-header"><div><h2>Signal History</h2><div class="mini">Professional trading journal · signal → analysis → evidence → result → performance</div></div><button class="btn" id="historyV2Refresh" type="button">↻ Yangilash</button></div>
+    <div class="sx-history-header"><div><h2>Signal History</h2><div class="mini">LIVE SIGNAL JOURNAL · only current/live signals · signal → analysis → evidence → result → performance</div></div><button class="btn" id="historyV2Refresh" type="button">↻ Yangilash</button></div>
     <div class="sx-history-filters">
       <div class="filter-block wide"><span>DATE</span><div class="filter-row"><button class="h2-date" data-range="today" type="button">Today</button><button class="h2-date" data-range="yesterday" type="button">Yesterday</button><button class="h2-date" data-range="7" type="button">Last 7 Days</button><button class="h2-date" data-range="30" type="button">Last 30 Days</button><button class="h2-date active" data-range="all" type="button">All</button></div></div>
       <label class="filter-block"><span>START DATE</span><input id="historyV2Start" type="date"></label><label class="filter-block"><span>END DATE</span><input id="historyV2End" type="date"></label>
@@ -954,9 +954,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
       <label class="filter-block"><span>RESULT</span><select id="historyV2Result"><option value="">ALL</option><option>ACTIVE</option><option>TP1 HIT</option><option>TP2 HIT</option><option>SL HIT</option><option>EXPIRED</option><option>CANCELLED</option></select></label>
       <label class="filter-block wide"><span>MODULE</span><select id="historyV2Module"><option value="">ALL</option><option>Technical Analysis</option><option>AI Smart Analysis</option><option>AI Fallback Network</option><option>SNR</option><option>Trend Line</option><option>Signal Lab</option><option>ICT Signals</option><option>Multi-Timeframe</option><option>Classic Trade</option><option>Economic Calendar</option><option>Market Sessions</option><option>AlgoTrade</option><option>Consensus</option><option>Signals</option></select></label>
     </div>
-    <div class="sx-kpi-grid" id="historyV2Kpis"></div>
-    <div class="sx-history-subhead"><div><h3>Performance</h3><div class="mini">Win Rate faqat yakunlangan TP2 / SL natijalaridan hisoblanadi · Asia/Tashkent</div></div><div class="sx-performance-tabs"><button type="button" class="h2-performance active" data-history-performance="day">DAILY</button><button type="button" class="h2-performance" data-history-performance="week">WEEKLY</button><button type="button" class="h2-performance" data-history-performance="month">MONTHLY</button></div></div>
-    <div class="sx-day-performance" id="historyV2Daily"></div><div class="sx-day-performance" id="historyV2Weekly"></div><div class="sx-day-performance" id="historyV2Monthly"></div>
+    <div class="sx-kpi-grid" id="historyV2Kpis"></div><div class="sx-history-subhead"><h3>Daily Performance</h3><div class="mini">Tanlangan sana / period · Asia/Tashkent</div></div><div class="sx-day-performance" id="historyV2Daily"></div>
     <div class="sx-history-subhead"><h3>Module Performance</h3></div><div class="sx-module-grid" id="historyV2Modules"></div>
     <div class="sx-history-subhead"><h3>Signal Journal</h3><div class="mini" id="historyV2Count"></div></div><div class="sx-signal-list" id="historyV2List"></div>
   </div>
@@ -983,7 +981,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 </div>
 
 <script src="config.js?v=20260908f"></script>
-<script src="app.js?v=20260917-history-mt5-safe-v4"></script>
+<script src="app.js?v=20260917-history-live-v5"></script>
 
 <script id="signalx-sidebar-fix-20260913">
 (function(){
