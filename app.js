@@ -514,6 +514,14 @@ async function askAiQa(question){
   renderAiQaMessages();
   if(send)send.disabled=true;
   try{
+    const status=await api('/api/v1/ai/qa/status');
+    if(!status?.ready){
+      AI_QA_STATE.messages.pop();
+      AI_QA_STATE.messages.push({role:'assistant',text:'AI provider sozlanmagan. Serverda kamida bitta AI API key (masalan GROQ_API_KEY, GEMINI_API_KEY yoki OPENROUTER_API_KEY) kerak.',meta:'AI Q&A konfiguratsiyasi topilmadi'});
+      if(provider)provider.textContent='AI NOT CONFIGURED';
+      if(ctx)ctx.textContent='LIVE CONTEXT';
+      return;
+    }
     const d=await api('/api/v1/ai/chat',{method:'POST',body:JSON.stringify({question:q,symbol,interval})});
     AI_QA_STATE.messages.pop();
     const meta=[d.provider?`Provider: ${d.provider}`:'Context fallback',d.context?.economic_events_count!=null?`News/events: ${d.context.economic_events_count}`:''].filter(Boolean).join(' · ');

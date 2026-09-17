@@ -69,6 +69,7 @@ if DEEPSEEK_MODEL == "deepseek-v4-flash":
     DEEPSEEK_MODEL = "deepseek-flash"
 AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto"
 AI_FALLBACK_ORDER = [x.strip().lower() for x in os.getenv("AI_FALLBACK_ORDER", "groq,deepseek,gemini,groq_qwen,openai,mistral,cerebras,cloudflare,huggingface,openrouter").split(",") if x.strip()]
+AI_QA_PROVIDER_ORDER = [x.strip().lower() for x in os.getenv("AI_QA_PROVIDER_ORDER", "groq,gemini,openrouter,mistral,cerebras,cloudflare,deepseek,huggingface,openai").split(",") if x.strip()]
 AI_ROUTER_MODE = os.getenv("AI_ROUTER_MODE", "score").strip().lower() or "score"
 # Provider profile: quality, speed, capacity/limits, cost-efficiency (0-100).
 # These are routing heuristics, not provider guarantees; live status is weighted dynamically.
@@ -186,6 +187,99 @@ async def _cloudflare_completion(prompt: str) -> tuple[str, str]:
     if not text:
         raise RuntimeError("cloudflare: empty response")
     return text, "cloudflare"
+
+async def _ai_qa_provider_call(provider: str, prompt: str) -> tuple[str, str]:
+    """Q&A-specific provider call with current model fallbacks.
+
+    This path is intentionally separate from the signal-validation router so a
+    transient model incompatibility cannot make the conversational assistant
+    fall back unnecessarily.
+    """
+    if provider == "groq" and GROQ_API_KEY:
+        last: Exception | None = None
+        models = []
+        for m in (GROQ_MODEL, "openai/gpt-oss-120b", "openai/gpt-oss-20b"):
+            if m and m not in models:
+                models.append(m)
+        for model in models:
+            try:
+                return await _openai_compatible_completion(GROQ_API_KEY, "https://api.groq.com/openai/v1", model, prompt, "groq")
+            except Exception as exc:
+                last = exc
+                continue
+        if last:
+            raise last
+    if provider == "groq_qwen" and GROQ_API_KEY:
+        return await _openai_compatible_completion(GROQ_API_KEY, "https://api.groq.com/openai/v1", GROQ_QWEN_MODEL, prompt, "groq_qwen")
+    if provider == "gemini" and GEMINI_API_KEY:
+        last: Exception | None = None
+        models = []
+        for m in (GEMINI_MODEL, "gemini-2.5-flash", "gemini-2.5-flash-lite"):
+            if m and m not in models:
+                models.append(m)
+        for model in models:
+            url=f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            payload={
+                "contents":[{"role":"user","parts":[{"text":prompt}]}],
+                "generationConfig":{"temperature":0.1,"responseMimeType":"application/json"}
+            }
+            try:
+                async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+                    r=await client.post(url, headers={"x-goog-api-key":GEMINI_API_KEY,"Content-Type":"application/json"}, json=payload)
+                    if r.status_code >= 400:
+                        try: detail=r.json()
+                        except Exception: detail=r.text
+                        exc=RuntimeError(f"Gemini HTTP {r.status_code}: {detail}")
+                        setattr(exc,"status_code",r.status_code); setattr(exc,"body",detail if isinstance(detail,dict) else {"message":str(detail)})
+                        raise exc
+                    data=r.json()
+                candidates=data.get("candidates") or []
+                parts=((candidates[0].get("content") or {}).get("parts") or []) if candidates else []
+                text="".join(str(x.get("text", "")) for x in parts).strip()
+                if text:
+                    return text, "gemini"
+                raise RuntimeError("gemini: empty response")
+            except Exception as exc:
+                last=exc
+                continue
+        if last:
+            raise last
+    # For the other providers, the existing compatibility layer is already the
+    # correct implementation; Q&A still gets the dedicated provider ordering.
+    return await _provider_call(provider, prompt)
+
+async def ai_qa_completion(prompt: str) -> tuple[str, str]:
+    """Conversational AI router: dedicated ordering + provider/model self-healing."""
+    configured={
+        "groq": bool(GROQ_API_KEY), "gemini": bool(GEMINI_API_KEY),
+        "openrouter": bool(OPENROUTER_API_KEY), "mistral": bool(MISTRAL_API_KEY),
+        "cerebras": bool(CEREBRAS_API_KEY), "cloudflare": bool(CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN),
+        "deepseek": bool(DEEPSEEK_API_KEY), "huggingface": bool(HF_TOKEN), "openai": bool(OPENAI_API_KEY),
+        "groq_qwen": bool(GROQ_API_KEY),
+    }
+    candidates=[p for p in AI_QA_PROVIDER_ORDER if configured.get(p, False) and AI_PROVIDER_ENABLED.get(p, True)]
+    if not candidates:
+        raise RuntimeError("AI provider sozlanmagan: kamida bitta server-side AI API key kerak.")
+    errors=[]
+    now_mono=asyncio.get_running_loop().time()
+    for provider in candidates:
+        cooldown_until=AI_PROVIDER_COOLDOWN_UNTIL.get(provider,0.0)
+        if cooldown_until>now_mono:
+            continue
+        try:
+            text, used = await _ai_qa_provider_call(provider, prompt)
+            AI_PROVIDER_STATUS[used]={"status":"ONLINE","checked_at":datetime.now(timezone.utc).isoformat(),"error":""}
+            AI_PROVIDER_COOLDOWN_UNTIL.pop(used,None)
+            return text, used
+        except Exception as exc:
+            msg,http_status=_provider_error_details(exc)
+            low=msg.lower()
+            limited=http_status==429 or "rate limit" in low or "quota" in low or "too many requests" in low
+            if limited:
+                AI_PROVIDER_COOLDOWN_UNTIL[provider]=now_mono+AI_PROVIDER_COOLDOWN_SECONDS
+            AI_PROVIDER_STATUS[provider]={"status":"LIMITED" if limited else "OFFLINE","checked_at":datetime.now(timezone.utc).isoformat(),"error":msg[:360],"http_status":http_status}
+            errors.append(f"{provider}: {msg[:180]}")
+    raise RuntimeError("AI Q&A providerlarining barchasi muvaffaqiyatsiz: " + " | ".join(errors))
 
 async def _provider_call(provider: str, prompt: str) -> tuple[str, str]:
     if provider == "groq" and GROQ_API_KEY:
@@ -3486,6 +3580,18 @@ def _ai_qa_local_fallback(context: dict[str, Any], question: str) -> tuple[str, 
         answer=' '.join(bits)+" AI provider javob bermasa, tizim faqat mavjud live context asosida xavfsiz fallback beradi."
     return answer, direction if direction in {'BUY','SELL','BULLISH','BEARISH'} else 'NEUTRAL', 0.0, 'AI provider unavailable; context-only fallback.'
 
+@app.get("/api/v1/ai/qa/status")
+async def ai_qa_status(authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    user = current_user(authorization, session)
+    configured={
+        "groq": bool(GROQ_API_KEY), "gemini": bool(GEMINI_API_KEY), "openrouter": bool(OPENROUTER_API_KEY),
+        "mistral": bool(MISTRAL_API_KEY), "cerebras": bool(CEREBRAS_API_KEY),
+        "cloudflare": bool(CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN),
+        "deepseek": bool(DEEPSEEK_API_KEY), "huggingface": bool(HF_TOKEN), "openai": bool(OPENAI_API_KEY),
+    }
+    active=[p for p in AI_QA_PROVIDER_ORDER if configured.get(p,False) and AI_PROVIDER_ENABLED.get(p,True)]
+    return {"ok":True,"configured":configured,"active_order":active,"ready":bool(active),"message":"AI Q&A tayyor" if active else "AI Q&A uchun serverda kamida bitta AI API key sozlanishi kerak."}
+
 @app.post("/api/v1/ai/chat")
 async def ai_chat(body: AIChatBody, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
@@ -3516,7 +3622,7 @@ USER QUESTION:
 {question}
 """
     try:
-        raw, provider = await ai_json_completion(prompt)
+        raw, provider = await ai_qa_completion(prompt)
         parsed = _ai_qa_extract_answer(raw)
         return {
             "ok": True,
