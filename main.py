@@ -30,6 +30,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 from book_openai_engine import book_signal, _atr as _atr_local
 from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select, func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
 load_dotenv()
@@ -3805,24 +3806,45 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 5
     for row in open_rows:
         try: payload=json.loads(row.payload or "{}")
         except Exception: payload={}
+        if not isinstance(payload, dict):
+            payload = {"raw_payload": payload}
         _history_sync_row(row,payload)
         entry,sl,tp1,tp2=row.entry_price,row.stop_loss,row.take_profit_1,row.take_profit_2
         if entry is None or sl is None or tp1 is None or row.direction not in {"BUY","SELL"}: continue
         if tp2 is None: tp2=tp1
-        key=(clean_symbol(row.symbol),validate_interval(row.interval))
+        try:
+            normalized_interval = validate_interval(row.interval)
+        except Exception:
+            # A malformed historical row must not turn the entire journal into HTTP 500.
+            continue
+        key=(clean_symbol(row.symbol), normalized_interval)
         if key not in cache:
-            try: cache[key]=await get_candles(row.symbol,key[1],260)
-            except Exception: cache[key]=[]
+            try:
+                raw_candles = await get_candles(row.symbol, key[1], 260)
+                if isinstance(raw_candles, tuple):
+                    cache[key] = raw_candles[0] if raw_candles and isinstance(raw_candles[0], list) else []
+                elif isinstance(raw_candles, list):
+                    cache[key] = raw_candles
+                else:
+                    cache[key] = []
+            except Exception:
+                cache[key]=[]
         candles=cache[key]
         if not candles: continue
-        created=row.created_at if row.created_at.tzinfo else row.created_at.replace(tzinfo=timezone.utc)
+        created=row.created_at
+        if created is None: continue
+        if created.tzinfo is None: created=created.replace(tzinfo=timezone.utc)
         tp1_hit=None; tp1_time=None; final=None; final_price=None; final_time=None
         for c in candles:
+            if not isinstance(c, dict): continue
             ct=c.get("time")
             try: cdt=datetime.fromtimestamp(float(ct),tz=timezone.utc) if isinstance(ct,(int,float)) else datetime.fromisoformat(str(ct).replace("Z","+00:00"))
             except Exception: continue
             if cdt<=created: continue
-            high=float(c.get("high")); low=float(c.get("low"))
+            try:
+                high=float(c.get("high")); low=float(c.get("low"))
+            except (TypeError, ValueError):
+                continue
             if row.direction=="BUY":
                 hit1=high>=tp1; hit2=high>=tp2; hit_sl=low<=sl
             else:
@@ -5161,8 +5183,14 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     )
     _history_sync_row(row,payload)
     if existing is None:
-        session.add(row); session.commit(); session.refresh(row)
-    elif str(existing.status or "ACTIVE").upper() in {"ACTIVE", "TP1 HIT", "OPEN"} and str(existing.outcome or "OPEN").upper() in {"OPEN", "TP1 HIT"}:
+        try:
+            session.add(row); session.commit(); session.refresh(row)
+        except IntegrityError:
+            session.rollback()
+            existing = session.scalar(q)
+            if existing is None:
+                raise
+    if existing is not None and str(existing.status or "ACTIVE").upper() in {"ACTIVE", "TP1 HIT", "OPEN"} and str(existing.outcome or "OPEN").upper() in {"OPEN", "TP1 HIT"}:
         existing.direction = direction
         existing.headline = (body.headline or f"{source} · {direction}")[:255]
         existing.price = float(entry)
@@ -5343,17 +5371,24 @@ def _history_v2_date_bounds(start_date: str | None, end_date: str | None):
 # History outcome refresh is throttled so opening the journal repeatedly does not
 # trigger repeated candle scans. It does not alter signal generation or execution.
 _HISTORY_V2_REFRESH_TS: dict[int, float] = {}
+_HISTORY_V2_REFRESH_LOCKS: dict[int, asyncio.Lock] = {}
 _HISTORY_V2_REFRESH_COOLDOWN = max(5.0, float(os.getenv("HISTORY_V2_REFRESH_COOLDOWN", "20")))
 
 async def _maybe_refresh_history_v2(session: Session, user_id: int, limit: int = 2000) -> None:
-    now_mono = asyncio.get_running_loop().time()
-    last = _HISTORY_V2_REFRESH_TS.get(int(user_id), 0.0)
-    if now_mono - last < _HISTORY_V2_REFRESH_COOLDOWN:
-        return
-    try:
-        await refresh_signal_outcomes(session, int(user_id), limit=limit)
-    finally:
-        _HISTORY_V2_REFRESH_TS[int(user_id)] = now_mono
+    uid = int(user_id)
+    lock = _HISTORY_V2_REFRESH_LOCKS.setdefault(uid, asyncio.Lock())
+    async with lock:
+        now_mono = asyncio.get_running_loop().time()
+        last = _HISTORY_V2_REFRESH_TS.get(uid, 0.0)
+        if now_mono - last < _HISTORY_V2_REFRESH_COOLDOWN:
+            return
+        try:
+            await refresh_signal_outcomes(session, uid, limit=limit)
+        except Exception as exc:
+            # Outcome refresh is best-effort; History reads must not become HTTP 500.
+            print(f"[HISTORY V2] outcome refresh skipped: {type(exc).__name__}: {exc}")
+        finally:
+            _HISTORY_V2_REFRESH_TS[uid] = asyncio.get_running_loop().time()
 
 @app.get("/api/v2/signal-history")
 async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
@@ -5362,7 +5397,10 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
                             module: str = Query(""), authorization: str | None = Header(default=None),
                             session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
-    await _maybe_refresh_history_v2(session, user.id)
+    try:
+        await _maybe_refresh_history_v2(session, user.id)
+    except Exception as exc:
+        print(f"[HISTORY V2] outcome refresh skipped: {type(exc).__name__}: {exc}")
     q = select(SignalHistory).where(SignalHistory.user_id == user.id)
     if symbol:
         q = q.where(SignalHistory.symbol == clean_symbol(symbol))
@@ -5384,9 +5422,12 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
     for r in rows:
         try: payload=json.loads(r.payload or "{}")
         except Exception: payload={}
+        if not isinstance(payload, dict):
+            payload = {"raw_payload": payload}
         _history_sync_row(r,payload)
         entry,sl,tp1,tp2=r.entry_price,r.stop_loss,r.take_profit_1,r.take_profit_2
-        dt=r.created_at if r.created_at.tzinfo else r.created_at.replace(tzinfo=timezone.utc)
+        dt=r.created_at or datetime.now(timezone.utc)
+        if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
         closed=r.closed_at if r.closed_at and r.closed_at.tzinfo else (r.closed_at.replace(tzinfo=timezone.utc) if r.closed_at else None)
         duration=round(max(0,(closed-dt).total_seconds())/60,2) if closed else None
         status=_history_status(r)
@@ -5404,7 +5445,10 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
                                   direction: str = Query(""), result: str = Query(""), module: str = Query(""),
                                   authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user=current_user(authorization,session)
-    await _maybe_refresh_history_v2(session, user.id)
+    try:
+        await _maybe_refresh_history_v2(session, user.id)
+    except Exception as exc:
+        print(f"[HISTORY V2 STATS] outcome refresh skipped: {type(exc).__name__}: {exc}")
     q=select(SignalHistory).where(SignalHistory.user_id==user.id)
     if symbol: q=q.where(SignalHistory.symbol==clean_symbol(symbol))
     if direction.upper() in {"BUY","SELL"}: q=q.where(SignalHistory.direction==direction.upper())
@@ -5412,6 +5456,7 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
     rows=list(session.scalars(q.order_by(SignalHistory.created_at.desc())).all())
     def date_ok(r):
         dt=r.created_at
+        if dt is None: return False
         if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
         d=dt.astimezone(HISTORY_LOCAL_TZ).date()
         try:
@@ -5428,7 +5473,11 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
     overall=bucket(); by_module={}; by_day={}; by_symbol={}; by_direction={}
     for r in rows:
         s=st(r); k=(r.source or "Signals")
-        dt=r.created_at if r.created_at.tzinfo else r.created_at.replace(tzinfo=timezone.utc); day=dt.astimezone(HISTORY_LOCAL_TZ).date().isoformat()
+        dt=r.created_at
+        if dt is None:
+            continue
+        if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
+        day=dt.astimezone(HISTORY_LOCAL_TZ).date().isoformat()
         targets=[overall, by_module.setdefault(k,bucket()), by_day.setdefault(day,bucket()), by_symbol.setdefault(r.symbol,bucket()), by_direction.setdefault(r.direction,bucket())]
         for b in targets:
             b["signals"]+=1
@@ -5487,7 +5536,9 @@ async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Que
             "stop_loss": setup.get("stop_loss", adv.get("stop_loss", module_signal.get("stop_loss", payload.get("stop_loss", payload.get("sl"))))),
             "take_profit": setup.get("take_profit", adv.get("take_profit", module_signal.get("take_profit", payload.get("take_profit", payload.get("tp", []))))),
         }
-        result = payload.get("result", {}) or {}
+        raw_result = payload.get("result")
+        # Legacy rows sometimes stored result as a string; never assume dict.
+        result = raw_result if isinstance(raw_result, dict) else {}
         created_at = r.created_at
         if created_at is None:
             created_at = datetime.now(timezone.utc)
