@@ -25,7 +25,7 @@ const NODE_MARKET_URL=(window.NODE_MARKET_URL||'').replace(/\/$/,'');
 const IS_NETLIFY=/netlify\.app$|netlify\.com$/i.test(location.hostname);
 const DISABLE_MARKET_WS=window.DISABLE_MARKET_WS!==false;
 async function nodeMarketHealth(){if(!NODE_MARKET_URL)return null;try{const r=await fetch(`${NODE_MARKET_URL}/health`,{cache:'no-store'});if(!r.ok) return null;return await r.json()}catch{return null}}
-async function api(path,opt={}){const headers={'Content-Type':'application/json',...(opt.headers||{})};if(token)headers.Authorization='Bearer '+token;let last;for(const base of API_CANDIDATES){try{const url=path.startsWith('http')?path:base+path;const r=await fetch(url,{...opt,headers,cache:'no-store'});let d={};try{d=await r.json()}catch{}if(!r.ok){ const detail=d?.detail; let msg=d?.message||''; if(Array.isArray(detail)) msg=detail.map(x=>x?.msg||x?.message||JSON.stringify(x)).join('; '); else if(detail&&typeof detail==='object') msg=detail.msg||detail.message||JSON.stringify(detail); else if(detail) msg=String(detail); throw Error(msg||'HTTP '+r.status); }return d}catch(e){last=e}}if(last instanceof TypeError){throw Error('Cloud backendga ulanib bo‘lmadi. Saytning cloud serveri ulanmagan yoki hozircha ishlamayapti.') }throw last}
+async function api(path,opt={}){const headers={'Content-Type':'application/json',...(opt.headers||{})};token=localStorage.getItem('trading_token')||token||'';if(token)headers.Authorization='Bearer '+token;let last;for(const base of API_CANDIDATES){try{const url=path.startsWith('http')?path:base+path;const r=await fetch(url,{...opt,headers,cache:'no-store'});let d={};try{d=await r.json()}catch{}if(!r.ok){ const detail=d?.detail; let msg=d?.message||''; if(Array.isArray(detail)) msg=detail.map(x=>x?.msg||x?.message||JSON.stringify(x)).join('; '); else if(detail&&typeof detail==='object') msg=detail.msg||detail.message||JSON.stringify(detail); else if(detail) msg=String(detail); throw Error(msg||'HTTP '+r.status); }return d}catch(e){last=e}}if(last instanceof TypeError){throw Error('Cloud backendga ulanib bo‘lmadi. Saytning cloud serveri ulanmagan yoki hozircha ishlamayapti.') }throw last}
 function tvInterval(tf){return ({'1min':'1','5min':'5','15min':'15','30min':'30','1h':'60','4h':'240','1day':'D'})[tf]||'5'}
 function mountTradingView(id, tf=interval){
  const el=$(id); if(!el)return;
@@ -269,7 +269,21 @@ function recordModuleSignal(source, response, item, intervalName, candleTime){
   if(SIGNAL_RECORD_SEEN.size>2000){for(const [k,t] of SIGNAL_RECORD_SEEN){if(now-t>900000) SIGNAL_RECORD_SEEN.delete(k);}}
   api('/api/v1/signals/record-module',{method:'POST',body:JSON.stringify({symbol,interval:tf,source,direction,confidence:x.confidence??response?.ai?.confidence??null,entry:x.entry??response?.setup?.entry??null,stop_loss:x.stop_loss??response?.setup?.stop_loss??null,take_profit:x.take_profit??response?.setup?.take_profit??[],headline:`${source} · ${direction}`,candle_time:ct,payload:{response:item||response}})}).catch(e=>console.warn('Signal history record',source,e));
 }
-async function loadHistory(){const list=document.getElementById('historyV2List');if(!list)return;if(!token){list.innerHTML='<div class="sx-empty">Kirish kerak.</div>';return;}const p=new URLSearchParams(),s=document.getElementById('historyV2Start')?.value||'',e=document.getElementById('historyV2End')?.value||'',sym=document.getElementById('historyV2Symbol')?.value||'',dir=document.getElementById('historyV2Direction')?.value||'',res=document.getElementById('historyV2Result')?.value||'',mod=document.getElementById('historyV2Module')?.value||'';if(s)p.set('start_date',s);if(e)p.set('end_date',e);if(sym)p.set('symbol',sym);if(dir)p.set('direction',dir);if(res)p.set('result',res);if(mod)p.set('module',mod);try{const [rows,stats]=await Promise.all([api('/api/v2/signal-history?limit=200&'+p.toString()),api('/api/v2/signal-history/stats?'+p.toString())]),o=stats.overall||{};const K=(l,v,c='')=>`<div class="sx-kpi"><small>${l}</small><b class="${c}">${v}</b></div>`;document.getElementById('historyV2Kpis').innerHTML=[K('TOTAL SIGNALS',o.signals??0),K('WIN RATE',`${Number(o.winrate||0).toFixed(2)}%`),K('WINS',o.wins??0,'buy'),K('LOSSES',o.losses??0,'sell'),K('ACTIVE',o.active??0,'wait'),K('AVG RR',o.avg_rr?`1:${Number(o.avg_rr).toFixed(2)}`:'—'),K('TOTAL R',`${Number(o.total_r||0)>=0?'+':''}${Number(o.total_r||0).toFixed(2)}R`),K('TOTAL PROFIT',`${Number(o.total_profit||0)>=0?'+':''}${Number(o.total_profit||0).toFixed(2)}`)].join('');const days=Object.entries(stats.by_day||{});document.getElementById('historyV2Daily').innerHTML=days.length?days.slice(0,8).map(([d,x])=>`<div class="sx-kpi"><small>${d}</small><b>${Number(x.winrate||0).toFixed(2)}%</b><div class="mini">${x.signals} signals · ${x.wins} wins · ${x.losses} losses · ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)}R</div></div>`).join(''):'<div class="sx-empty">Tanlangan period uchun kunlik statistika yo‘q.</div>';const modules=Object.entries(stats.by_module||{});document.getElementById('historyV2Modules').innerHTML=modules.length?modules.map(([m,x])=>`<div class="sx-module"><small>${escapeHtml(m)}</small><b>${Number(x.winrate||0).toFixed(2)}%</b><div class="line">${x.signals} signals · ${x.wins} wins · ${x.losses} losses</div><div class="line">R: ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)} · Avg RR: ${x.avg_rr?`1:${Number(x.avg_rr).toFixed(2)}`:'—'}</div></div>`).join(''):'<div class="sx-empty">Module statistikasi yo‘q.</div>';document.getElementById('historyV2Count').textContent=`${rows.count||0} ta signal`;list.innerHTML=(rows.items||[]).map(signalCardV2).join('')||'<div class="sx-empty">Signal topilmadi.</div>';}catch(err){list.innerHTML=`<div class="sx-empty">History yuklanmadi: ${escapeHtml(err?.message||'server xatosi')}</div>`;}}
+async function loadHistory(){
+  const list=document.getElementById('historyV2List');
+  if(!list)return;
+  const kpi=document.getElementById('historyV2Kpis'),daily=document.getElementById('historyV2Daily'),modules=document.getElementById('historyV2Modules'),count=document.getElementById('historyV2Count');
+  if(!token)token=localStorage.getItem('trading_token')||'';
+  if(!token){list.innerHTML='<div class="sx-empty"><b>Kirish kerak.</b><div class="mini" style="margin-top:6px">Signal History faqat tizimga kirgan foydalanuvchi uchun ochiladi.</div></div>';return;}
+  const p=new URLSearchParams(),s=document.getElementById('historyV2Start')?.value||'',e=document.getElementById('historyV2End')?.value||'',sym=document.getElementById('historyV2Symbol')?.value||'',dir=document.getElementById('historyV2Direction')?.value||'',res=document.getElementById('historyV2Result')?.value||'',mod=document.getElementById('historyV2Module')?.value||'';
+  if(s)p.set('start_date',s);if(e)p.set('end_date',e);if(sym)p.set('symbol',sym);if(dir)p.set('direction',dir);if(res)p.set('result',res);if(mod)p.set('module',mod);
+  list.innerHTML='<div class="sx-history-loading"><span class="sx-loading-dot"></span> Signal History yuklanmoqda…</div>';
+  const setKpis=(o)=>{const K=(l,v,c='')=>`<div class="sx-kpi"><small>${l}</small><b class="${c}">${v}</b></div>`;if(kpi)kpi.innerHTML=[K('SIGNALS',o.signals??0),K('WIN RATE',`${Number(o.winrate||0).toFixed(2)}%`),K('WINS',o.wins??0,'buy'),K('LOSSES',o.losses??0,'sell'),K('ACTIVE',o.active??0,'wait'),K('AVG RR',o.avg_rr?`1:${Number(o.avg_rr).toFixed(2)}`:'—'),K('TOTAL R',`${Number(o.total_r||0)>=0?'+':''}${Number(o.total_r||0).toFixed(2)}R`),K('TOTAL PROFIT',`${Number(o.total_profit||0)>=0?'+':''}${Number(o.total_profit||0).toFixed(2)}`)].join('');};
+  const statsPromise=api('/api/v2/signal-history/stats?'+p.toString()).then(stats=>{setKpis(stats.overall||{});const days=Object.entries(stats.by_day||{});if(daily)daily.innerHTML=days.length?days.slice(0,8).map(([d,x])=>`<div class="sx-kpi"><small>${d}</small><b>${Number(x.winrate||0).toFixed(2)}%</b><div class="mini">${x.signals} signals · ${x.wins} wins · ${x.losses} losses · ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)}R</div></div>`).join(''):'<div class="sx-empty">Tanlangan period uchun kunlik statistika yo‘q.</div>';const ms=Object.entries(stats.by_module||{});if(modules)modules.innerHTML=ms.length?ms.map(([m,x])=>`<div class="sx-module"><small>${escapeHtml(m)}</small><b>${Number(x.winrate||0).toFixed(2)}%</b><div class="line">${x.signals} signals · ${x.wins} wins · ${x.losses} losses</div><div class="line">R: ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)} · Avg RR: ${x.avg_rr?`1:${Number(x.avg_rr).toFixed(2)}`:'—'}</div></div>`).join(''):'<div class="sx-empty">Module statistikasi yo‘q.</div>';}).catch(err=>{if(kpi)kpi.innerHTML='<div class="sx-empty">Statistika yuklanmadi. <button class="btn" type="button" id="historyV2RetryStats">Qayta urinish</button></div>';throw err;});
+  const rowsPromise=api('/api/v2/signal-history?limit=200&'+p.toString()).then(rows=>{if(count)count.textContent=`${rows.count||0} ta signal`;list.innerHTML=(rows.items||[]).map(signalCardV2).join('')||'<div class="sx-empty">Tanlangan filtr bo‘yicha signal topilmadi.</div>';return rows;}).catch(err=>{list.innerHTML=`<div class="sx-empty"><b>History yuklanmadi.</b><div class="mini" style="margin-top:6px">${escapeHtml(err?.message||'Server xatosi')}</div><button class="btn" id="historyV2Retry" type="button" style="margin-top:10px">↻ Qayta urinish</button></div>`;throw err;});
+  await Promise.allSettled([rowsPromise,statsPromise]);
+}
+
 function escapeHtml(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 function histFmt(v){const n=Number(v);return Number.isFinite(n)?n.toFixed(Math.abs(n)>=100?2:4):'—';}
 function histTime(v){try{return new Date(v).toLocaleString('uz-UZ',{timeZone:'Asia/Tashkent'})}catch(_){return v||'—';}}
@@ -466,7 +480,7 @@ async function loadTrendLines(tf=trendLineInterval){
   }catch(e){$('trendLineStatus').textContent='Trend Line error: '+e.message;}
 }
 
-const AI_QA_STATE={messages:[],bound:false};
+const AI_QA_STATE={messages:[],bound:false,sending:false};
 function renderAiQaMessages(){
   const el=$('aiQaChat'); if(!el)return;
   if(!AI_QA_STATE.messages.length){el.innerHTML='<div class="ai-qa-empty">Savolingizni yozing. Masalan: <b>“Bugun XAUUSD qanaqa trendda?”</b></div>';return;}
@@ -477,39 +491,52 @@ function renderAiQaMessages(){
   }).join('');
   el.scrollTop=el.scrollHeight;
 }
+function aiQaEnsureVisible(){
+  const section=$('aiQaSection');
+  if(!section)return;
+  section.classList.add('active');
+  document.querySelectorAll('.section').forEach(s=>{if(s!==section)s.classList.remove('active');});
+  document.querySelectorAll('.sidebar .nav button[data-section]').forEach(b=>b.classList.toggle('active',b.dataset.section==='aiQaSection'));
+  setText('pageTitle','AI Q&A');
+  try{window.scrollTo({top:0,left:0,behavior:'auto'});}catch{}
+}
 async function askAiQa(question){
+  token=localStorage.getItem('trading_token')||token||'';
   if(!token){showToast('AI Q&A uchun avval tizimga kiring');$('authModal')?.classList.add('show');return;}
+  if(AI_QA_STATE.sending)return;
   const input=$('aiQaInput'), send=$('aiQaSend'), provider=$('aiQaProvider'), ctx=$('aiQaContext');
   const q=(question||input?.value||'').trim(); if(!q)return;
+  AI_QA_STATE.sending=true;
   if(input)input.value='';
+  aiQaEnsureVisible();
   AI_QA_STATE.messages.push({role:'user',text:q});
-  renderAiQaMessages();
-  AI_QA_STATE.messages.push({role:'assistant',text:'AI tahlil qilmoqda…',meta:'Live market context olinmoqda'});
+  AI_QA_STATE.messages.push({role:'assistant',text:'AI tahlil qilmoqda…',meta:'Live market + news context tekshirilmoqda'});
   renderAiQaMessages();
   if(send)send.disabled=true;
   try{
     const d=await api('/api/v1/ai/chat',{method:'POST',body:JSON.stringify({question:q,symbol,interval})});
     AI_QA_STATE.messages.pop();
-    const meta=[d.provider?`Provider: ${d.provider}`:'Fallback',d.context?.economic_events_count!=null?`News/events: ${d.context.economic_events_count}`:''].filter(Boolean).join(' · ');
-    AI_QA_STATE.messages.push({role:'assistant',text:d.answer||'AI javob qaytarmadi.',meta});
-    if(provider)provider.textContent=d.provider?`AI · ${d.provider}`:(d.ok?'AI':'FALLBACK');
+    const meta=[d.provider?`Provider: ${d.provider}`:'Context fallback',d.context?.economic_events_count!=null?`News/events: ${d.context.economic_events_count}`:''].filter(Boolean).join(' · ');
+    AI_QA_STATE.messages.push({role:'assistant',text:d.answer||'Javob tayyorlanmadi.',meta});
+    if(provider)provider.textContent=d.provider?`AI · ${d.provider}`:(d.ok?'CONTEXT':'AI ERROR');
     if(ctx)ctx.textContent=d.context?.quote_source?`LIVE · ${d.context.quote_source}`:'LIVE CONTEXT';
   }catch(e){
     AI_QA_STATE.messages.pop();
-    AI_QA_STATE.messages.push({role:'assistant',text:'AI Q&A xatosi: '+(e.message||'server error'),meta:'Request bajarilmadi'});
+    AI_QA_STATE.messages.push({role:'assistant',text:'AI Q&A xatosi: '+(e.message||'server error'),meta:'So‘rov bajarilmadi. AI provider/API holatini tekshiring.'});
     if(provider)provider.textContent='AI ERROR';
-  }finally{if(send)send.disabled=false;renderAiQaMessages();}
+  }finally{AI_QA_STATE.sending=false;if(send)send.disabled=false;renderAiQaMessages();}
 }
 function bindAiQa(){
   if(AI_QA_STATE.bound)return;
   AI_QA_STATE.bound=true;
   const form=$('aiQaForm');
-  form?.addEventListener('submit',e=>{e.preventDefault();askAiQa();});
-  document.addEventListener('click',e=>{const b=e.target.closest('[data-aiq]');if(b)askAiQa(b.dataset.aiq);});
+  form?.addEventListener('submit',e=>{e.preventDefault();e.stopPropagation();askAiQa();});
+  document.addEventListener('click',e=>{const b=e.target.closest('[data-aiq]');if(!b)return;e.preventDefault();e.stopPropagation();askAiQa(b.dataset.aiq);},true);
 }
 bindAiQa();
 
 async function loadAlgoTrade(){
+
   if(!IS_ADMIN)return;
   const status=$('algoStatus');
   if(status)status.textContent='CALCULATING…';
@@ -541,8 +568,39 @@ async function loadAlgoTrade(){
     $('algoReason').textContent='AlgoTrade error: '+(e.message||'server error');
   }
 }
-function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'AlgoTrade'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section')loadMT5Status().catch(()=>{});if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
-if(id==='algotradeSection')loadAlgoTrade().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
+function openSection(id){
+  const target=$(id);
+  if(!target)return false;
+  if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return false;}
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  target.classList.add('active');
+  document.body.classList.toggle('sx-overview-mode', id==='overview');
+  document.body.dataset.activeSection=id;
+  document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));
+  const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'AlgoTrade'};
+  if($('pageTitle'))$('pageTitle').textContent=titles[id]||'Trading SaaS';
+  if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}
+  if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}
+  if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});
+  if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});
+  if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});
+  if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});
+  if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});
+  if(id==='signalSection')loadSelectedSignal(signalInterval);
+  if(id==='calendarSection')loadCalendar();
+  if(id==='sessionsSection')loadSessions();
+  if(id==='activeSessionsSection')loadActiveSessions();
+  if(id==='mtfSection')loadMtf();
+  if(id==='historySection'){loadHistory().catch(()=>{});}
+  if(id==='signalsSection')loadAutoSignals();
+  if(id==='ictSection')loadICTSignals();
+  if(id==='mt5Section'){loadMT5Status().catch(()=>{});loadMT5GatewayAccounts().catch(()=>{});}
+  if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
+  if(id==='algotradeSection')loadAlgoTrade().catch(()=>{});
+  if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{});if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active'))loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}
+  requestAnimationFrame(()=>{window.scrollTo({top:0,left:0,behavior:'auto'});if(id==='historySection')target.scrollTop=0;});
+  return true;
+}
 
 document.addEventListener('click',e=>{const b=e.target.closest('#refreshAlgoTrade');if(b)loadAlgoTrade().catch(()=>{})});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-classic-interval]');if(b){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===b));classicInterval=b.dataset.classicInterval;loadClassicTrade(classicInterval)}});
@@ -688,6 +746,32 @@ async function revokeAllSessions(){
   openSection('overview');
 }
 
+async function loadMT5GatewayAccounts(){
+  const grid=$('mt5GatewayAccounts'); if(!grid)return;
+  if(!token){grid.innerHTML='<div class="mini">MT5 hisoblarini ko‘rish uchun tizimga kiring.</div>';return;}
+  grid.innerHTML='<div class="mini">MT5 hisoblar tekshirilmoqda…</div>';
+  try{
+    const d=await api('/api/v1/mt5/gateway/accounts');
+    const rows=d.items||[];
+    if(!rows.length){grid.innerHTML='<div class="mini">Hali MT5 hisob ulanmagan. Pairing code oling va SignalX_MultiBroker_Gateway_EA.mq5 orqali MT5 terminalni ulang.</div>';return;}
+    grid.innerHTML=rows.map(a=>{
+      const status=a.connected?'🟢 CONNECTED':'🔴 OFFLINE';
+      const type=(a.account_type||'demo').toUpperCase();
+      const auto=a.auto_trade_enabled?'🟢 AUTO ON':'⚪ AUTO OFF';
+      return `<div class="advanced-card mt5-account-card"><div class="advanced-head"><div><div class="mini">${safeText(a.broker||'Broker')} · ${type}</div><div class="advanced-signal ${a.connected?'buy':'sell'}">${safeText(status)}</div></div><div style="display:flex;gap:6px;flex-wrap:wrap"><span class="pill">${safeText(a.login||'—')}</span><span class="pill">${safeText(auto)}</span></div></div><div class="grid4" style="margin-top:8px"><div class="metric"><small>Server</small><b>${safeText(a.server||'—')}</b></div><div class="metric"><small>Balance</small><b>${a.balance==null?'—':fmt(a.balance)} ${safeText(a.currency||'')}</b></div><div class="metric"><small>Equity</small><b>${a.equity==null?'—':fmt(a.equity)} ${safeText(a.currency||'')}</b></div><div class="metric"><small>Free Margin</small><b>${a.free_margin==null?'—':fmt(a.free_margin)} ${safeText(a.currency||'')}</b></div></div><div class="mini" style="margin-top:7px">Leverage: 1:${safeText(a.leverage||0)} · Trade allowed: ${a.trade_allowed?'YES':'NO'} · EA: ${safeText(a.ea_version||'—')} · Heartbeat: ${a.last_seen_seconds==null?'—':a.last_seen_seconds+'s'}</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button class="btn" type="button" data-mt5-gateway-auto="${a.id}" data-enabled="${a.auto_trade_enabled?'0':'1'}">${a.auto_trade_enabled?'🔴 AUTO OFF':'🟢 AUTO ON'}</button><button class="btn danger" type="button" data-mt5-gateway-disconnect="${a.id}">DISCONNECT</button></div></div>`;
+    }).join('');
+  }catch(e){grid.innerHTML=`<div class="mini">MT5 Gateway xatosi: ${safeText(e.message||'server xatosi')}</div>`;}
+}
+async function createMT5Pairing(){
+  const out=$('mt5PairingOut');
+  try{
+    const label=String($('mt5PairingLabel')?.value||'My MT5 Account').trim()||'My MT5 Account';
+    const d=await api('/api/v1/mt5/gateway/pair',{method:'POST',body:JSON.stringify({label})});
+    if(out)out.innerHTML=`<div class="signal-box"><b>PAIRING CODE: ${safeText(d.pairing_code)}</b><div class="mini">Kod ${safeText(d.expires_in)} soniya amal qiladi. MT5 terminalda SignalX_MultiBroker_Gateway_EA.mq5 → PairingCode maydoniga kiriting.</div></div>`;
+  }catch(e){if(out)out.textContent=e.message||'Pairing xatosi';}
+}
+async function mt5GatewayToggle(id,enabled){await api(`/api/v1/mt5/gateway/accounts/${id}/auto-trade`,{method:'POST',body:JSON.stringify({enabled})});await loadMT5GatewayAccounts();}
+async function mt5GatewayDisconnect(id){if(!confirm('Ushbu MT5 hisobni SignalXdan uzasizmi?'))return;await api(`/api/v1/mt5/gateway/accounts/${id}`,{method:'DELETE'});await loadMT5GatewayAccounts();}
 async function loadMT5Status(){ if(!IS_ADMIN)return;
   const d=await api(`/api/v1/mt5/status?symbol=${encodeURIComponent(symbol)}`); const st=d.state||{};
   const connState=String(st.connection_state||'').toUpperCase();
@@ -716,7 +800,7 @@ function bindCriticalButtons(){
   const authClose=$('authClose'); if(authClose&&authClose.dataset.bound!=='1'){authClose.dataset.bound='1';authClose.addEventListener('click',()=>{$('authModal')?.classList.remove('show');});}
   const authModal=$('authModal'); if(authModal&&authModal.dataset.bound!=='1'){authModal.dataset.bound='1';authModal.addEventListener('click',e=>{if(e.target===authModal)authModal.classList.remove('show');});}
   const authSwitch=$('authSwitch'); if(authSwitch&&authSwitch.dataset.bound!=='1'){authSwitch.dataset.bound='1';authSwitch.addEventListener('click',e=>{e.preventDefault();setAuth(authMode==='login'?'register':'login');});authSwitch.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setAuth(authMode==='login'?'register':'login');}});}
-  run('refreshSignalEngine',()=>loadSignalEngine()); run('refreshAIProviders',async()=>{await loadAIProviders();bindAIControls()}); run('refreshAdvanced',()=>loadAdvancedSignals()); run('refreshICT',()=>loadICTSignals()); run('refreshClassic',()=>loadClassicTrade(classicInterval)); run('refreshSNR',()=>loadSNR(snrInterval)); run('refreshStats',async()=>{await loadStats();await loadHistory()}); run('refreshSmartAnalysis',()=>loadSmartAnalysis()); run('refreshAISignals',()=>loadAISignals()); run('getAIAnalysis',()=>loadAISignals()); run('dedRefreshAISignals',()=>loadDedicatedAISignals()); run('dedGetAIAnalysis',()=>loadDedicatedAISignals()); run('refreshCalendar',()=>loadCalendar()); run('refreshHistory',async()=>{await loadStats();await loadHistory()}); run('refreshTrendLines',()=>loadTrendLines(trendLineInterval)); run('connectMT5',()=>connectMT5()); run('saveMT5Lot',()=>saveMT5Lot()); run('mt5AutoOn',()=>setMT5Auto(true)); run('mt5AutoOff',()=>setMT5Auto(false)); run('refreshMT5',()=>loadMT5Status()); run('refreshActiveSessions',()=>loadActiveSessions()); run('revokeOtherSessions',()=>revokeOtherSessions()); run('revokeAllSessions',()=>revokeAllSessions()); run('openFullHistory',()=>{openSection('historySection');});
+  run('refreshSignalEngine',()=>loadSignalEngine()); run('refreshAIProviders',async()=>{await loadAIProviders();bindAIControls()}); run('refreshAdvanced',()=>loadAdvancedSignals()); run('refreshICT',()=>loadICTSignals()); run('refreshClassic',()=>loadClassicTrade(classicInterval)); run('refreshSNR',()=>loadSNR(snrInterval)); run('refreshStats',async()=>{await loadStats();await loadHistory()}); run('refreshSmartAnalysis',()=>loadSmartAnalysis()); run('refreshAISignals',()=>loadAISignals()); run('getAIAnalysis',()=>loadAISignals()); run('dedRefreshAISignals',()=>loadDedicatedAISignals()); run('dedGetAIAnalysis',()=>loadDedicatedAISignals()); run('refreshCalendar',()=>loadCalendar()); run('refreshHistory',async()=>{await loadStats();await loadHistory()}); run('refreshTrendLines',()=>loadTrendLines(trendLineInterval)); run('connectMT5',()=>connectMT5()); run('saveMT5Lot',()=>saveMT5Lot()); run('mt5AutoOn',()=>setMT5Auto(true)); run('mt5AutoOff',()=>setMT5Auto(false)); run('refreshMT5',async()=>{await loadMT5Status();await loadMT5GatewayAccounts();}); run('refreshMT5Gateway',()=>loadMT5GatewayAccounts()); run('createMT5Pairing',()=>createMT5Pairing()); run('refreshActiveSessions',()=>loadActiveSessions()); run('revokeOtherSessions',()=>revokeOtherSessions()); run('revokeAllSessions',()=>revokeAllSessions()); run('openFullHistory',()=>{openSection('historySection');});
 }
 function bindUIActions(){
   document.querySelectorAll('.tfbar').forEach(bar=>{if(bar.dataset.bound==='1')return;bar.dataset.bound='1';bar.addEventListener('click',e=>{const b=e.target.closest('[data-interval]');if(b&&bar.contains(b))setTf(b.dataset.interval);const s=e.target.closest('[data-signal-interval]');if(s&&bar.contains(s)){document.querySelectorAll('[data-signal-interval]').forEach(x=>x.classList.toggle('active',x===s));signalInterval=s.dataset.signalInterval;loadSelectedSignal(signalInterval).catch(()=>{});}const c=e.target.closest('[data-classic-interval]');if(c&&bar.contains(c)){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===c));classicInterval=c.dataset.classicInterval;loadClassicTrade(classicInterval).catch(()=>{});}const n=e.target.closest('[data-snr-interval]');if(n&&bar.contains(n)){document.querySelectorAll('[data-snr-interval]').forEach(x=>x.classList.toggle('active',x===n));snrInterval=n.dataset.snrInterval;loadSNR(snrInterval).catch(()=>{});}})});
@@ -724,12 +808,14 @@ function bindUIActions(){
   const xauBtn=$('xauUsdPageBtn'); if(xauBtn && xauBtn.dataset.bound!=='1'){xauBtn.dataset.bound='1';xauBtn.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();window.location.assign('/');});}
   if(document.body.dataset.actionsBound==='1')return;document.body.dataset.actionsBound='1';
   document.addEventListener('click',e=>{
+    const ga=e.target.closest?.('[data-mt5-gateway-auto]'); if(ga){e.preventDefault();e.stopPropagation();mt5GatewayToggle(Number(ga.dataset.mt5GatewayAuto),ga.dataset.enabled==='1').catch(err=>showToast(err?.message||'MT5 AutoTrade xatosi'));return;}
+    const gd=e.target.closest?.('[data-mt5-gateway-disconnect]'); if(gd){e.preventDefault();e.stopPropagation();mt5GatewayDisconnect(Number(gd.dataset.mt5GatewayDisconnect)).catch(err=>showToast(err?.message||'MT5 uzish xatosi'));return;}
     const revoke=e.target.closest?.('.active-session-revoke');
     if(revoke){e.preventDefault();e.stopPropagation();revokeOneSession(revoke.dataset.sessionId,revoke.dataset.current==='1').catch(err=>showToast(err?.message||'Seansni yopib bo\'lmadi'));return;}
     const b=e.target.closest?.('button');if(!b)return;const id=b.id;
     if(id==='authBtn'){e.preventDefault();e.stopPropagation();const modal=$('authModal');if(!modal)return;if(String(b.textContent||'').trim()==='Chiqish'){logoutUser();return;}setAuth('login');setText('authMsg','');modal.classList.add('show');setTimeout(()=>$('email')?.focus(),50);return;}
     if(id==='authSwitch'){e.preventDefault();setAuth(authMode==='login'?'register':'login');return;}
-    const actions={saveSignal:saveSignal,refreshSignalEngine:()=>loadSignalEngine(),refreshAIProviders:()=>loadAIProviders(),refreshICT:()=>loadICTSignals(),refreshAdvanced:()=>loadAdvancedSignals(),refreshClassic:()=>loadClassicTrade(classicInterval),refreshSNR:()=>loadSNR(snrInterval),refreshStats:async()=>{await loadStats();await loadHistory()},refreshSmartAnalysis:()=>loadSmartAnalysis(),refreshAISignals:()=>loadAISignals(),refreshCalendar:()=>loadCalendar(),refreshHistory:async()=>{await loadStats();await loadHistory()},connectMT5:()=>connectMT5(),saveMT5Lot:()=>saveMT5Lot(),mt5AutoOn:()=>setMT5Auto(true),mt5AutoOff:()=>setMT5Auto(false),refreshMT5:()=>loadMT5Status(),refreshActiveSessions:()=>loadActiveSessions(),revokeOtherSessions:()=>revokeOtherSessions(),revokeAllSessions:()=>revokeAllSessions()};
+    const actions={saveSignal:saveSignal,refreshSignalEngine:()=>loadSignalEngine(),refreshAIProviders:()=>loadAIProviders(),refreshICT:()=>loadICTSignals(),refreshAdvanced:()=>loadAdvancedSignals(),refreshClassic:()=>loadClassicTrade(classicInterval),refreshSNR:()=>loadSNR(snrInterval),refreshStats:async()=>{await loadStats();await loadHistory()},refreshSmartAnalysis:()=>loadSmartAnalysis(),refreshAISignals:()=>loadAISignals(),refreshCalendar:()=>loadCalendar(),refreshHistory:async()=>{await loadStats();await loadHistory()},connectMT5:()=>connectMT5(),saveMT5Lot:()=>saveMT5Lot(),mt5AutoOn:()=>setMT5Auto(true),mt5AutoOff:()=>setMT5Auto(false),refreshMT5:async()=>{await loadMT5Status();await loadMT5GatewayAccounts()},refreshMT5Gateway:()=>loadMT5GatewayAccounts(),createMT5Pairing:()=>createMT5Pairing(),refreshActiveSessions:()=>loadActiveSessions(),revokeOtherSessions:()=>revokeOtherSessions(),revokeAllSessions:()=>revokeAllSessions()};
     if(actions[id]){e.preventDefault();e.stopPropagation();b.disabled=true;const old=b.innerHTML;b.innerHTML='⟳ Ishlanmoqda…';Promise.resolve().then(actions[id]).then(()=>showToast(id.startsWith('refresh')?'Yangilandi':'Bajarildi')).catch(err=>{console.error('UI ACTION ERROR',id,err);showToast((id.startsWith('refresh')?'Yangilash':'Amal')+' xatosi: '+(err?.message||'server xatosi'));}).finally(()=>{b.disabled=false;b.innerHTML=old;});}
   });
 }
@@ -841,12 +927,12 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
 })();;
 
 
-(function bindHistoryV2(){
-  function dateKeyLocal(d){return d.toLocaleDateString('en-CA',{timeZone:'Asia/Tashkent'});}
-  function applyRange(range){const s=document.getElementById('historyV2Start'),e=document.getElementById('historyV2End');const now=new Date();if(range==='all'){s.value='';e.value='';}else if(range==='today'){const k=dateKeyLocal(now);s.value=k;e.value=k;}else if(range==='yesterday'){const d=new Date(now.getTime()-86400000);const k=dateKeyLocal(d);s.value=k;e.value=k;}else{const k=dateKeyLocal(now);const d=new Date(now.getTime()-Number(range)*86400000);s.value=dateKeyLocal(d);e.value=k;}document.querySelectorAll('.h2-date').forEach(b=>b.classList.toggle('active',b.dataset.range===range));loadHistory();}
-  document.addEventListener('click',e=>{const b=e.target.closest('.h2-date');if(b){applyRange(b.dataset.range);return;}if(e.target.closest('#historyV2Refresh')){loadHistory();loadStats?.();return;}const d=e.target.closest('[data-history-detail]');if(d){const id=d.dataset.historyDetail;api('/api/v2/signal-history?limit=500').then(r=>{const x=(r.items||[]).find(i=>i.signal_id===id);if(!x)return;document.getElementById('historyDetailTitle').textContent=`${x.direction} · ${x.symbol}`;document.getElementById('historyDetailMeta').textContent=`${x.signal_id} · ${x.source} · ${tfName(x.interval)}`;document.getElementById('historyDetailBody').innerHTML=renderHistoryDetail(x);document.getElementById('historyDetailModal').setAttribute('aria-hidden','false');}).catch(()=>{});}});
-  document.addEventListener('change',e=>{if(e.target.id&&['historyV2Start','historyV2End','historyV2Symbol','historyV2Direction','historyV2Result','historyV2Module'].includes(e.target.id))loadHistory();});
-  document.addEventListener('click',e=>{if(e.target.closest('#historyDetailClose')||e.target.id==='historyDetailModal')document.getElementById('historyDetailModal')?.setAttribute('aria-hidden','true');});
-})();
-
-(function bindHistoryV2(){function key(d){return d.toLocaleDateString('en-CA',{timeZone:'Asia/Tashkent'});}function range(r){const s=document.getElementById('historyV2Start'),e=document.getElementById('historyV2End'),now=new Date();if(r==='all'){s.value='';e.value='';}else if(r==='today'){const k=key(now);s.value=k;e.value=k;}else if(r==='yesterday'){const d=new Date(now.getTime()-86400000),k=key(d);s.value=k;e.value=k;}else{const k=key(now),d=new Date(now.getTime()-Number(r)*86400000);s.value=key(d);e.value=k;}document.querySelectorAll('.h2-date').forEach(b=>b.classList.toggle('active',b.dataset.range===r));loadHistory();}document.addEventListener('click',e=>{const b=e.target.closest('.h2-date');if(b){range(b.dataset.range);return;}if(e.target.closest('#historyV2Refresh')){loadHistory();return;}const d=e.target.closest('[data-history-detail]');if(d){api('/api/v2/signal-history?limit=500').then(r=>{const x=(r.items||[]).find(i=>i.signal_id===d.dataset.historyDetail);if(!x)return;document.getElementById('historyDetailTitle').textContent=`${x.direction} · ${x.symbol}`;document.getElementById('historyDetailMeta').textContent=`${x.signal_id} · ${x.source} · ${tfName(x.interval)}`;document.getElementById('historyDetailBody').innerHTML=renderHistoryDetail(x);document.getElementById('historyDetailModal').setAttribute('aria-hidden','false');}).catch(()=>{});}});document.addEventListener('change',e=>{if(['historyV2Start','historyV2End','historyV2Symbol','historyV2Direction','historyV2Result','historyV2Module'].includes(e.target.id))loadHistory();});document.addEventListener('click',e=>{if(e.target.closest('#historyDetailClose')||e.target.id==='historyDetailModal')document.getElementById('historyDetailModal')?.setAttribute('aria-hidden','true');});})();
+(function bindHistoryV2Single(){
+  if(window.__SIGNALX_HISTORY_V2_BOUND__)return;
+  window.__SIGNALX_HISTORY_V2_BOUND__=true;
+  const ids=['historyV2Start','historyV2End','historyV2Symbol','historyV2Direction','historyV2Result','historyV2Module'];
+  const key=d=>d.toLocaleDateString('en-CA',{timeZone:'Asia/Tashkent'});
+  const applyRange=r=>{const s=document.getElementById('historyV2Start'),e=document.getElementById('historyV2End'),now=new Date();if(r==='all'){s.value='';e.value='';}else if(r==='today'){const k=key(now);s.value=k;e.value=k;}else if(r==='yesterday'){const d=new Date(now.getTime()-86400000),k=key(d);s.value=k;e.value=k;}else{const k=key(now),d=new Date(now.getTime()-Number(r)*86400000);s.value=key(d);e.value=k;}document.querySelectorAll('.h2-date').forEach(b=>b.classList.toggle('active',b.dataset.range===r));loadHistory().catch(()=>{});};
+  document.addEventListener('click',e=>{const b=e.target.closest('.h2-date');if(b){applyRange(b.dataset.range);return;}if(e.target.closest('#historyV2Refresh')||e.target.closest('#historyV2Retry')||e.target.closest('#historyV2RetryStats')){loadHistory().catch(()=>{});return;}const d=e.target.closest('[data-history-detail]');if(d){api('/api/v2/signal-history?limit=500').then(r=>{const x=(r.items||[]).find(i=>i.signal_id===d.dataset.historyDetail);if(!x)return;document.getElementById('historyDetailTitle').textContent=`${x.direction} · ${x.symbol}`;document.getElementById('historyDetailMeta').textContent=`${x.signal_id} · ${x.source} · ${tfName(x.interval)}`;document.getElementById('historyDetailBody').innerHTML=renderHistoryDetail(x);document.getElementById('historyDetailModal').setAttribute('aria-hidden','false');}).catch(err=>showToast(err?.message||'Signal detail yuklanmadi'));return;}if(e.target.closest('#historyDetailClose')||e.target.id==='historyDetailModal')document.getElementById('historyDetailModal')?.setAttribute('aria-hidden','true');});
+  document.addEventListener('change',e=>{if(ids.includes(e.target.id))loadHistory().catch(()=>{});});
+})();;

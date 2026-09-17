@@ -718,8 +718,66 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 <style id="ai-qa-ui">
 .ai-qa-page{max-width:1100px;margin:0 auto}.ai-qa-suggestions{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0}.ai-qa-suggestions .btn{font-size:12px}.ai-qa-chat{min-height:300px;max-height:58vh;overflow:auto;border:1px solid var(--line);border-radius:14px;background:rgba(4,8,13,.68);padding:14px;display:flex;flex-direction:column;gap:10px}.ai-qa-empty{margin:auto;color:var(--muted);text-align:center;max-width:600px;padding:50px 20px}.ai-qa-msg{display:flex}.ai-qa-msg.user{justify-content:flex-end}.ai-qa-bubble{max-width:82%;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:#0b1118;line-height:1.6;white-space:pre-wrap}.ai-qa-msg.user .ai-qa-bubble{background:#102039;border-color:#24436a}.ai-qa-meta{font-size:10px;color:var(--muted);margin-top:5px}.ai-qa-form{margin-top:12px}.ai-qa-input{resize:vertical;min-height:82px;margin-bottom:8px}.ai-qa-actions{display:flex;justify-content:space-between;gap:10px;align-items:center}.ai-qa-actions .mini{max-width:70%}.ai-qa-disclaimer{margin-top:10px;color:var(--muted);font-size:10px;line-height:1.5}.ai-qa-chip{display:inline-flex;gap:5px;align-items:center}.ai-qa-typing{color:var(--muted);font-size:12px;padding:6px}@media(max-width:700px){.ai-qa-actions{align-items:stretch;flex-direction:column}.ai-qa-actions .mini{max-width:none}.ai-qa-bubble{max-width:92%}}
 </style>
+
+<style id="signalx-history-ui-final-20260917">
+/* HISTORY UI FINAL: compact desktop/mobile and no global hero on non-overview sections. */
+.signalx-visual-hero{display:none!important;}
+body.sx-overview-mode .signalx-visual-hero{display:block!important;}
+#historySection{position:relative!important;width:100%!important;min-width:0!important;max-width:none!important;margin:0!important;padding:0!important;}
+#historySection .sx-history-v2{max-width:100%!important;width:100%!important;gap:9px!important;}
+#historySection .sx-history-header{min-height:42px!important;padding:0 2px!important;}
+#historySection .sx-history-header h2{font-size:20px!important;margin:0!important;line-height:1.15!important;}
+#historySection .sx-history-header .mini{font-size:11px!important;}
+#historySection .sx-history-header .btn{min-height:34px!important;padding:6px 10px!important;}
+#historySection .sx-history-filters{grid-template-columns:repeat(6,minmax(110px,1fr))!important;gap:7px!important;padding:9px!important;border-radius:12px!important;}
+#historySection .filter-block{gap:4px!important;}
+#historySection .filter-block>span{font-size:9px!important;}
+#historySection .filter-block select,#historySection .filter-block input{min-height:34px!important;height:34px!important;font-size:12px!important;padding:4px 7px!important;}
+#historySection .filter-row{gap:5px!important;}
+#historySection .h2-date{padding:6px 9px!important;font-size:11px!important;border-radius:8px!important;}
+#historySection .sx-kpi-grid{grid-template-columns:repeat(8,minmax(0,1fr))!important;gap:7px!important;}
+#historySection .sx-kpi,#historySection .sx-module{padding:9px!important;border-radius:11px!important;}
+#historySection .sx-kpi small,#historySection .sx-module small{font-size:9px!important;}
+#historySection .sx-kpi b{font-size:17px!important;margin-top:3px!important;}
+#historySection .sx-history-subhead{min-height:27px!important;margin-top:2px!important;}
+#historySection .sx-history-subhead h3{font-size:14px!important;margin:0!important;}
+#historySection .sx-day-performance,#historySection .sx-module-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:7px!important;}
+#historySection .sx-module b{font-size:16px!important;}
+#historySection .sx-module .line{font-size:10px!important;margin-top:3px!important;}
+#historySection .sx-signal-list{gap:7px!important;}
+#historySection .sx-signal-card{padding:10px!important;border-radius:12px!important;}
+#historySection .sx-signal-top{gap:8px!important;}
+#historySection .sx-signal-badge{font-size:16px!important;}
+#historySection .sx-signal-meta{font-size:10px!important;}
+#historySection .sx-signal-levels{gap:5px!important;margin-top:7px!important;}
+#historySection .sx-level{padding:6px!important;border-radius:8px!important;}
+#historySection .sx-level span{font-size:8px!important;}
+#historySection .sx-level b{font-size:12px!important;margin-top:2px!important;}
+#historySection .sx-signal-bottom{margin-top:7px!important;}
+#historySection .sx-status{padding:4px 7px!important;font-size:9px!important;}
+#historySection .sx-history-loading{padding:16px!important;border:1px dashed rgba(255,255,255,.14);border-radius:12px;text-align:center;color:rgba(255,255,255,.72);}
+#historySection .sx-loading-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#36d7ff;box-shadow:0 0 10px rgba(54,215,255,.55);margin-right:6px;}
+@media(max-width:1100px){
+  #historySection .sx-history-filters{grid-template-columns:repeat(3,minmax(0,1fr))!important;}
+  #historySection .filter-block.wide{grid-column:span 3!important;}
+  #historySection .sx-kpi-grid{grid-template-columns:repeat(4,minmax(0,1fr))!important;}
+  #historySection .sx-day-performance,#historySection .sx-module-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}
+}
+@media(max-width:600px){
+  #historySection .sx-history-header{align-items:flex-start!important;}
+  #historySection .sx-history-filters{grid-template-columns:repeat(2,minmax(0,1fr))!important;}
+  #historySection .filter-block.wide{grid-column:span 2!important;}
+  #historySection .sx-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}
+  #historySection .sx-day-performance,#historySection .sx-module-grid{grid-template-columns:1fr!important;}
+  #historySection .sx-signal-levels{grid-template-columns:repeat(3,minmax(0,1fr))!important;}
+}
+</style>
 </head>
 <body>
+<script id="signalx-overview-mode-init-20260917">
+(function(){function sync(){var a=document.querySelector('.section.active');document.body.classList.toggle('sx-overview-mode',!!a&&a.id==='overview');document.body.dataset.activeSection=a?a.id:'overview';}if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',sync,{once:true});else sync();})();
+</script>
+
 <div class="gold-3d-orb"></div>
 <div class="gold-photo-bg" aria-hidden="true"></div>
 <div class="sx-sidebar-overlay" id="sxSidebarOverlay"></div><div class="app">
@@ -913,7 +971,36 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 <section class="section" id="calendarSection"><div class="card"><div class="section-head"><h2>Economic Calendar</h2><span class="pill">TradingView LIVE · Global</span></div><div id="tvCalendarWidget" style="min-height:700px;border:1px solid var(--line);border-radius:10px;overflow:hidden"></div><div class="mini" style="margin-top:8px">Global economic events, currencies and impact levels are provided directly by TradingView. No user API key is required.</div></div></section>
   <section class="section" id="activeSessionsSection"><div class="card"><div class="section-head"><div><h2>Aktiv seanslar</h2><div class="mini">Hisobingizga kirgan qurilmalar va oxirgi faollik</div></div><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="refreshActiveSessions" type="button">↻ Yangilash</button><button class="btn danger" id="revokeOtherSessions" type="button">Boshqa seanslarni yopish</button><button class="btn danger" id="revokeAllSessions" type="button">⛔ Barchasini yopish</button></div></div><div class="grid2" id="activeSessionsGrid"><div class="mini">Seanslar yuklanmoqda…</div></div></div></section>
   <section class="section" id="sessionsSection"><div class="card"><div class="section-head"><h2>Market Sessions</h2><span class="pill" id="sessionClock2">—</span></div><div class="sessions" id="sessions2"></div></div></section>
-  <section class="section admin-only" id="mt5Section"><div class="card"><div class="section-head"><div><h2>MetaTrader 5</h2><div class="mini">Exness DEMO · MT5 EA/Bridge orqali xavfsiz ulanish</div></div><div><span class="pill" id="mt5Status">🔴 DISCONNECTED</span> <button class="btn" id="refreshMT5" type="button">↻ Yangilash</button></div></div><div class="grid2"><div><label class="mini">MT5 Login / Account number</label><input class="input" id="mt5Login" inputmode="numeric" placeholder="12345678" autocomplete="off"><label class="mini">MT5 Server</label><input class="input" id="mt5Server" placeholder="Exness-MT5..." autocomplete="off"><label class="mini">Trading Password</label><input class="input" id="mt5Password" type="password" placeholder="Trading password" autocomplete="off"><div class="mini" style="margin:4px 0 10px;color:var(--muted)">Parol serverda saqlanmaydi. Haqiqiy broker ulanishi MT5 terminalidagi EA/Bridge orqali tasdiqlanadi.</div><button class="btn primary" id="connectMT5" type="button">CONNECT MT5 DEMO</button></div><div><div class="grid2"><div class="metric"><small>Balance</small><b id="mt5Balance">—</b></div><div class="metric"><small>Equity</small><b id="mt5Equity">—</b></div><div class="metric"><small>Free Margin</small><b id="mt5FreeMargin">—</b></div><div class="metric"><small>Open Positions</small><b id="mt5Positions">0</b></div><div class="metric"><small>Heartbeat</small><b id="mt5Heartbeat">—</b><div class="mini" id="mt5LastError">—</div></div></div><div class="signal-box" style="margin-top:10px"><div class="section-head"><h3>AUTO TRADING</h3><span class="pill" id="mt5AutoState">🔴 OFF</span></div><div class="mini" id="mt5AutoInfo">OFF bo‘lsa yangi orderlar MT5'ga yuborilmaydi.</div><div style="margin-top:10px"><label class="mini">Lot hajmi</label><input class="input" id="mt5Lot" type="number" min="0.01" max="100" step="0.01" value="0.01" placeholder="0.01"><div class="mini">Masalan: 0.01, 0.02, 0.10. Yangi auto orderlar shu lot bilan yuboriladi.</div></div><div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap"><button class="btn" id="saveMT5Lot" type="button">💾 Lotni saqlash</button><button class="btn" id="mt5AutoOn" type="button">🟢 AUTO ON</button><button class="btn danger" id="mt5AutoOff" type="button">🔴 AUTO OFF</button></div></div></div></div><div class="mini" style="margin-top:12px">Faqat DEMO rejim. Book + OpenAI bundan mustasno: boshqa barcha BUY/SELL signal manbalari XAUUSD AUTO TRADE navbatiga uzatiladi.</div></div></div>
+  <section class="section admin-only" id="mt5Section">
+  <div class="card">
+    <div class="section-head">
+      <div><h2>MetaTrader 5</h2><div class="mini">Demo yoki Real · istalgan mos MT5 broker · EA/Gateway orqali xavfsiz ulanish</div></div>
+      <div><span class="pill" id="mt5Status">🔴 DISCONNECTED</span> <button class="btn" id="refreshMT5" type="button">↻ Yangilash</button></div>
+    </div>
+
+    <div class="signal-box" style="margin-bottom:12px">
+      <div class="section-head"><div><h3>MT5 ACCOUNT GATEWAY</h3><div class="mini">Broker login/parolini saytga kiritish shart emas. MT5 terminal kerakli hisobga login qilinadi va EA pairing orqali ulanadi.</div></div><button class="btn" id="refreshMT5Gateway" type="button">↻ Accounts</button></div>
+      <div id="mt5GatewayAccounts"><div class="mini">Ulangan hisoblar tekshirilmoqda…</div></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card" style="margin:0">
+        <div class="section-head"><div><h3>Yangi hisob ulash</h3><div class="mini">Demo / Real</div></div></div>
+        <label class="mini">Account nomi</label>
+        <input class="input" id="mt5PairingLabel" value="My MT5 Account" placeholder="Exness Real / Demo">
+        <button class="btn primary" id="createMT5Pairing" type="button">PAIRING CODE OLISH</button>
+        <div id="mt5PairingOut" class="mini" style="margin-top:8px"></div>
+        <div class="mini" style="margin-top:8px">1) MT5 terminalda kerakli broker/account'ga login qiling. 2) <b>SignalX_MultiBroker_Gateway_EA.mq5</b> ni o‘rnating. 3) PairingCode'ni EA'ga kiriting. 4) EA ishlashi bilan hisob shu yerda paydo bo‘ladi.</div>
+      </div>
+      <div class="card" style="margin:0">
+        <div class="section-head"><h3>AUTO TRADING</h3><span class="pill" id="mt5AutoState">🔴 OFF</span></div>
+        <div class="mini" id="mt5AutoInfo">Gateway orqali ulangan account'ning AutoTrade holati shu yerda ko‘rinadi.</div>
+        <div class="grid4" style="margin-top:10px"><div class="metric"><small>Balance</small><b id="mt5Balance">—</b></div><div class="metric"><small>Equity</small><b id="mt5Equity">—</b></div><div class="metric"><small>Free Margin</small><b id="mt5FreeMargin">—</b></div><div class="metric"><small>Open Positions</small><b id="mt5Positions">0</b></div></div>
+        <div class="mini" style="margin-top:8px">Eski MT5 Bridge statusi ham alohida tekshiriladi; yangi Gateway account'lari yuqoridagi ro‘yxatdan boshqariladi.</div>
+      </div>
+    </div>
+  </div>
+</section>
 <section class="section" id="historySection">
   <div class="sx-history-v2">
     <div class="sx-history-header"><div><h2>Signal History</h2><div class="mini">Professional trading journal · signal → analysis → evidence → result → performance</div></div><button class="btn" id="historyV2Refresh" type="button">↻ Yangilash</button></div>
@@ -951,7 +1038,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 </div>
 
 <script src="config.js?v=20260908f"></script>
-<script src="app.js?v=20260915-xau-only"></script>
+<script src="app.js?v=20260917-history-ui-v3"></script>
 
 <script id="signalx-sidebar-fix-20260913">
 (function(){

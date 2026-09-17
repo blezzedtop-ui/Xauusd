@@ -3457,6 +3457,35 @@ async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
     }
 
 
+
+def _ai_qa_local_fallback(context: dict[str, Any], question: str) -> tuple[str, str, float, str]:
+    """Useful no-provider fallback based only on already-fetched live context."""
+    q=(question or '').lower()
+    analysis=context.get('analysis') or {}
+    mtf=context.get('mtf') or {}
+    direction=str(analysis.get('direction') or mtf.get('overall') or 'NEUTRAL').upper()
+    price=context.get('current_price')
+    events=context.get('economic_calendar',{}).get('events') or []
+    tech=analysis.get('technical') or {}
+    levels=analysis.get('levels') or {}
+    bits=[]
+    if price is not None: bits.append(f"Joriy narx: {price}.")
+    bits.append(f"Kontekst bo‘yicha yo‘nalish: {direction}.")
+    if tech.get('rsi') is not None: bits.append(f"RSI: {tech.get('rsi')}.")
+    if levels.get('pivot') is not None: bits.append(f"Pivot: {levels.get('pivot')}.")
+    if events:
+        names=[str(e.get('event') or 'event') for e in events[:5]]
+        bits.append(f"Yaqin economic calendar’da {len(events)} ta event bor; muhimlari: {', '.join(names)}.")
+    elif 'news' in q or 'fomc' in q:
+        bits.append("Hozir live economic-event manbasi bo‘yicha tasdiqlangan event olinmadi, shuning uchun aniq news/FOMC faktini uydirmayman.")
+    if 'trend' in q or 'xauusd' in q or 'eurusd' in q or 'kecha' in q:
+        answer=' '.join(bits)+" Bu providerlarsiz ishlaydigan context fallback; tarixiy kun taqqoslash uchun to‘liq candle tarixini alohida tekshirish kerak."
+    elif 'fomc' in q:
+        answer=' '.join(bits)+" FOMC uchun asosiy scenario: event oldidan volatility oshishi mumkin; bullish yoki bearish yo‘nalishni fakt sifatida emas, shartli scenario sifatida baholash kerak."
+    else:
+        answer=' '.join(bits)+" AI provider javob bermasa, tizim faqat mavjud live context asosida xavfsiz fallback beradi."
+    return answer, direction if direction in {'BUY','SELL','BULLISH','BEARISH'} else 'NEUTRAL', 0.0, 'AI provider unavailable; context-only fallback.'
+
 @app.post("/api/v1/ai/chat")
 async def ai_chat(body: AIChatBody, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
@@ -3511,16 +3540,21 @@ USER QUESTION:
         mtf = context.get("mtf") or {}
         direction = str((context.get("analysis") or {}).get("direction") or mtf.get("overall") or "NEUTRAL").upper()
         events = context.get("economic_calendar", {}).get("events") or []
+        answer, bias, confidence, risk_note = _ai_qa_local_fallback(context, question)
         return {
-            "ok": False, "provider": None, "symbol": symbol, "interval": interval,
-            "answer": (f"AI providerlar hozir javob bermadi. Live market context mavjud: {direction}. "
-                        f"Economic calendar bo‘yicha {len(events)} ta event topildi. "
-                        f"Aniq AI javob uchun keyingi so‘rovda qayta tekshiriladi."),
-            "bias": direction if direction in {"BUY", "SELL", "BULLISH", "BEARISH"} else "NEUTRAL",
-            "confidence": 0,
-            "risk_note": "AI javobi mavjud emas; bu fallback tavsifi real-time trade kafolati emas.",
-            "error": str(exc)[:240],
+            "ok": True, "provider": "context-fallback", "symbol": symbol, "interval": interval,
+            "answer": answer,
+            "bias": bias,
+            "confidence": confidence,
+            "risk_note": risk_note,
+            "context": {
+                "as_of_utc": context["as_of_utc"],
+                "quote_source": context.get("quote_source"),
+                "economic_calendar_provider": context.get("economic_calendar", {}).get("provider"),
+                "economic_events_count": len(context.get("economic_calendar", {}).get("events") or []),
+            },
             "generated_at": datetime.now(timezone.utc).isoformat(),
+            "ai_provider_error": str(exc)[:240],
         }
 
 @app.get("/api/v1/candles/{symbol:path}")
