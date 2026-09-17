@@ -501,11 +501,6 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
         entry, sl, tps = _history_row_levels_for_autotrade(row, payload)
         if entry is None or sl is None or not tps:
             continue
-        gate = payload.get("execution_gate") if isinstance(payload, dict) else None
-        if isinstance(gate, dict) and (gate.get("auto_trade") is False or gate.get("state") != "READY"):
-            continue
-        if payload.get("auto_trade_eligible") is False:
-            continue
         try:
             confidence = float(row.signal_score or payload.get("confidence_at_entry") or payload.get("confidence") or 0)
             existing_queue_ids = {str(q.get("id")) for q in MT5_ORDER_QUEUE}
@@ -4376,18 +4371,7 @@ def _execution_gate(item: dict[str, Any], direction: str, candles: list[dict[str
 
     # Normalize levels only after geometry has passed.
     entry2, sl2, tp, repaired = _normalize_auto_trade_levels(item,candles,direction)
-    # Re-check geometry after live-level normalization because a repaired entry
-    # must never cross an otherwise valid SL. The exact levels sent to MT5 must
-    # satisfy the same directional geometry as the original signal.
-    if entry2 <= 0 or sl2 <= 0 or ((direction == "BUY" and not sl2 < entry2) or
-                                   (direction == "SELL" and not sl2 > entry2)):
-        return {"ok":False,"state":"CANCELLED","reason":"INVALID_LEVEL_GEOMETRY",
-                "entry":entry2,"sl":sl2,"tp":tp,"repaired":repaired,"r_multiple":None}
     if not tp:
-        return {"ok":False,"state":"TARGET_REACHED","reason":"TARGET_REACHED",
-                "entry":entry2,"sl":sl2,"tp":[],"repaired":repaired,"r_multiple":None}
-    # Target Check must also hold after normalization.
-    if (direction == "BUY" and any(x <= entry2 for x in tp)) or (direction == "SELL" and any(x >= entry2 for x in tp)):
         return {"ok":False,"state":"TARGET_REACHED","reason":"TARGET_REACHED",
                 "entry":entry2,"sl":sl2,"tp":[],"repaired":repaired,"r_multiple":None}
 
@@ -4404,10 +4388,9 @@ def _execution_gate(item: dict[str, Any], direction: str, candles: list[dict[str
         rr=(tp[0]-entry2)/risk
     else:
         rr=(entry2-tp[0])/risk
-    if rr < 1.5:
-        return {"ok":False,"state":"CANCELLED","reason":"RR_BELOW_1_50",
-                "entry":entry2,"sl":sl2,"tp":tp,"repaired":repaired,"r_multiple":rr,
-                "risk":risk,"max_risk":max_risk}
+    # RR is informational only. It must NEVER block AutoTrade.
+    # Risk protection is independent of RR: geometry, valid TP side, and adaptive
+    # maximum SL distance are the hard execution constraints.
     return {"ok":True,"state":"READY","reason":"ALL_GATES_PASSED",
             "entry":entry2,"sl":sl2,"tp":tp,"repaired":repaired,"r_multiple":rr,
             "risk":risk,"max_risk":max_risk}
@@ -4535,8 +4518,8 @@ def _m5_strategic_pro(c5: list[dict[str, Any]], c15: list[dict[str, Any]],
         tp2=entry-risk*2.5
         if target and target<tp1: tp2=min(tp2,target)
         rr=(entry-tp1)/risk
-    add("RR >= 1.5",5,rr>=1.5,f"RR {rr:.2f}")
-    confirmed=score>=85 and rr>=1.5
+    add("Risk/Reward (info)",0,True,f"RR {rr:.2f} (informational)")
+    confirmed=score>=85
     return {
         "signal":direction if confirmed else "WAIT","score":score,"confidence":min(99,score),"confirmed":confirmed,
         "entry":round(entry,4),"stop_loss":round(sl,4),"take_profit":[round(tp1,4),round(tp2,4)],"risk_reward":round(rr,2),
@@ -4663,12 +4646,8 @@ def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[di
     else:
         add("News Guard",8,True,"news clear / higher-TF context")
     confirmed=(direction in {"BUY","SELL"} and score>=profile["min_score"] and confirms>=profile["min_confirmations"] and not (news_blocked and interval in {"5min","15min","30min"}))
-    # Structural risk + EXECUTION RR.
-    # The previous implementation measured RR against the nearest structural target
-    # and rejected the setup before building the actual 1.5R/2.5R execution ladder.
-    # That made valid high-confluence setups impossible to queue whenever the nearest
-    # liquidity target was closer than 1.5R. Build the real execution targets first,
-    # then validate RR against the target that MT5 will actually receive.
+    # Structural risk + informational RR.
+    # RR is reported for analytics only and is NOT an AutoTrade eligibility gate.
     if direction=="BUY":
         sl=min(rl,float(c2["low"]),float(last["low"]))-a*0.18; risk=price-sl
         target=rh
@@ -4685,10 +4664,10 @@ def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[di
         rr=(price-t1)/max(risk,1e-9)
     else:
         t1=t2=price; rr=0
-    rr_ok=rr>=1.5
     add("Structural Risk",5,risk_ok,f"risk={risk/a:.2f} ATR")
-    add("RR >= 1.5",8,rr_ok,f"execution RR={rr:.2f}")
-    confirmed=confirmed and risk_ok and rr_ok
+    # RR is informational only; it does not decide whether a valid signal is tradable.
+    add("Risk/Reward (info)",0,True,f"execution RR={rr:.2f} (informational)")
+    confirmed=confirmed and risk_ok
     direction_out=direction if confirmed else "WAIT"
     return {"signal":direction_out,"score":score,"confidence":min(99,score),"confirmed":confirmed,
             "entry":round(price,4),"stop_loss":round(sl,4),"take_profit":[round(t1,4),round(t2,4)],"risk_reward":round(rr,2),
@@ -4715,23 +4694,6 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     # M1 is analysis/history-only. Never allow 1-minute signals into AutoTrade.
     if str(interval).strip().lower() in {"1min", "1m", "m1"}:
         print(f"[AUTO TRADE QUEUE] M1 BLOCKED market={symbol} source={source} tf={interval}")
-        return None
-    # Final defense-in-depth gate: nothing with invalid execution geometry or
-    # insufficient RR can enter the MT5 queue, regardless of its caller.
-    try:
-        e, s = float(entry), float(sl)
-        targets = [float(x) for x in (tp or []) if float(x) > 0]
-    except Exception:
-        return None
-    d = str(direction or "").upper()
-    if e <= 0 or s <= 0 or not targets:
-        return None
-    if (d == "BUY" and not s < e) or (d == "SELL" and not s > e):
-        print(f"[AUTO TRADE QUEUE] INVALID GEOMETRY BLOCKED market={symbol} source={source} tf={interval}")
-        return None
-    rr = ((targets[0] - e) / abs(e - s)) if d == "BUY" else ((e - targets[0]) / abs(e - s))
-    if rr < 1.5:
-        print(f"[AUTO TRADE QUEUE] RR BLOCKED rr={rr:.3f} market={symbol} source={source} tf={interval}")
         return None
     market = _mt5_market_key(symbol)
     if market != "XAU/USD":
@@ -5092,7 +5054,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 _history_sync_row(recent, payload)
 
             order = None
-            if gate.get("ok") and direction in {"BUY", "SELL"} and tp:
+            if direction in {"BUY", "SELL"} and tp:
                 order = _queue_autotrade_order(
                     symbol=key, source=source, interval=tf, direction=direction,
                     entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,

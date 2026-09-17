@@ -10,7 +10,7 @@ This build makes automatic entries more selective. It does not guarantee win rat
 - Auto-entry default confidence threshold raised to 90.
 - Auto-entry strong-zone minimum raised to 88.
 - Auto-entry requires AI signal agreement with the deterministic direction, AI confidence >= 90, agreement >= 75, and no AI risk flags.
-- Auto-entry requires first-target RR >= 1.50.
+- Auto-entry does not require a minimum RR; RR is informational only. Hard protection uses geometry, valid TP1, and structural SL-risk limits.
 - Auto-entry requires higher-timeframe directional alignment when higher timeframes exist.
 - Quality metadata exposes `quality_grade`, `confirmations`, and `risk_reward`.
 
@@ -19,7 +19,7 @@ Optional; defaults are already conservative:
 - AUTO_ENTRY_THRESHOLD=90
 - AUTO_ENTRY_MIN_ZONE=88
 - AUTO_ENTRY_MIN_AI_AGREEMENT=75
-- AUTO_ENTRY_MIN_RR=1.50
+- AUTO_ENTRY_MIN_RR is not used as an AutoTrade gate.
 - AUTO_ENTRY_REQUIRE_MTF=true
 
 For DEMO testing, keep MT5 demo account and do not use REAL mode.
