@@ -171,19 +171,14 @@ def _account_dict(a: MT5Account) -> dict[str, Any]:
     if last and last.tzinfo is None:
         last = last.replace(tzinfo=timezone.utc)
     age = None if not last else max(0, int((_utc() - last).total_seconds()))
-    connected = bool(a.connected and age is not None and age <= 45)
-    # AutoTrade is account-level and is only effective while that exact MT5
-    # terminal/EA is online. This keeps the UI and order polling consistent.
-    effective_auto = bool(a.auto_trade_enabled and connected and a.trade_allowed)
     return {
         "id": a.id, "label": a.label, "broker": a.broker, "server": a.server,
         "login": a.login, "account_type": a.account_type, "currency": a.currency,
         "leverage": a.leverage, "balance": a.balance, "equity": a.equity,
         "free_margin": a.free_margin, "margin": a.margin,
         "trade_allowed": a.trade_allowed,
-        "connected": connected,
-        "last_seen_seconds": age, "auto_trade_enabled": effective_auto,
-        "auto_trade_configured": bool(a.auto_trade_enabled),
+        "connected": bool(a.connected and age is not None and age <= 45),
+        "last_seen_seconds": age, "auto_trade_enabled": a.auto_trade_enabled,
         "terminal_build": a.terminal_build, "ea_version": a.ea_version,
     }
 
@@ -270,12 +265,8 @@ async def toggle(account_id: int, body: ToggleRequest, authorization: str | None
     user = _user(authorization, session)
     a = session.scalar(select(MT5Account).where(MT5Account.id == account_id, MT5Account.user_id == user.id))
     if not a: raise HTTPException(404, "MT5 account not found")
-    if body.enabled:
-        state = _account_dict(a)
-        if not state["connected"]:
-            raise HTTPException(409, "MT5 account is offline. Start the paired EA first.")
-        if not a.trade_allowed:
-            raise HTTPException(409, "MT5 account trading is not allowed in the terminal.")
+    if body.enabled and not a.connected:
+        raise HTTPException(409, "MT5 account is not connected")
     a.auto_trade_enabled = bool(body.enabled)
     session.commit()
     return {"ok": True, "account": _account_dict(a)}
@@ -365,13 +356,7 @@ async def state(body: MTState, authorization: str | None = Header(default=None),
 async def poll(authorization: str | None = Header(default=None), session=Depends(core.db)):
     token = authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else authorization
     a = _auth_account(token, session)
-    state = _account_dict(a)
-    if not state["connected"]:
-        a.connected = False
-        a.auto_trade_enabled = False
-        session.commit()
-        return {"orders": [], "reason": "mt5_offline"}
-    if not state["auto_trade_enabled"]:
+    if not a.auto_trade_enabled or not a.trade_allowed:
         return {"orders": [], "reason": "autotrade_disabled_or_trading_not_allowed"}
     _sync_core_queue(session)
     now = _utc()

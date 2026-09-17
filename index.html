@@ -718,6 +718,15 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 <style id="ai-qa-ui">
 .ai-qa-page{max-width:1100px;margin:0 auto}.ai-qa-suggestions{display:flex;gap:7px;flex-wrap:wrap;margin:10px 0}.ai-qa-suggestions .btn{font-size:12px}.ai-qa-chat{min-height:300px;max-height:58vh;overflow:auto;border:1px solid var(--line);border-radius:14px;background:rgba(4,8,13,.68);padding:14px;display:flex;flex-direction:column;gap:10px}.ai-qa-empty{margin:auto;color:var(--muted);text-align:center;max-width:600px;padding:50px 20px}.ai-qa-msg{display:flex}.ai-qa-msg.user{justify-content:flex-end}.ai-qa-bubble{max-width:82%;padding:11px 13px;border:1px solid var(--line);border-radius:12px;background:#0b1118;line-height:1.6;white-space:pre-wrap}.ai-qa-msg.user .ai-qa-bubble{background:#102039;border-color:#24436a}.ai-qa-meta{font-size:10px;color:var(--muted);margin-top:5px}.ai-qa-form{margin-top:12px}.ai-qa-input{resize:vertical;min-height:82px;margin-bottom:8px}.ai-qa-actions{display:flex;justify-content:space-between;gap:10px;align-items:center}.ai-qa-actions .mini{max-width:70%}.ai-qa-disclaimer{margin-top:10px;color:var(--muted);font-size:10px;line-height:1.5}.ai-qa-chip{display:inline-flex;gap:5px;align-items:center}.ai-qa-typing{color:var(--muted);font-size:12px;padding:6px}@media(max-width:700px){.ai-qa-actions{align-items:stretch;flex-direction:column}.ai-qa-actions .mini{max-width:none}.ai-qa-bubble{max-width:92%}}
 </style>
+<style id="signalx-history-result-status-v5">
+.sx-status-pill{display:inline-flex;align-items:center;gap:5px;padding:6px 9px;border-radius:999px;border:1px solid rgba(255,255,255,.12);font-size:10px;font-weight:900;white-space:nowrap;background:rgba(255,255,255,.04)}
+.sx-status-pill.status-win{color:#63ef9b;border-color:rgba(99,239,155,.38);background:rgba(99,239,155,.08)}
+.sx-status-pill.status-loss{color:#ff7183;border-color:rgba(255,113,131,.38);background:rgba(255,113,131,.08)}
+.sx-status-pill.status-tp1{color:#ffd166;border-color:rgba(255,209,102,.36);background:rgba(255,209,102,.07)}
+.sx-status-pill.status-expired,.sx-status-pill.status-cancelled{color:#a9b7c8;border-color:rgba(169,183,200,.28);background:rgba(169,183,200,.06)}
+.sx-level b.status-win{color:#63ef9b}.sx-level b.status-loss{color:#ff7183}.sx-level b.status-tp1{color:#ffd166}.sx-level b.status-expired,.sx-level b.status-cancelled{color:#a9b7c8}
+@media(max-width:600px){.sx-status-pill{font-size:9px;padding:5px 7px}}
+</style>
 <style id="signalx-history-final-compact-safe">#historySection .sx-history-v2{gap:10px}#historySection .sx-history-filters{padding:9px;gap:7px}#historySection .sx-kpi-grid{gap:7px}#historySection .sx-kpi{padding:9px;border-radius:12px}#historySection .sx-kpi b{font-size:18px}#historySection .sx-day-performance,#historySection .sx-module-grid{gap:7px}#historySection .sx-signal-list{gap:7px}#historySection .sx-signal-card{padding:11px;border-radius:14px}#historySection .sx-signal-levels{gap:5px;margin-top:8px}#historySection .sx-level{padding:7px;border-radius:9px}#historySection .sx-level b{font-size:12px}#historySection .sx-signal-bottom{margin-top:8px}.sx-history-more{text-align:center;padding:6px 0 12px}</style>
 
 <style id="mt5-account-ui-v2">
@@ -1015,7 +1024,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 </div>
 
 <script src="config.js?v=20260908f"></script>
-<script src="app.js?v=20260917-history-mt5-safe-v4"></script>
+<script src="app.js?v=20260917-history-result-fix-v5-transition-v1"></script>
 
 <script id="signalx-sidebar-fix-20260913">
 (function(){
@@ -1545,7 +1554,159 @@ body:not(.sx-menu-open) .sidebar{pointer-events:auto!important;}
   window.addEventListener('hashchange',function(){ setTimeout(resetHistoryTop,0); });
 })();
 </script>
-</body></html>
+</body>
+<!-- SIGNALX_VIDEO_TRANSITION_INJECTION -->
+<style id="signalx-video-transition-v1">
+  #sxVideoTransition{position:fixed;inset:0;z-index:2147483000;display:grid;place-items:center;background:#02050a;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .42s ease,visibility .42s ease}
+  #sxVideoTransition.is-visible{opacity:1;visibility:visible;pointer-events:auto}
+  #sxVideoTransition video{width:100%;height:100%;object-fit:cover;display:block;background:#02050a}
+  #sxVideoTransition:after{content:"";position:absolute;inset:0;background:radial-gradient(circle at center,rgba(255,192,66,.04),rgba(2,5,10,.14) 55%,rgba(2,5,10,.56));pointer-events:none}
+  #sxVideoTransition .sx-video-skip{position:absolute;right:22px;bottom:20px;z-index:2;border:1px solid rgba(245,193,93,.45);background:rgba(5,9,15,.55);color:#f5c15d;border-radius:999px;padding:8px 12px;font:700 11px/1 system-ui,sans-serif;letter-spacing:.08em;text-transform:uppercase;backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);cursor:pointer;opacity:.82}
+  #sxVideoTransition .sx-video-skip:hover{opacity:1}
+  body.sx-transition-lock{overflow:hidden!important}
+  @media(max-width:700px){#sxVideoTransition .sx-video-skip{right:12px;bottom:12px;font-size:10px;padding:8px 10px}}
+</style>
+<script id="signalx-video-transition-v1-script">
+(function(){
+  'use strict';
+  if(window.__signalxVideoTransitionInstalled)return;
+  window.__signalxVideoTransitionInstalled=true;
+
+  function createOverlay(){
+    var existing=document.getElementById('sxVideoTransition');
+    if(existing)return existing;
+    var wrap=document.createElement('div');
+    wrap.id='sxVideoTransition';
+    wrap.setAttribute('aria-hidden','true');
+    var video=document.createElement('video');
+    video.id='sxVideoTransitionVideo';
+    video.muted=true;
+    video.defaultMuted=true;
+    video.playsInline=true;
+    video.setAttribute('playsinline','');
+    video.setAttribute('webkit-playsinline','');
+    video.preload='auto';
+    video.poster='assets/signalx-bull-intro-poster.jpg';
+    video.src='assets/signalx-bull-intro.mp4';
+    var skip=document.createElement('button');
+    skip.className='sx-video-skip';
+    skip.type='button';
+    skip.textContent='Skip';
+    skip.setAttribute('aria-label','Skip intro animation');
+    wrap.appendChild(video);
+    wrap.appendChild(skip);
+    document.body.appendChild(wrap);
+    skip.addEventListener('click',function(){hide(120);});
+    video.addEventListener('ended',function(){
+      if(window.__sxVideoMode==='intro') hide(380);
+    });
+    return wrap;
+  }
+
+  var overlay, video, introDone=false, transitionBusy=false, transitionTimer=null;
+  function hide(delay){
+    clearTimeout(transitionTimer);
+    var ms=Math.max(0,Number(delay)||0);
+    transitionTimer=setTimeout(function(){
+      if(!overlay)return;
+      overlay.classList.remove('is-visible');
+      overlay.setAttribute('aria-hidden','true');
+      document.body.classList.remove('sx-transition-lock');
+      transitionBusy=false;
+    },ms);
+  }
+  function show(){
+    overlay=createOverlay();
+    video=video||document.getElementById('sxVideoTransitionVideo');
+    overlay.classList.add('is-visible');
+    overlay.setAttribute('aria-hidden','false');
+    document.body.classList.add('sx-transition-lock');
+  }
+  function playFromStart(){
+    if(!video)return Promise.resolve();
+    try{ video.pause(); video.currentTime=0; }catch(e){}
+    var p=video.play();
+    return (p&&typeof p.then==='function')?p.catch(function(){return null;}):Promise.resolve();
+  }
+  function intro(){
+    if(introDone)return;
+    overlay=createOverlay();
+    video=document.getElementById('sxVideoTransitionVideo');
+    window.__sxVideoMode='intro';
+    show();
+    playFromStart().then(function(){
+      if(!video||!video.duration||!isFinite(video.duration))return;
+      /* Keep the supplied 4s intro intact; ended handler performs the fade. */
+    });
+    var safety=setTimeout(function(){
+      if(introDone)return;
+      introDone=true;
+      hide(180);
+    },5200);
+    function finish(){
+      if(introDone)return;
+      introDone=true;
+      clearTimeout(safety);
+      hide(380);
+    }
+    if(video){
+      video.addEventListener('ended',finish,{once:true});
+      video.addEventListener('error',function(){
+        if(!introDone){introDone=true;clearTimeout(safety);hide(120);}
+      },{once:true});
+    }
+    /* If the browser blocks autoplay, do not freeze the application. */
+    setTimeout(function(){
+      if(!video||video.paused){
+        introDone=true;
+        clearTimeout(safety);
+        hide(120);
+      }
+    },1400);
+  }
+
+  function runSectionTransition(nextId, originalOpenSection){
+    if(!nextId || !introDone || transitionBusy){
+      return originalOpenSection(nextId);
+    }
+    var current=document.querySelector('.section.active');
+    if(current && current.id===nextId){
+      return originalOpenSection(nextId);
+    }
+    transitionBusy=true;
+    window.__sxVideoMode='section';
+    show();
+    playFromStart();
+    /* Switch the section after the visual peak, then reveal it through the fade. */
+    setTimeout(function(){
+      try{originalOpenSection(nextId);}catch(e){console.error(e);}
+    },360);
+    setTimeout(function(){hide(430);},760);
+  }
+
+  function install(){
+    overlay=createOverlay();
+    video=document.getElementById('sxVideoTransitionVideo');
+    /* Respect reduced-motion preferences. */
+    var reduced=window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if(!reduced){setTimeout(intro,80);}
+    else{introDone=true;overlay.style.display='none';}
+
+    if(typeof window.openSection==='function' && !window.openSection.__sxWrapped){
+      var original=window.openSection;
+      function wrapped(id){return runSectionTransition(id,original);}
+      wrapped.__sxWrapped=true;
+      wrapped.__sxOriginal=original;
+      window.openSection=wrapped;
+    }
+  }
+
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',install,{once:true});
+  else install();
+})();
+</script>
+
+</html>
 
 <style id="signalx-phone-final-v2-20260913">
 /* PHONE-ONLY V2 PATCH — desktop (>=1101px) is intentionally untouched. */
