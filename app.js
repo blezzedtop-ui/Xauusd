@@ -742,6 +742,10 @@ async function loadMT5GatewayAccounts(){
           <span>EA: <b>${safeText(a.ea_version||'—')}</b></span>
           <span>Heartbeat: <b>${a.last_seen_seconds==null?'—':a.last_seen_seconds+'s'}</b></span>
         </div>
+        <div class="mt5-account-lot">
+          <div><div class="mt5-autotrade-title">LOT SIZE</div><div class="mini">Faqat shu ${type} account uchun</div></div>
+          <div class="mt5-lot-controls"><select class="mt5-lot-select" data-mt5-lot="${a.id}" aria-label="${type} lot">${mt5LotOptions(a.lot)}</select><button class="mt5-lot-save" type="button" data-mt5-lot-save="${a.id}">SAQLASH</button></div>
+        </div>
         <div class="mt5-account-autotrade ${autoOn?'on':'off'}">
           <div><div class="mt5-autotrade-title">${autoLabel}</div><div class="mini">Faqat shu ${type} account uchun.</div></div>
           <button class="mt5-auto-toggle ${autoOn?'off':'on'}" type="button" data-mt5-gateway-auto="${a.id}" data-enabled="${autoOn?'0':'1'}" ${actionDisabled?'disabled':''} title="${safeText(disableReason)}">${actionLabel}</button>
@@ -759,6 +763,20 @@ async function createMT5Pairing(){
     const d=await api('/api/v1/mt5/gateway/pair',{method:'POST',body:JSON.stringify({label})});
     if(out)out.innerHTML=`<div class="signal-box"><b>PAIRING CODE: ${safeText(d.pairing_code)}</b><div class="mini">Kod ${safeText(d.expires_in)} soniya amal qiladi. MT5 terminalda SignalX_MultiBroker_Gateway_EA.mq5 → PairingCode maydoniga kiriting.</div></div>`;
   }catch(e){if(out)out.textContent=e.message||'Pairing xatosi';}
+}
+function mt5LotOptions(selected){
+  const values=[0.01,0.02,0.03,0.05,0.10,0.20,0.50,1,2,5,10];
+  const s=Number(selected||0.01);
+  if(!values.some(v=>Math.abs(v-s)<1e-9) && s>0) values.push(s);
+  values.sort((a,b)=>a-b);
+  return values.map(v=>`<option value="${v}" ${Math.abs(v-s)<1e-9?'selected':''}>${v.toFixed(2)}</option>`).join('');
+}
+async function mt5GatewaySetLot(id,lot){
+  const raw=Number(lot);
+  if(!Number.isFinite(raw)||raw<0.01||raw>100) throw Error('Lot 0.01 dan 100 gacha bo‘lishi kerak.');
+  await api(`/api/v1/mt5/gateway/accounts/${id}/lot`,{method:'POST',body:JSON.stringify({lot:raw})});
+  await loadMT5GatewayAccounts();
+  showToast(`Lot saqlandi: ${raw.toFixed(2)}`);
 }
 async function mt5GatewayToggle(id,enabled){await api(`/api/v1/mt5/gateway/accounts/${id}/auto-trade`,{method:'POST',body:JSON.stringify({enabled})});await loadMT5GatewayAccounts();}
 async function mt5GatewayDisconnect(id){if(!confirm('Ushbu MT5 hisobni SignalXdan uzasizmi?'))return;await api(`/api/v1/mt5/gateway/accounts/${id}`,{method:'DELETE'});await loadMT5GatewayAccounts();}
@@ -799,6 +817,7 @@ function bindUIActions(){
   if(document.body.dataset.actionsBound==='1')return;document.body.dataset.actionsBound='1';
   document.addEventListener('click',e=>{
     const ga=e.target.closest?.('[data-mt5-gateway-auto]'); if(ga){e.preventDefault();e.stopPropagation();mt5GatewayToggle(Number(ga.dataset.mt5GatewayAuto),ga.dataset.enabled==='1').catch(err=>showToast(err?.message||'MT5 AutoTrade xatosi'));return;}
+    const gl=e.target.closest?.('[data-mt5-lot-save]'); if(gl){e.preventDefault();e.stopPropagation();const id=Number(gl.dataset.mt5LotSave);const sel=document.querySelector(`[data-mt5-lot="${id}"]`);mt5GatewaySetLot(id,sel?.value).catch(err=>showToast(err?.message||'Lot saqlash xatosi'));return;}
     const gd=e.target.closest?.('[data-mt5-gateway-disconnect]'); if(gd){e.preventDefault();e.stopPropagation();mt5GatewayDisconnect(Number(gd.dataset.mt5GatewayDisconnect)).catch(err=>showToast(err?.message||'MT5 uzish xatosi'));return;}
     const revoke=e.target.closest?.('.active-session-revoke');
     if(revoke){e.preventDefault();e.stopPropagation();revokeOneSession(revoke.dataset.sessionId,revoke.dataset.current==='1').catch(err=>showToast(err?.message||'Seansni yopib bo\'lmadi'));return;}

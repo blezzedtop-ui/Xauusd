@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, select
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, inspect, select, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 import main as core
@@ -60,6 +60,7 @@ class MT5Account(core.Base):
     trade_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
     connected: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     auto_trade_enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    lot: Mapped[float] = mapped_column(Float, default=0.01)
     account_token_hash: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
@@ -132,6 +133,11 @@ def initialize_gateway_tables() -> None:
             MTOrder.__table__,
         ],
     )
+    # Backward-compatible migration for existing deployments.
+    columns = {c["name"] for c in inspect(core.engine).get_columns(MT5Account.__tablename__)}
+    if "lot" not in columns:
+        with core.engine.begin() as conn:
+            conn.execute(text("ALTER TABLE mt5_accounts ADD COLUMN lot FLOAT DEFAULT 0.01"))
 
 
 class MTState(BaseModel):
@@ -159,6 +165,9 @@ class RegisterRequest(MTState):
 class ToggleRequest(BaseModel):
     enabled: bool
 
+class LotRequest(BaseModel):
+    lot: float = Field(default=0.01, ge=0.01, le=100.0)
+
 class ReportRequest(BaseModel):
     order_id: int
     status: str
@@ -178,7 +187,7 @@ def _account_dict(a: MT5Account) -> dict[str, Any]:
         "free_margin": a.free_margin, "margin": a.margin,
         "trade_allowed": a.trade_allowed,
         "connected": bool(a.connected and age is not None and age <= 45),
-        "last_seen_seconds": age, "auto_trade_enabled": a.auto_trade_enabled,
+        "last_seen_seconds": age, "auto_trade_enabled": a.auto_trade_enabled, "lot": float(a.lot or 0.01),
         "terminal_build": a.terminal_build, "ea_version": a.ea_version,
     }
 
@@ -223,7 +232,7 @@ def _sync_core_queue(session):
             tps = o.get("tp") or o.get("take_profit") or []
             if isinstance(tps, (int, float, str)): tps = [tps]
             tp = float(tps[0]) if tps else 0
-            volume = float(o.get("volume") or getattr(core, "MT5_LOT_SIZE", 0.01))
+            volume = float(o.get("volume") or account.lot or getattr(core, "MT5_LOT_SIZE", 0.01))
             if min(entry, sl, tp, volume) <= 0:
                 continue
             fp = _fingerprint(o, account.id)
@@ -268,6 +277,29 @@ async def toggle(account_id: int, body: ToggleRequest, authorization: str | None
     if body.enabled and not a.connected:
         raise HTTPException(409, "MT5 account is not connected")
     a.auto_trade_enabled = bool(body.enabled)
+    session.commit()
+    return {"ok": True, "account": _account_dict(a)}
+
+@router.post("/accounts/{account_id}/lot")
+async def set_account_lot(account_id: int, body: LotRequest, authorization: str | None = Header(default=None), session=Depends(core.db)):
+    user = _user(authorization, session)
+    a = session.scalar(select(MT5Account).where(MT5Account.id == account_id, MT5Account.user_id == user.id))
+    if not a:
+        raise HTTPException(404, "MT5 account not found")
+    mapping = session.scalar(select(MTSymbol).where(MTSymbol.account_id == account_id, MTSymbol.canonical_symbol == "XAU/USD"))
+    lot = float(body.lot)
+    if mapping:
+        minimum = float(mapping.volume_min or 0.01)
+        maximum = float(mapping.volume_max or 100.0)
+        step = float(mapping.volume_step or 0.01)
+        if lot < minimum or lot > maximum:
+            raise HTTPException(422, f"Lot {minimum:g} - {maximum:g} oralig'ida bo'lishi kerak")
+        steps = round((lot - minimum) / step)
+        normalized = minimum + steps * step
+        if abs(normalized - lot) > max(1e-9, step * 1e-6):
+            raise HTTPException(422, f"Lot step {step:g} bo'yicha tanlanishi kerak")
+        lot = normalized
+    a.lot = lot
     session.commit()
     return {"ok": True, "account": _account_dict(a)}
 
