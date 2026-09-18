@@ -2680,6 +2680,68 @@ def merge_ai_validation(deterministic: dict[str, Any], ai: dict[str, Any]) -> di
     return out
 
 
+def _smart_module_gate(item: dict[str, Any], ai: dict[str, Any], candles: list[dict[str, Any]], direction: str) -> dict[str, Any]:
+    """Cross-module AI + market-structure quality gate for AutoTrade.
+
+    The gate is intentionally independent of RR and TP2. It protects execution by
+    requiring directional AI agreement, reasonable AI confidence/agreement, and no
+    obvious regime/structure conflict. If the AI provider is unavailable, the
+    deterministic engine remains usable but still has to pass the execution risk gate.
+    """
+    direction = str(direction or "WAIT").upper()
+    ai_signal = str(ai.get("signal") or "WAIT").upper()
+    ai_conf = int(ai.get("confidence") or 0)
+    ai_agree = int(ai.get("agreement") or 0)
+    mode = str(ai.get("mode") or "fallback")
+    deterministic_conf = int(item.get("confidence") or item.get("strategy_quality") or item.get("trend_power") or item.get("score") or 0)
+    reasons=[]
+    checks=[]
+
+    def add(name: str, ok: bool, reason: str):
+        checks.append({"name":name,"status":"PASS" if ok else "MISS"})
+        if ok: reasons.append(reason)
+
+    if direction not in {"BUY","SELL"}:
+        return {"ok":False,"state":"WAIT","score":0,"checks":checks,"reason":"NO_DIRECTION"}
+
+    # Deterministic regime/structure check. This is separate from RR.
+    regime = item.get("market_regime") if isinstance(item.get("market_regime"), dict) else _adaptive_regime(candles)
+    regime_name = str((regime or {}).get("regime") or "RANGE")
+    regime_conflict = (direction=="BUY" and regime_name=="TRENDING_DOWN") or (direction=="SELL" and regime_name=="TRENDING_UP")
+    add("Market Regime", not regime_conflict, f"regime={regime_name}")
+
+    try:
+        structure=_structure_state(candles)
+    except Exception:
+        structure={}
+    struct_dir = "BUY" if structure.get("bos")=="BULLISH" or structure.get("choch")=="BULLISH" else "SELL" if structure.get("bos")=="BEARISH" or structure.get("choch")=="BEARISH" else "WAIT"
+    strong_opposite = (direction=="BUY" and structure.get("prior_structure")=="BEARISH" and struct_dir!="BUY") or (direction=="SELL" and structure.get("prior_structure")=="BULLISH" and struct_dir!="SELL")
+    add("Structure", not strong_opposite, f"structure={structure.get('prior_structure','MIXED')}/{struct_dir}")
+
+    # Real AI providers are a hard validation layer; deterministic fallback is not
+    # falsely presented as live AI. In fallback mode, deterministic quality remains the gate.
+    live_ai = mode not in {"fallback","rule_based"}
+    if live_ai:
+        ai_ok = ai_signal == direction and ai_conf >= 65 and ai_agree >= 55
+        add("AI Direction", ai_signal==direction, f"AI={ai_signal}")
+        add("AI Confidence", ai_conf>=65, f"AI confidence={ai_conf}%")
+        add("AI Agreement", ai_agree>=55, f"AI agreement={ai_agree}%")
+    else:
+        ai_ok = True
+        add("AI Availability", True, f"AI mode={mode}; deterministic fallback retained")
+
+    det_ok = deterministic_conf >= 60
+    add("Deterministic Quality", det_ok, f"deterministic quality={deterministic_conf}")
+    ok = (not regime_conflict) and (not strong_opposite) and ai_ok and det_ok
+    # A provider-unavailable fallback is allowed only because the independent
+    # execution gate below still enforces geometry, valid TP1 and maximum SL risk.
+    score = round((deterministic_conf*0.45) + (ai_conf*0.35 if live_ai else deterministic_conf*0.20) + (ai_agree*0.20 if live_ai else 20))
+    return {"ok":ok,"state":"READY" if ok else "AI_VALIDATION_FAILED","score":max(0,min(100,score)),
+            "ai_live":live_ai,"ai_signal":ai_signal,"ai_confidence":ai_conf,"ai_agreement":ai_agree,
+            "deterministic_quality":deterministic_conf,"market_regime":regime,"structure":structure,
+            "checks":checks,"reason":"; ".join(reasons) if ok else "AI/market quality validation failed"}
+
+
 async def _module_ai_advisory(source: str, symbol: str, interval: str, candle_time: Any, module_result: dict[str, Any]) -> dict[str, Any]:
     """Shared AI advisory for individual dashboard modules.
     It assists analysis but never acts as an AutoTrade quality gate.
@@ -3714,7 +3776,7 @@ async def get_snr(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[
         candle_time=candles[-2].get("time") if len(candles)>1 else candles[-1].get("time")
         snr=_snr_zone_analysis(candles)
         regime=_adaptive_regime(candles)
-        ai_advisory = await _module_ai_advisory("SNR", symbol, interval, candle_time, {**snr, "signal": "WAIT"})
+        ai_advisory = await _module_ai_advisory("SNR", symbol, interval, candle_time, snr)
         snr["ai_validation"] = ai_advisory
         snr["strategy_engine"]="Adaptive Institutional SNR"
         snr["market_regime"]=regime
@@ -3766,7 +3828,7 @@ async def get_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> 
         setup = build_key_level_signal(candles_data, levels, news_blocked=False)
         technical = technical_analysis(candles_data, levels, setup)
         candle_time=candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")
-        technical["ai_validation"] = None
+        technical["ai_validation"] = await _module_ai_advisory("Technical Analysis", symbol, interval, candle_time, technical)
         return {
             "ok": True, "symbol": symbol, "interval": interval, "mode": "tradingview",
             "provider": "TradingView", "source": tv_symbol_for(symbol),
@@ -4198,7 +4260,7 @@ async def get_ict_signals(symbol: str) -> dict[str, Any]:
         c5,mode5,w5=await get_candles(symbol,"5min",260)
         result=build_ict_m30_m5(c30,c5)
         candle_time=c5[-2].get("time") if len(c5)>1 else c5[-1].get("time")
-        result["ai_validation"] = None
+        result["ai_validation"] = await _module_ai_advisory("ICT Signals", symbol, "30min", candle_time, result)
         result["candle_time"]=candle_time
         return {"ok":True,"symbol":symbol,"mode":"live","source":"TradingView/OANDA canonical candle series",
                 "m30_candles":len(c30),"m5_candles":len(c5),"warnings":[x for x in (w30,w5) if x],
@@ -4967,8 +5029,62 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 continue
             candle_time = _normalize_history_candle_time(candles[-1].get("time"))
             source = _normalize_history_source(c.get("source") or "Signals")
+            original_direction = direction
+            original_item = dict(item)
 
-            # Hard pipeline: Signal -> Geometry Check -> Target Check -> Risk Check -> AutoTrade.
+            # Every AutoTrade-capable module now gets its own AI validation on the
+            # same live candle. AI is used as a quality layer, while History keeps
+            # the original module signal even when AI rejects AutoTrade.
+            try:
+                ai = await ai_validate_module_signal(source, key, tf, candle_time, original_item)
+            except Exception as exc:
+                ai = {"mode":"fallback","signal":original_direction,"confidence":0,"agreement":0,
+                      "risk_flags":["AI validation exception"],"reasoning":str(exc)[:240]}
+            smart = _smart_module_gate(original_item, ai, candles, original_direction)
+            item["ai_validation"] = ai
+            item["ai_assisted"] = True
+            item["ai_layer"] = f"Per-module AI Validation ({source})"
+            item["smart_validation"] = smart
+
+            # Hard pipeline: Signal -> AI/Market Quality -> Geometry -> Target -> Risk -> AutoTrade.
+            # AI/market quality failure is History-only; it never deletes the module signal.
+            if not smart.get("ok"):
+                item.update({"signal":original_direction,"auto_trade_eligible":False,
+                             "execution_state":"AI_VALIDATION_FAILED",
+                             "execution_reason":smart.get("reason") or "AI_VALIDATION_FAILED",
+                             "live_levels_verified":False})
+                payload = {"source":source,"module_signal":item,"symbol":key,"interval":tf,
+                           "candle_time":candle_time,"live_generated":True,
+                           "execution_gate":{"state":"AI_VALIDATION_FAILED","reason":smart.get("reason"),
+                                             "ai_checked":True,"geometry_checked":False,"target_checked":False,
+                                             "risk_checked":False,"auto_trade":False}}
+                recent = session.scalars(select(SignalHistory).where(
+                    SignalHistory.user_id == user.id, SignalHistory.symbol == key,
+                    SignalHistory.interval == tf, SignalHistory.candle_time == candle_time,
+                    SignalHistory.source == source,
+                ).order_by(SignalHistory.id.desc())).first()
+                if recent is None:
+                    history_row = SignalHistory(user_id=user.id,symbol=key,interval=tf,direction=original_direction,
+                        headline=f"{source} · {original_direction} · AI {int(ai.get('confidence') or 0)}% · AI VALIDATION",price=float(item.get("entry") or 0),
+                        payload=json.dumps(payload,ensure_ascii=False,default=str),outcome="CANCELLED",status="CANCELLED",
+                        created_at=now,source=source,candle_time=candle_time)
+                    session.add(history_row)
+                    created_history.append({"source":source,"symbol":key,"interval":tf,"direction":original_direction,
+                                            "confidence":float(item.get("confidence") or item.get("trend_power") or 0),
+                                            "module_history":True,"auto_trade_eligible":False,
+                                            "execution_state":"AI_VALIDATION_FAILED","reason":smart.get("reason")})
+                continue
+
+            # Preserve the module direction; merge only the AI metadata. Since the
+            # Smart Gate already required agreement, merge_ai_validation cannot turn
+            # a valid candidate into a tradable opposite-side signal.
+            item = merge_ai_validation(original_item, ai)
+            item["ai_validation"] = ai
+            item["ai_assisted"] = True
+            item["ai_layer"] = f"Per-module AI Validation ({source})"
+            item["smart_validation"] = smart
+            direction = original_direction
+
             # Geometry is checked against the ORIGINAL module values before normalization.
             gate = _execution_gate(item, direction, candles)
             entry = gate.get("entry")
