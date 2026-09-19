@@ -959,9 +959,9 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
     $('mode').textContent='TRADINGVIEW LIVE'; $('mode').style.color='var(--green)'; $('chartStatus').textContent='LIVE';
     // Never let one slow/failing module prevent the rest of the dashboard.
     if(phoneStartup){
-      deferPhone(()=>{ /*removed*/(true).catch(e=>{$('signalReason').textContent='Live analysis unavailable: '+(e.message||'server error')}); }, 700);
+      deferPhone(()=>{ loadAnalysisOnly().catch(e=>{$('signalReason').textContent='Live analysis unavailable: '+(e.message||'server error')}); }, 700);
     } else {
-      /*removed*/(true).catch(e=>{$('signalReason').textContent='Live analysis unavailable: '+(e.message||'server error')});
+      loadAnalysisOnly().catch(e=>{$('signalReason').textContent='Live analysis unavailable: '+(e.message||'server error')});
     }
     quoteHeartbeat().catch(()=>{});
     loadSessions().catch(()=>{}); if(window.innerWidth>1100 || $('mt5Section')?.classList.contains('active')) loadMT5Status().catch(()=>{});
