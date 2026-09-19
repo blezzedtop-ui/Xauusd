@@ -12,7 +12,7 @@
 9. AutoTrade remains XAU/USD-only and uses the existing Real/Demo MT5 EAs; no EA replacement is required by this backend change.
 
 ## Module pipeline
-Signals, Technical Analysis, Classic Trade, Auto Trend Line, ICT Signals, AI Smart Analysis, MSAI Strategy, and SMC are persisted independently when they produce a tradable BUY/SELL candidate.
+Signal Lab, Signals, Technical Analysis, Classic Trade, SNR, Auto Trend Line, ICT Signals, AI Smart Analysis, and AlgoTrade are persisted independently when they produce a tradable BUY/SELL candidate.
 
 ## Validation
 Python syntax checked with `py_compile` for `main.py`, `algotrade_strategy.py`, and `mt5_account_gateway.py`.
