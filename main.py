@@ -61,36 +61,41 @@ FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "").strip()
 TRADING_ECONOMICS_API_KEY = os.getenv("TRADING_ECONOMICS_API_KEY", "").strip()
 CALENDAR_PROVIDER = os.getenv("CALENDAR_PROVIDER", "auto").strip().lower()
 FOREX_FACTORY_CALENDAR_URL = os.getenv("FOREX_FACTORY_CALENDAR_URL", "https://www.forexfactory.com/calendar?export=csv&week=this").strip()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+def _clean_env_secret(name: str, *aliases: str) -> str:
+    """Read Railway secrets robustly; trim accidental quotes/Bearer prefix."""
+    for key in (name, *aliases):
+        value = (os.getenv(key, "") or "").strip()
+        if value.startswith(("\"", "'")) and value.endswith(value[0]) and len(value) >= 2:
+            value = value[1:-1].strip()
+        if value.lower().startswith("bearer "):
+            value = value[7:].strip()
+        if value:
+            return value
+    return ""
+
+OPENAI_API_KEY = _clean_env_secret("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
-HF_TOKEN = (os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACE_API_KEY", "").strip())
-# Railway may use HUGGINGFACE_MODEL; keep HF_MODEL as a backwards-compatible alias.
+HF_TOKEN = _clean_env_secret("HUGGINGFACE_API_KEY", "HF_TOKEN")
 HF_MODEL = (
     os.getenv("HUGGINGFACE_MODEL", "").strip()
     or os.getenv("HF_MODEL", "").strip()
-    or "openai/gpt-oss-120b:fastest"
+    or "Qwen/Qwen3-32B"
 )
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+GROQ_API_KEY = _clean_env_secret("GROQ_API_KEY")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip() or "openai/gpt-oss-120b"
-# Optional second Groq account/key. This is a separate provider slot so a
-# failure/cooldown on Groq #1 does not prevent the router from using Groq #2.
-GROQ_API_KEY_2 = (
-    os.getenv("GROQ_API_KEY_2", "").strip()
-    or os.getenv("GROQ2_API_KEY", "").strip()
-)
+GROQ_API_KEY_2 = _clean_env_secret("GROQ_API_KEY_2", "GROQ2_API_KEY")
 GROQ_MODEL_2 = (
     os.getenv("GROQ_MODEL_2", "qwen/qwen3.8-27b").strip()
     or os.getenv("GROQ2_MODEL", "qwen/qwen3.8-27b").strip()
     or "qwen/qwen3.8-27b"
 )
-GROQ_QWEN_MODEL = os.getenv("GROQ_QWEN_MODEL", "qwen/qwen3.6-27b").strip() or "qwen/qwen3.6-27b"
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_API_KEY = _clean_env_secret("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "").strip()
+OPENROUTER_API_KEY = _clean_env_secret("OPENROUTER_API_KEY")
 OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "openrouter/free").strip() or "openrouter/free"
-MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "").strip()
+MISTRAL_API_KEY = _clean_env_secret("MISTRAL_API_KEY")
 MISTRAL_MODEL = os.getenv("MISTRAL_MODEL", "mistral-small-latest").strip() or "mistral-small-latest"
-CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "").strip()
+CEREBRAS_API_KEY = _clean_env_secret("CEREBRAS_API_KEY")
 CEREBRAS_MODEL = os.getenv("CEREBRAS_MODEL", "qwen-3.8-27b").strip() or "qwen-3.8-27b"
 if CEREBRAS_MODEL in {"llama-3.3-70b", "llama-3.3-70b-versatile", "gpt-oss-120b"}:
     CEREBRAS_MODEL = "qwen-3.8-27b"
@@ -103,7 +108,7 @@ if DEEPSEEK_MODEL == "deepseek-v4-flash":
     DEEPSEEK_MODEL = "deepseek-flash"
 AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto"
 _DEFAULT_AI_FALLBACK_ORDER = [
-    "groq", "groq_2", "deepseek", "gemini", "groq_qwen", "openrouter",
+    "groq", "groq_2", "deepseek", "gemini", "openrouter",
     "mistral", "cerebras", "cloudflare", "huggingface", "openai",
 ]
 _raw_ai_order = [x.strip().lower() for x in os.getenv("AI_FALLBACK_ORDER", "").split(",") if x.strip()]
@@ -119,7 +124,6 @@ AI_PROVIDER_PROFILE = {
     "groq_2": {"quality": 90, "speed": 99, "capacity": 82, "cost": 96},
     "deepseek": {"quality": 96, "speed": 88, "capacity": 99, "cost": 97},
     "gemini": {"quality": 94, "speed": 91, "capacity": 88, "cost": 88},
-    "groq_qwen": {"quality": 86, "speed": 98, "capacity": 78, "cost": 94},
     "openai": {"quality": 97, "speed": 82, "capacity": 70, "cost": 62},
     "mistral": {"quality": 84, "speed": 89, "capacity": 78, "cost": 88},
     "cerebras": {"quality": 88, "speed": 100, "capacity": 82, "cost": 90},
@@ -153,7 +157,7 @@ AI_PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
 AI_PROVIDER_STATUS: dict[str, dict[str, Any]] = {}
 # Runtime AI controls. OFF providers are never called by the router.
 AI_PROVIDER_ENABLED: dict[str, bool] = {
-    "groq": True, "groq_2": True, "deepseek": True, "gemini": True, "groq_qwen": True,
+    "groq": True, "groq_2": True, "deepseek": True, "gemini": True,
     "openai": True, "mistral": True, "cerebras": True, "cloudflare": True,
     "huggingface": True, "openrouter": True,
 }
@@ -197,27 +201,61 @@ def _provider_error_details(exc: Exception) -> tuple[str, int | None]:
     return f"{prefix} · {raw[:280]}", status
 
 async def _openai_compatible_completion(api_key: str, base_url: str, model: str, prompt: str, provider: str, extra_headers: dict[str, str] | None = None) -> tuple[str, str]:
-    from openai import AsyncOpenAI
-    client = AsyncOpenAI(api_key=api_key, base_url=base_url, timeout=REQUEST_TIMEOUT, max_retries=0, default_headers=extra_headers or None)
-    kwargs = dict(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
-    )
-    # Some compatible providers/models reject response_format=json_object.
-    # Try structured output first, then transparently retry once without it.
-    try:
-        response = await client.chat.completions.create(**kwargs, response_format={"type": "json_object"})
-    except Exception as first_exc:
-        msg = str(first_exc).lower()
-        if any(x in msg for x in ("response_format", "json_object", "unsupported", "not support")):
-            response = await client.chat.completions.create(**kwargs)
-        else:
-            raise
-    text = (response.choices[0].message.content or "").strip()
-    if not text:
-        raise RuntimeError(f"{provider}: empty response")
-    return text, provider
+    """Call OpenAI-compatible providers with an explicit Authorization header."""
+    key = _clean_env_secret_value(api_key)
+    if not key:
+        raise RuntimeError(f"{provider}: API key is missing")
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update({k: v for k, v in extra_headers.items() if v})
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.1,
+        "response_format": {"type": "json_object"},
+    }
+    url = base_url.rstrip("/") + "/chat/completions"
+    async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+        response = await client.post(url, headers=headers, json=payload)
+        if response.status_code >= 400:
+            # A few compatible APIs reject response_format; retry once without it.
+            if response.status_code in (400, 404, 422) and "response_format" in response.text.lower():
+                payload.pop("response_format", None)
+                response = await client.post(url, headers=headers, json=payload)
+            if response.status_code >= 400:
+                try:
+                    body = response.json()
+                except Exception:
+                    body = {"message": response.text[:500]}
+                exc = RuntimeError(str(body.get("error") or body.get("message") or body))
+                exc.status_code = response.status_code
+                exc.body = body
+                raise exc
+        try:
+            data = response.json()
+        except Exception as exc:
+            raise RuntimeError(f"{provider}: non-JSON HTTP response") from exc
+        choices = data.get("choices") or []
+        message = choices[0].get("message") if choices else None
+        text = ""
+        if isinstance(message, dict):
+            content = message.get("content")
+            if isinstance(content, str):
+                text = content.strip()
+            elif isinstance(content, list):
+                text = "".join(str(part.get("text", "")) for part in content if isinstance(part, dict)).strip()
+        text = text or str(data.get("output_text") or "").strip()
+        if not text:
+            raise RuntimeError(f"{provider}: empty response")
+        return text, provider
+
+def _clean_env_secret_value(value: str) -> str:
+    value = str(value or "").strip()
+    if value.startswith(("\"", "'")) and value.endswith(value[0]) and len(value) >= 2:
+        value = value[1:-1].strip()
+    if value.lower().startswith("bearer "):
+        value = value[7:].strip()
+    return value
 
 async def _cloudflare_completion(prompt: str) -> tuple[str, str]:
     url=f"https://api.cloudflare.com/client/v4/accounts/{CLOUDFLARE_ACCOUNT_ID}/ai/run/{CLOUDFLARE_MODEL}"
@@ -235,8 +273,6 @@ async def _provider_call(provider: str, prompt: str) -> tuple[str, str]:
         return await _openai_compatible_completion(GROQ_API_KEY, "https://api.groq.com/openai/v1", GROQ_MODEL, prompt, "groq")
     if provider == "groq_2" and GROQ_API_KEY_2:
         return await _openai_compatible_completion(GROQ_API_KEY_2, "https://api.groq.com/openai/v1", GROQ_MODEL_2, prompt, "groq_2")
-    if provider == "groq_qwen" and GROQ_API_KEY:
-        return await _openai_compatible_completion(GROQ_API_KEY, "https://api.groq.com/openai/v1", GROQ_QWEN_MODEL, prompt, "groq_qwen")
     if provider == "gemini" and GEMINI_API_KEY:
         # Use Gemini's native GenerateContent API rather than the compatibility
         # layer so API-key authentication and model errors are reported directly.
@@ -454,7 +490,6 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
         "groq_2": bool(GROQ_API_KEY_2),
         "gemini": bool(GEMINI_API_KEY),
         "openrouter": bool(OPENROUTER_API_KEY),
-        "groq_qwen": bool(GROQ_API_KEY),
         "mistral": bool(MISTRAL_API_KEY),
         "cerebras": bool(CEREBRAS_API_KEY),
         "cloudflare": bool(CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN),
@@ -7004,7 +7039,6 @@ async def ai_providers_status(authorization: str | None = Header(default=None), 
         "groq_2": bool(GROQ_API_KEY_2),
         "gemini": bool(GEMINI_API_KEY),
         "openrouter": bool(OPENROUTER_API_KEY),
-        "groq_qwen": bool(GROQ_API_KEY),
         "mistral": bool(MISTRAL_API_KEY),
         "cerebras": bool(CEREBRAS_API_KEY),
         "cloudflare": bool(CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN),
@@ -7012,7 +7046,7 @@ async def ai_providers_status(authorization: str | None = Header(default=None), 
         "openai": bool(OPENAI_API_KEY),
         "huggingface": bool(HF_TOKEN),
     }
-    models={"groq":GROQ_MODEL,"groq_2":GROQ_MODEL_2,"gemini":GEMINI_MODEL,"openrouter":OPENROUTER_MODEL,"groq_qwen":GROQ_QWEN_MODEL,"mistral":MISTRAL_MODEL,"cerebras":CEREBRAS_MODEL,"cloudflare":CLOUDFLARE_MODEL,"deepseek":DEEPSEEK_MODEL,"openai":OPENAI_MODEL,"huggingface":HF_MODEL}
+    models={"groq":GROQ_MODEL,"groq_2":GROQ_MODEL_2,"gemini":GEMINI_MODEL,"openrouter":OPENROUTER_MODEL,"mistral":MISTRAL_MODEL,"cerebras":CEREBRAS_MODEL,"cloudflare":CLOUDFLARE_MODEL,"deepseek":DEEPSEEK_MODEL,"openai":OPENAI_MODEL,"huggingface":HF_MODEL}
     providers=[]
     now_mono = asyncio.get_running_loop().time()
     def display_score(p: str) -> float:
