@@ -75,6 +75,10 @@ def _clean_env_secret(name: str, *aliases: str) -> str:
 
 OPENAI_API_KEY = _clean_env_secret("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
+ANTHROPIC_API_KEY = _clean_env_secret("ANTHROPIC_API_KEY")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-fable-5").strip() or "claude-fable-5"
+ANTHROPIC_MODEL_2 = os.getenv("ANTHROPIC_MODEL_2", "claude-opus-5").strip() or "claude-opus-5"
+ANTHROPIC_MODEL_3 = os.getenv("ANTHROPIC_MODEL_3", "claude-sonnet-5").strip() or "claude-sonnet-5"
 HF_TOKEN = _clean_env_secret("HUGGINGFACE_API_KEY", "HF_TOKEN")
 HF_MODEL = (
     os.getenv("HUGGINGFACE_MODEL", "").strip()
@@ -108,8 +112,9 @@ if DEEPSEEK_MODEL == "deepseek-v4-flash":
     DEEPSEEK_MODEL = "deepseek-flash"
 AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto"
 _DEFAULT_AI_FALLBACK_ORDER = [
-    "groq", "groq_2", "deepseek", "gemini", "openrouter",
-    "mistral", "cerebras", "cloudflare", "huggingface", "openai",
+    "groq", "groq_2", "deepseek", "gemini",
+    "anthropic", "anthropic_2", "anthropic_3",
+    "openrouter", "mistral", "cerebras", "cloudflare", "huggingface", "openai",
 ]
 _raw_ai_order = [x.strip().lower() for x in os.getenv("AI_FALLBACK_ORDER", "").split(",") if x.strip()]
 AI_FALLBACK_ORDER: list[str] = []
@@ -124,6 +129,9 @@ AI_PROVIDER_PROFILE = {
     "groq_2": {"quality": 90, "speed": 99, "capacity": 82, "cost": 96},
     "deepseek": {"quality": 96, "speed": 88, "capacity": 99, "cost": 97},
     "gemini": {"quality": 94, "speed": 91, "capacity": 88, "cost": 88},
+    "anthropic": {"quality": 97, "speed": 88, "capacity": 84, "cost": 82},
+    "anthropic_2": {"quality": 99, "speed": 84, "capacity": 82, "cost": 72},
+    "anthropic_3": {"quality": 98, "speed": 90, "capacity": 86, "cost": 80},
     "openai": {"quality": 97, "speed": 82, "capacity": 70, "cost": 62},
     "mistral": {"quality": 84, "speed": 89, "capacity": 78, "cost": 88},
     "cerebras": {"quality": 88, "speed": 100, "capacity": 82, "cost": 90},
@@ -158,6 +166,7 @@ AI_PROVIDER_STATUS: dict[str, dict[str, Any]] = {}
 # Runtime AI controls. OFF providers are never called by the router.
 AI_PROVIDER_ENABLED: dict[str, bool] = {
     "groq": True, "groq_2": True, "deepseek": True, "gemini": True,
+    "anthropic": True, "anthropic_2": True, "anthropic_3": True,
     "openai": True, "mistral": True, "cerebras": True, "cloudflare": True,
     "huggingface": True, "openrouter": True,
 }
@@ -301,6 +310,41 @@ async def _provider_call(provider: str, prompt: str) -> tuple[str, str]:
         if not text:
             raise RuntimeError("gemini: empty response")
         return text, "gemini"
+    if provider in {"anthropic", "anthropic_2", "anthropic_3"} and ANTHROPIC_API_KEY:
+        model = {
+            "anthropic": ANTHROPIC_MODEL,
+            "anthropic_2": ANTHROPIC_MODEL_2,
+            "anthropic_3": ANTHROPIC_MODEL_3,
+        }[provider]
+        headers = {
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+        payload = {
+            "model": model,
+            "max_tokens": 1600,
+            "temperature": 0.1,
+            "system": "Return exactly one valid JSON object. No markdown fences, no commentary outside JSON.",
+            "messages": [{"role": "user", "content": prompt}],
+        }
+        async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as client:
+            r = await client.post("https://api.anthropic.com/v1/messages", headers=headers, json=payload)
+            if r.status_code >= 400:
+                try:
+                    detail = r.json()
+                except Exception:
+                    detail = r.text[:800]
+                exc = RuntimeError(f"Anthropic HTTP {r.status_code}: {detail}")
+                setattr(exc, "status_code", r.status_code)
+                setattr(exc, "body", detail if isinstance(detail, dict) else {"message": str(detail)})
+                raise exc
+            data = r.json()
+        content = data.get("content") or []
+        text = "".join(str(item.get("text", "")) for item in content if isinstance(item, dict) and item.get("type") == "text").strip()
+        if not text:
+            raise RuntimeError(f"{provider}: empty response")
+        return text, provider
     if provider == "openrouter" and OPENROUTER_API_KEY:
         return await _openai_compatible_completion(OPENROUTER_API_KEY, "https://openrouter.ai/api/v1", OPENROUTER_MODEL, prompt, "openrouter", {"HTTP-Referer": APP_BASE_URL, "X-OpenRouter-Title": APP_TITLE})
     if provider == "mistral" and MISTRAL_API_KEY:
@@ -489,6 +533,9 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
         "groq": bool(GROQ_API_KEY),
         "groq_2": bool(GROQ_API_KEY_2),
         "gemini": bool(GEMINI_API_KEY),
+        "anthropic": bool(ANTHROPIC_API_KEY),
+        "anthropic_2": bool(ANTHROPIC_API_KEY),
+        "anthropic_3": bool(ANTHROPIC_API_KEY),
         "openrouter": bool(OPENROUTER_API_KEY),
         "mistral": bool(MISTRAL_API_KEY),
         "cerebras": bool(CEREBRAS_API_KEY),
@@ -2739,55 +2786,350 @@ def _ema(values: list[float], period: int) -> float:
         e = v * k + e * (1 - k)
     return e
 
+
+def _bollinger_snapshot(closes: list[float], period: int = 20, mult: float = 2.0) -> dict[str, Any]:
+    if len(closes) < period:
+        return {"available": False}
+    data = closes[-period:]
+    mid = sum(data) / period
+    variance = sum((x - mid) ** 2 for x in data) / period
+    std = variance ** 0.5
+    upper = mid + mult * std
+    lower = mid - mult * std
+    width = upper - lower
+    return {
+        "available": True,
+        "upper": upper,
+        "middle": mid,
+        "lower": lower,
+        "width": width,
+        "position": (closes[-1] - lower) / max(width, 1e-9),
+    }
+
+
+def _macd_snapshot(closes: list[float]) -> dict[str, float | str]:
+    if len(closes) < 35:
+        return {"line": 0.0, "signal": 0.0, "histogram": 0.0, "state": "NEUTRAL"}
+    macd_series: list[float] = []
+    window = closes[-100:]
+    for i in range(26, len(window) + 1):
+        chunk = window[:i]
+        macd_series.append(_ema(chunk, 12) - _ema(chunk, 26))
+    line = macd_series[-1]
+    signal = _ema(macd_series[-9:], 9) if len(macd_series) >= 9 else line
+    hist = line - signal
+    if line > signal and line > 0:
+        state = "STRONG_BULLISH"
+    elif line > signal:
+        state = "BULLISH"
+    elif line < signal and line < 0:
+        state = "STRONG_BEARISH"
+    elif line < signal:
+        state = "BEARISH"
+    else:
+        state = "NEUTRAL"
+    return {"line": line, "signal": signal, "histogram": hist, "state": state}
+
+
+def _classic_book_patterns(candles: list[dict[str, Any]], atr_value: float) -> dict[str, Any]:
+    """Deterministic patterns/confluence from the supplied trading books.
+
+    Includes the classic double/triple reversal structures, rejection candles,
+    breakout/retest confirmation, and Fibonacci/volatility context. It never
+    creates a signal from one pattern alone.
+    """
+    n = len(candles)
+    price = float(candles[-1]["close"])
+    highs, lows = _swing_points(candles, 2, 2)
+    tol = max(float(atr_value) * 0.45, abs(price) * 0.0012)
+
+    def _between_lo(a: int, b: int) -> float:
+        lo, hi = sorted((a, b))
+        if hi - lo <= 1:
+            return min(float(candles[lo]["low"]), float(candles[hi]["low"]))
+        return min(float(candles[i]["low"]) for i in range(lo, hi + 1))
+
+    def _between_hi(a: int, b: int) -> float:
+        lo, hi = sorted((a, b))
+        if hi - lo <= 1:
+            return max(float(candles[lo]["high"]), float(candles[hi]["high"]))
+        return max(float(candles[i]["high"]) for i in range(lo, hi + 1))
+
+    chart_pattern = "NONE"
+    pattern_direction = "NEUTRAL"
+    pattern_confirmed = False
+    neckline = None
+
+    # Double/triple top and bottom patterns are only promoted when their
+    # confirmation level has actually broken on the last completed candle.
+    recent_highs = highs[-4:]
+    recent_lows = lows[-4:]
+    if len(recent_highs) >= 2:
+        p1, p2 = recent_highs[-2], recent_highs[-1]
+        if abs(p1[1] - p2[1]) <= tol:
+            neckline = _between_lo(p1[0], p2[0])
+            if len(recent_highs) >= 3:
+                p0 = recent_highs[-3]
+                if abs(p0[1] - p1[1]) <= tol * 1.15 and price < neckline:
+                    chart_pattern = "TRIPLE TOP CONFIRMED"
+                    pattern_direction = "BEARISH"
+                    pattern_confirmed = True
+            if not pattern_confirmed and price < neckline:
+                chart_pattern = "DOUBLE TOP CONFIRMED"
+                pattern_direction = "BEARISH"
+                pattern_confirmed = True
+
+    if chart_pattern == "NONE" and len(recent_lows) >= 2:
+        p1, p2 = recent_lows[-2], recent_lows[-1]
+        if abs(p1[1] - p2[1]) <= tol:
+            neckline = _between_hi(p1[0], p2[0])
+            if len(recent_lows) >= 3:
+                p0 = recent_lows[-3]
+                if abs(p0[1] - p1[1]) <= tol * 1.15 and price > neckline:
+                    chart_pattern = "TRIPLE BOTTOM CONFIRMED"
+                    pattern_direction = "BULLISH"
+                    pattern_confirmed = True
+            if not pattern_confirmed and price > neckline:
+                chart_pattern = "DOUBLE BOTTOM CONFIRMED"
+                pattern_direction = "BULLISH"
+                pattern_confirmed = True
+
+    cur = candles[-2] if n >= 2 else candles[-1]
+    prev = candles[-3] if n >= 3 else cur
+    o, h, l, c = map(float, (cur["open"], cur["high"], cur["low"], cur["close"]))
+    body = abs(c - o); rng = max(h - l, 1e-9)
+    upper_wick = h - max(o, c); lower_wick = min(o, c) - l
+    hammer = lower_wick >= body * 2.0 and upper_wick <= max(body * 0.75, rng * 0.20) and c >= l + rng * 0.55
+    shooting_star = upper_wick >= body * 2.0 and lower_wick <= max(body * 0.75, rng * 0.20) and c <= l + rng * 0.45
+    inside_bar = float(cur["high"]) <= float(prev["high"]) and float(cur["low"]) >= float(prev["low"])
+    candle_signal = "HAMMER" if hammer else "SHOOTING STAR" if shooting_star else "INSIDE BAR" if inside_bar else "NONE"
+
+    # Breakout + retest: a close must cross a recent swing boundary, and the
+    # current completed candle must hold that boundary rather than merely wick it.
+    breakout_retest = "NONE"
+    breakout_level = None
+    if highs:
+        rh = highs[-1][1]
+        if float(candles[-3]["close"]) <= rh and c > rh and float(cur["low"]) >= rh - max(atr_value * 0.35, 1e-9):
+            breakout_retest = "BULLISH_BREAKOUT_RETEST"
+            breakout_level = rh
+    if breakout_retest == "NONE" and lows:
+        rl = lows[-1][1]
+        if float(candles[-3]["close"]) >= rl and c < rl and float(cur["high"]) <= rl + max(atr_value * 0.35, 1e-9):
+            breakout_retest = "BEARISH_BREAKOUT_RETEST"
+            breakout_level = rl
+
+    fib = _fibonacci_analysis(candles)
+    fib_confluence = False
+    fib_level = None
+    if fib.get("available") and fib.get("direction") in {"BULLISH", "BEARISH"}:
+        atr_pad = max(atr_value * 0.35, abs(price) * 0.0007)
+        levels = fib.get("levels") or {}
+        key = ["0.5", "0.618", "0.786"]
+        nearest = min(key, key=lambda k: abs(price - float(levels[k]))) if all(k in levels for k in key) else None
+        if nearest and abs(price - float(levels[nearest])) <= atr_pad:
+            fib_confluence = True
+            fib_level = nearest
+
+    bb = _bollinger_snapshot([float(x["close"]) for x in candles])
+    bb_state = "NORMAL"
+    if bb.get("available"):
+        width = float(bb["width"])
+        prior = _bollinger_snapshot([float(x["close"]) for x in candles[:-1]])
+        if prior.get("available") and width > float(prior["width"]) * 1.12:
+            bb_state = "EXPANDING"
+        elif prior.get("available") and width < float(prior["width"]) * 0.88:
+            bb_state = "CONTRACTING"
+        if price >= float(bb["upper"]):
+            bb_state = "UPPER_BAND_TOUCH"
+        elif price <= float(bb["lower"]):
+            bb_state = "LOWER_BAND_TOUCH"
+
+    return {
+        "chart_pattern": chart_pattern,
+        "pattern_direction": pattern_direction,
+        "pattern_confirmed": pattern_confirmed,
+        "neckline": round(neckline, 4) if neckline is not None else None,
+        "candle_pattern": candle_signal,
+        "breakout_retest": breakout_retest,
+        "breakout_level": round(breakout_level, 4) if breakout_level is not None else None,
+        "fibonacci_confluence": fib_confluence,
+        "fibonacci_level": fib_level,
+        "fibonacci_direction": fib.get("direction", "NEUTRAL"),
+        "bollinger": {k: round(float(v), 6) for k, v in bb.items() if k in {"upper", "middle", "lower", "width", "position"}} if bb.get("available") else {"available": False},
+        "bollinger_state": bb_state,
+    }
+
+
 def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dict[str, Any]:
+    """Book-enhanced deterministic Classic Trade engine + shared AI advisory.
+
+    The book rules are confirmations, not standalone triggers. Signals require
+    multi-factor agreement and a structurally valid target; otherwise WAIT is
+    returned instead of inventing an entry.
+    """
+    if len(candles) < 60:
+        return {"signal": "WAIT", "confidence": 0, "score": 0, "reason": "Classic Trade uchun candle yetarli emas"}
+
     closes = [float(c["close"]) for c in candles]
-    cur = candles[-2]; prev = candles[-3]
-    price = closes[-1]
-    r = rsi(candles); a = atr(candles)
-    ema20 = _ema(closes[-80:], 20); ema50 = _ema(closes[-120:], 50)
-    macd_line = _ema(closes[-120:], 12) - _ema(closes[-120:], 26)
-    macd_prev = _ema(closes[-121:-1], 12) - _ema(closes[-121:-1], 26) if len(closes) > 121 else macd_line
-    macd_state = "BULLISH" if macd_line > macd_prev else "BEARISH"
-    body = abs(float(cur["close"])-float(cur["open"]))
-    rng = max(float(cur["high"])-float(cur["low"]), 1e-9)
-    bullish_candle = float(cur["close"]) > float(cur["open"]) and body/rng >= 0.45
-    bearish_candle = float(cur["close"]) < float(cur["open"]) and body/rng >= 0.45
-    bullish_engulf = bullish_candle and float(prev["close"]) < float(prev["open"]) and float(cur["open"]) <= float(prev["close"]) and float(cur["close"]) >= float(prev["open"])
-    bearish_engulf = bearish_candle and float(prev["close"]) > float(prev["open"]) and float(cur["open"]) >= float(prev["close"]) and float(cur["close"]) <= float(prev["open"])
-    pattern = "BULLISH ENGULFING" if bullish_engulf else "BEARISH ENGULFING" if bearish_engulf else "BULLISH CANDLE" if bullish_candle else "BEARISH CANDLE" if bearish_candle else "NEUTRAL CANDLE"
-    score = 0; reasons=[]
+    cur = candles[-2]
+    prev = candles[-3]
+    price = float(cur["close"])
+    r = rsi(candles)
+    a = max(atr(candles), 1e-9)
+    ema20 = _ema(closes[-80:], 20)
+    ema50 = _ema(closes[-120:], 50)
+    macd = _macd_snapshot(closes)
+    regime = _adaptive_regime(candles)
+    structure = _structure_state(candles)
+    book = _classic_book_patterns(candles, a)
+
+    score = 0
+    reasons: list[str] = []
+    confirmations = 0
+
     trend = "BULLISH" if ema20 > ema50 and price > ema20 else "BEARISH" if ema20 < ema50 and price < ema20 else "MIXED"
-    if trend == "BULLISH": score += 2; reasons.append("EMA20 > EMA50 / price above EMA20")
-    elif trend == "BEARISH": score -= 2; reasons.append("EMA20 < EMA50 / price below EMA20")
-    if price >= levels["pivot"]: score += 1; reasons.append("price above Pivot")
-    else: score -= 1; reasons.append("price below Pivot")
-    if 55 <= r < 70: score += 1; reasons.append("RSI bullish zone")
-    elif 30 < r <= 45: score -= 1; reasons.append("RSI bearish zone")
-    if macd_state == "BULLISH": score += 1; reasons.append("MACD bullish")
-    else: score -= 1; reasons.append("MACD bearish")
-    if bullish_engulf: score += 2; reasons.append("bullish engulfing")
-    elif bearish_engulf: score -= 2; reasons.append("bearish engulfing")
-    # Classic Trade is intentionally SNR-free. It uses only trend, pivot, momentum and candle structure.
-    direction = "BUY" if score >= 4 else "SELL" if score <= -4 else "WAIT"
-    regime=_adaptive_regime(candles)
-    if direction=="BUY" and regime["regime"]=="TRENDING_DOWN": direction="WAIT"; reasons.append("adaptive regime conflict")
-    if direction=="SELL" and regime["regime"]=="TRENDING_UP": direction="WAIT"; reasons.append("adaptive regime conflict")
-    confidence = min(97, 50 + abs(score)*7 + (5 if trend in {"BULLISH","BEARISH"} else 0))
-    strategy_quality=int(max(0,min(100,confidence + (8 if abs(score)>=6 else 0) + (5 if regime["trend_strength"]>=65 else 0))))
-    entry = round(price, 2)
+    if trend == "BULLISH":
+        score += 2; confirmations += 1; reasons.append("EMA20 > EMA50 + price above EMA20")
+    elif trend == "BEARISH":
+        score -= 2; confirmations += 1; reasons.append("EMA20 < EMA50 + price below EMA20")
+
+    if structure.get("prior_structure") == "BULLISH" or structure.get("bos") == "BULLISH" or structure.get("choch") == "BULLISH":
+        score += 2; confirmations += 1; reasons.append("bullish market structure/BOS-CHOCH")
+    elif structure.get("prior_structure") == "BEARISH" or structure.get("bos") == "BEARISH" or structure.get("choch") == "BEARISH":
+        score -= 2; confirmations += 1; reasons.append("bearish market structure/BOS-CHOCH")
+
+    if price >= float(levels["pivot"]):
+        score += 1; reasons.append("price above Pivot")
+    else:
+        score -= 1; reasons.append("price below Pivot")
+
+    if 52 <= r <= 68:
+        score += 1; confirmations += 1; reasons.append("RSI bullish confirmation")
+    elif 32 <= r <= 48:
+        score -= 1; confirmations += 1; reasons.append("RSI bearish confirmation")
+
+    macd_state = str(macd["state"])
+    if macd_state in {"BULLISH", "STRONG_BULLISH"}:
+        score += 1; confirmations += 1; reasons.append("MACD bullish")
+    elif macd_state in {"BEARISH", "STRONG_BEARISH"}:
+        score -= 1; confirmations += 1; reasons.append("MACD bearish")
+
+    if book["candle_pattern"] in {"HAMMER", "BULLISH ENGULFING"}:
+        score += 1; reasons.append(book["candle_pattern"].lower() + " rejection confirmation")
+    elif book["candle_pattern"] == "SHOOTING STAR":
+        score -= 1; reasons.append("shooting star rejection confirmation")
+
+    if book["chart_pattern"] == "DOUBLE BOTTOM CONFIRMED":
+        score += 3; confirmations += 1; reasons.append("double bottom breakout confirmed")
+    elif book["chart_pattern"] == "TRIPLE BOTTOM CONFIRMED":
+        score += 4; confirmations += 1; reasons.append("triple bottom breakout confirmed")
+    elif book["chart_pattern"] == "DOUBLE TOP CONFIRMED":
+        score -= 3; confirmations += 1; reasons.append("double top breakdown confirmed")
+    elif book["chart_pattern"] == "TRIPLE TOP CONFIRMED":
+        score -= 4; confirmations += 1; reasons.append("triple top breakdown confirmed")
+
+    if book["breakout_retest"] == "BULLISH_BREAKOUT_RETEST":
+        score += 2; confirmations += 1; reasons.append("bullish breakout + retest")
+    elif book["breakout_retest"] == "BEARISH_BREAKOUT_RETEST":
+        score -= 2; confirmations += 1; reasons.append("bearish breakout + retest")
+
+    if book["fibonacci_confluence"]:
+        if book["fibonacci_direction"] == "BULLISH":
+            score += 1; reasons.append(f"Fib {book['fibonacci_level']} bullish confluence")
+        elif book["fibonacci_direction"] == "BEARISH":
+            score -= 1; reasons.append(f"Fib {book['fibonacci_level']} bearish confluence")
+
+    if book["bollinger_state"] == "LOWER_BAND_TOUCH" and r < 50:
+        score += 1; reasons.append("lower Bollinger context")
+    elif book["bollinger_state"] == "UPPER_BAND_TOUCH" and r > 50:
+        score -= 1; reasons.append("upper Bollinger context")
+
+    direction = "BUY" if score >= 7 and confirmations >= 4 else "SELL" if score <= -7 and confirmations >= 4 else "WAIT"
+    if direction == "BUY" and regime["regime"] == "TRENDING_DOWN":
+        direction = "WAIT"; reasons.append("adaptive regime conflict")
+    if direction == "SELL" and regime["regime"] == "TRENDING_UP":
+        direction = "WAIT"; reasons.append("adaptive regime conflict")
+
+    # Build structural targets from actual levels/swing extremes. AutoTrade later
+    # requires RR >= 1.50, so Classic Trade refuses entries that cannot produce
+    # a clean >=1.50R target rather than forcing TP geometry.
+    highs, lows = _swing_points(candles, 2, 2)
+    recent_highs = [x[1] for x in highs[-8:]]
+    recent_lows = [x[1] for x in lows[-8:]]
     if direction == "BUY":
-        sl = round(min(float(cur["low"]), levels["s1"]) - max(a*0.15, 0.1), 2)
-        tp = [round(levels["r1"],2), round(levels["r2"],2)]
+        supports = [float(levels["s1"]), *recent_lows]
+        support = max([x for x in supports if x < price] or [price - a])
+        sl = round(support - max(a * 0.20, 0.10), 2)
+        risk = price - sl
+        targets = sorted(set([float(levels["r1"]), float(levels["r2"]), float(levels["r3"]), *[x for x in recent_highs if x > price]]))
+        targets = [x for x in targets if x > price and (x - price) / max(risk, 1e-9) >= 1.50]
+        if not targets:
+            direction = "WAIT"; reasons.append("No structural BUY target with RR >= 1.50")
+            sl = None; tp = []
+        else:
+            tp = [round(targets[0], 2)]
+            if len(targets) > 1: tp.append(round(targets[1], 2))
     elif direction == "SELL":
-        sl = round(max(float(cur["high"]), levels["r1"]) + max(a*0.15, 0.1), 2)
-        tp = [round(levels["s1"],2), round(levels["s2"],2)]
-    else: sl=None; tp=[]
-    return {"signal":direction,"confidence":confidence,"score":score,"entry":entry,"stop_loss":sl,"take_profit":tp,
-            "trend":trend,"rsi":round(r,2),"rsi_state":"OVERBOUGHT" if r>=70 else "OVERSOLD" if r<=30 else "NEUTRAL",
-            "ema20":round(ema20,2),"ema50":round(ema50,2),"macd":round(macd_line,5),"macd_state":macd_state,
-            "pattern":pattern,"pivot":levels["pivot"],"support":[levels["s1"],levels["s2"],levels["s3"]],"resistance":[levels["r1"],levels["r2"],levels["r3"]],
-            "reason":"; ".join(reasons),"method":"Classic · Adaptive Trend/Pivot/Momentum/Candlestick",
-            "market_regime":regime,"strategy_engine":"Adaptive Classic Strategy (SNR-free)","strategy_quality":strategy_quality,"decision_state":"CONFIRMED" if direction in {"BUY","SELL"} else "WAIT"}
+        resistances = [float(levels["r1"]), *recent_highs]
+        resistance = min([x for x in resistances if x > price] or [price + a])
+        sl = round(resistance + max(a * 0.20, 0.10), 2)
+        risk = sl - price
+        targets = sorted(set([float(levels["s1"]), float(levels["s2"]), float(levels["s3"]), *[x for x in recent_lows if x < price]], reverse=True))
+        targets = [x for x in targets if x < price and (price - x) / max(risk, 1e-9) >= 1.50]
+        if not targets:
+            direction = "WAIT"; reasons.append("No structural SELL target with RR >= 1.50")
+            sl = None; tp = []
+        else:
+            tp = [round(targets[0], 2)]
+            if len(targets) > 1: tp.append(round(targets[1], 2))
+    else:
+        sl = None; tp = []
+
+    confidence = int(min(97, max(0, 50 + abs(score) * 5 + confirmations * 4 + (5 if book["chart_pattern"] != "NONE" else 0))))
+    quality = int(max(0, min(100, confidence + (8 if abs(score) >= 9 else 0) + (5 if regime["trend_strength"] >= 65 else 0))))
+    return {
+        "signal": direction,
+        "confidence": confidence,
+        "score": score,
+        "confirmations": confirmations,
+        "entry": round(price, 2) if direction in {"BUY", "SELL"} else None,
+        "stop_loss": sl,
+        "take_profit": tp,
+        "trend": trend,
+        "rsi": round(r, 2),
+        "rsi_state": "OVERBOUGHT" if r >= 70 else "OVERSOLD" if r <= 30 else "NEUTRAL",
+        "ema20": round(ema20, 2),
+        "ema50": round(ema50, 2),
+        "macd": round(float(macd["line"]), 6),
+        "macd_signal": round(float(macd["signal"]), 6),
+        "macd_histogram": round(float(macd["histogram"]), 6),
+        "macd_state": macd_state,
+        "pattern": book["candle_pattern"] if book["candle_pattern"] != "NONE" else book["chart_pattern"],
+        "book_pattern": book["chart_pattern"],
+        "breakout_retest": book["breakout_retest"],
+        "fibonacci_confluence": book["fibonacci_confluence"],
+        "fibonacci_level": book["fibonacci_level"],
+        "bollinger_state": book["bollinger_state"],
+        "bollinger": book["bollinger"],
+        "pivot": levels["pivot"],
+        "support": [levels["s1"], levels["s2"], levels["s3"]],
+        "resistance": [levels["r1"], levels["r2"], levels["r3"]],
+        "reason": "; ".join(reasons),
+        "method": "Classic · Book-Enhanced Multi-Factor Confluence",
+        "book_sources": [
+            "SIMPLE TRADING Book v1: double/triple top & bottom",
+            "XAU/USD Multi-Factor Technical Analysis: MA/RSI/MACD/BB/ATR/Pivot/S-R/BOS/CHOCH/breakout-retest",
+            "ICT Trading Strategy: market-structure confirmation concepts",
+            "Fibonacci strategy: retracement confluence"
+        ],
+        "market_regime": regime,
+        "structure": structure,
+        "strategy_engine": "Book-Enhanced Classic Strategy V3",
+        "strategy_version": "V3-BOOK-ENHANCED",
+        "strategy_quality": quality,
+        "decision_state": "CONFIRMED" if direction in {"BUY", "SELL"} else "WAIT"
+    }
 
 async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict[str, Any], str | None]:
     """Classic Pivot levels based on the previous completed candle of the selected timeframe.
@@ -7038,6 +7380,9 @@ async def ai_providers_status(authorization: str | None = Header(default=None), 
         "groq": bool(GROQ_API_KEY),
         "groq_2": bool(GROQ_API_KEY_2),
         "gemini": bool(GEMINI_API_KEY),
+        "anthropic": bool(ANTHROPIC_API_KEY),
+        "anthropic_2": bool(ANTHROPIC_API_KEY),
+        "anthropic_3": bool(ANTHROPIC_API_KEY),
         "openrouter": bool(OPENROUTER_API_KEY),
         "mistral": bool(MISTRAL_API_KEY),
         "cerebras": bool(CEREBRAS_API_KEY),
@@ -7046,7 +7391,7 @@ async def ai_providers_status(authorization: str | None = Header(default=None), 
         "openai": bool(OPENAI_API_KEY),
         "huggingface": bool(HF_TOKEN),
     }
-    models={"groq":GROQ_MODEL,"groq_2":GROQ_MODEL_2,"gemini":GEMINI_MODEL,"openrouter":OPENROUTER_MODEL,"mistral":MISTRAL_MODEL,"cerebras":CEREBRAS_MODEL,"cloudflare":CLOUDFLARE_MODEL,"deepseek":DEEPSEEK_MODEL,"openai":OPENAI_MODEL,"huggingface":HF_MODEL}
+    models={"groq":GROQ_MODEL,"groq_2":GROQ_MODEL_2,"gemini":GEMINI_MODEL,"anthropic":ANTHROPIC_MODEL,"anthropic_2":ANTHROPIC_MODEL_2,"anthropic_3":ANTHROPIC_MODEL_3,"openrouter":OPENROUTER_MODEL,"mistral":MISTRAL_MODEL,"cerebras":CEREBRAS_MODEL,"cloudflare":CLOUDFLARE_MODEL,"deepseek":DEEPSEEK_MODEL,"openai":OPENAI_MODEL,"huggingface":HF_MODEL}
     providers=[]
     now_mono = asyncio.get_running_loop().time()
     def display_score(p: str) -> float:
