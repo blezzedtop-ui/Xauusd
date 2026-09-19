@@ -2,16 +2,18 @@
 
 The dashboard only shows AI providers that have the required credentials configured in Railway. Providers without keys are hidden.
 
-Fallback order:
+Fallback order (free-first):
 1. Groq GPT-OSS 120B
-2. Google Gemini Flash
-3. OpenRouter Free
-4. Groq Qwen
+2. Groq Qwen
+3. Google Gemini Flash
+4. Cerebras
 5. Mistral
-6. Cerebras
-7. Cloudflare Workers AI
-8. DeepSeek
-9. OpenAI
+6. Cloudflare Workers AI
+7. Hugging Face
+8. OpenRouter Free
+9. DeepSeek Flash (paid emergency fallback)
+10. Claude models (paid, if configured)
+11. OpenAI (paid, if configured)
 
 Status meanings:
 - ONLINE — the latest AI request succeeded.
@@ -32,3 +34,9 @@ Railway variables for DeepSeek:
 
 
 Hugging Face is enabled when HF_TOKEN (or HUGGINGFACE_API_KEY) is set. Default model: openai/gpt-oss-120b:fastest via https://router.huggingface.co/v1.
+
+
+Recommended Railway router variables:
+- `AI_ROUTER_MODE=order`
+- `AI_PAID_FALLBACK_ENABLED=true`
+- `AI_FALLBACK_ORDER=groq,groq_2,gemini,cerebras,mistral,cloudflare,huggingface,openrouter,deepseek,anthropic,anthropic_2,anthropic_3,openai`
