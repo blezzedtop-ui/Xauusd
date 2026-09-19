@@ -589,9 +589,6 @@ body:before{
 .sidebar .nav > button[data-section="smartAnalysisSection"]{
   --sx-liquid-a:rgba(45,207,255,.44);--sx-liquid-b:rgba(165,84,255,.34);--sx-liquid-c:rgba(53,242,193,.14);
 }
-.sidebar .nav > button[data-section="signalEngineSection"]{
-  --sx-liquid-a:rgba(30,217,255,.50);--sx-liquid-b:rgba(87,58,255,.34);--sx-liquid-c:rgba(255,79,132,.12);
-}
 .sidebar .nav > button[data-section="aiFallbackSection"]{
   --sx-liquid-a:rgba(72,216,255,.42);--sx-liquid-b:rgba(111,79,255,.38);--sx-liquid-c:rgba(55,244,196,.14);
 }
@@ -604,14 +601,8 @@ body:before{
 .sidebar .nav > button[data-section="trendLineSection"]{
   --sx-liquid-a:rgba(28,214,255,.44);--sx-liquid-b:rgba(71,101,255,.30);--sx-liquid-c:rgba(41,240,174,.12);
 }
-.sidebar .nav > button[data-section="signalSection"]{
-  --sx-liquid-a:rgba(39,225,255,.46);--sx-liquid-b:rgba(110,69,255,.31);--sx-liquid-c:rgba(255,86,143,.11);
-}
 .sidebar .nav > button[data-section="ictSection"]{
   --sx-liquid-a:rgba(59,203,255,.44);--sx-liquid-b:rgba(87,70,255,.30);--sx-liquid-c:rgba(255,209,79,.12);
-}
-.sidebar .nav > button[data-section="signalsSection"]{
-  --sx-liquid-a:rgba(50,210,255,.44);--sx-liquid-b:rgba(97,71,255,.30);--sx-liquid-c:rgba(255,76,113,.14);
 }
 .sidebar .nav > button[data-section="mtfSection"]{
   --sx-liquid-a:rgba(0,216,255,.46);--sx-liquid-b:rgba(92,104,255,.28);--sx-liquid-c:rgba(70,244,206,.12);

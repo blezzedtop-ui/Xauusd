@@ -34,7 +34,7 @@ from algo_smc_strategy import analyze_algo_smc
 from trend_channel_strategy import analyze_trend_channel
 from fibonacci_strategy import analyze_fibonacci
 from pydantic import BaseModel, Field
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select, func
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select, func, delete
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, relationship, sessionmaker
 
@@ -684,7 +684,7 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
             continue
         if str(row.interval or "").strip().lower() in {"1m", "1min", "m1"}:
             continue
-        source = str(row.source or "Signals")[:40]
+        source = str(row.source or HISTORY_DEFAULT_SOURCE)[:40]
         if _autotrade_source_excluded(source):
             continue
         try:
@@ -800,6 +800,9 @@ class Subscription(Base):
     user: Mapped[User] = relationship(back_populates="subscription")
 
 
+LEGACY_EXCLUDED_SIGNAL_SOURCES = {"Signal Lab", "AlgoTrade", "Book + OpenAI", "SNR", "Adaptive Institutional SNR V2", "Strong-zone SNR", "Signals", "Signal Engine"}
+HISTORY_DEFAULT_SOURCE = "Unknown"
+
 class SignalHistory(Base):
     __tablename__ = "signal_history"
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -813,7 +816,7 @@ class SignalHistory(Base):
     outcome: Mapped[str] = mapped_column(String(20), default="OPEN", index=True)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), index=True)
-    source: Mapped[str] = mapped_column(String(40), default="Signals", index=True)
+    source: Mapped[str] = mapped_column(String(40), default=HISTORY_DEFAULT_SOURCE, index=True)
     candle_time: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     signal_uid: Mapped[str] = mapped_column(String(40), unique=True, index=True, default=lambda: "SIG-" + secrets.token_hex(10).upper())
     status: Mapped[str] = mapped_column(String(20), default="ACTIVE", index=True)
@@ -832,6 +835,18 @@ class SignalHistory(Base):
 Base.metadata.create_all(engine)
 
 HISTORY_LOCAL_TZ = ZoneInfo("Asia/Tashkent")
+
+def _purge_retired_signal_history(session: Session) -> int:
+    """Delete retired standalone Signals/Signal Engine rows from the local history store.
+
+    Controlled by PURGE_RETIRED_SIGNAL_HISTORY=true. Production history endpoints also
+    exclude these sources even when purge is disabled, so old rows can never resurface.
+    """
+    if os.getenv("PURGE_RETIRED_SIGNAL_HISTORY", "false").lower() != "true":
+        return 0
+    result = session.execute(delete(SignalHistory).where(SignalHistory.source.in_({"Signals", "Signal Engine"})))
+    session.commit()
+    return int(result.rowcount or 0)
 
 def history_period_bounds(period: str | None) -> tuple[datetime | None, datetime | None]:
     """Return UTC-aware [start, end) bounds for user-facing history filters.
@@ -896,7 +911,7 @@ def ensure_schema() -> None:
             conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS ux_users_username ON users (username)")
             sig_cols = {c["name"] for c in inspector.get_columns("signal_history")}
             if "source" not in sig_cols:
-                conn.exec_driver_sql("ALTER TABLE signal_history ADD COLUMN source VARCHAR(40) DEFAULT 'Signals'")
+                conn.exec_driver_sql("ALTER TABLE signal_history ADD COLUMN source VARCHAR(40) DEFAULT 'Unknown'")
             if "candle_time" not in sig_cols:
                 conn.exec_driver_sql("ALTER TABLE signal_history ADD COLUMN candle_time VARCHAR(40)")
             # Professional Signal History v2 fields. Existing rows remain intact.
@@ -1533,10 +1548,9 @@ def _normalize_history_candle_time(value: Any) -> str:
     except Exception:
         return raw
 
-LEGACY_EXCLUDED_SIGNAL_SOURCES = {"Signal Lab", "AlgoTrade", "Book + OpenAI", "SNR", "Adaptive Institutional SNR V2", "Strong-zone SNR"}
 
 def _normalize_history_source(value: str | None) -> str:
-    raw = str(value or "Signals").strip()
+    raw = str(value or HISTORY_DEFAULT_SOURCE).strip()
     aliases = {
         "signals":"Signals", "signal engine":"Signal Engine", "technical analysis":"Technical Analysis",
         "ai smart analysis":"AI Smart Analysis", "ai fallback network":"AI Fallback Network",
@@ -3987,39 +4001,6 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
     return result
 
 
-async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[str, Any]:
-    # RealMarketAPI's documented analysis timeframes. M30 is built locally from M15.
-    intervals=["1min","5min","15min","30min","1h","4h","1day"]
-    async def one(tf: str):
-        try:
-            candles_data,mode,warning=await get_candles(symbol,tf,260)
-            analysis_candles=candles_data
-            item=build_advanced_signal(analysis_candles,tf,news_blocked=news_blocked)
-            candle_time=analysis_candles[-1].get("time")
-            ai=await ai_validate_module_signal("Signal Engine",symbol,tf,candle_time,item)
-            item=merge_ai_validation(item,ai)
-            # Shared AI validation assists every strategy component, but never gates AutoTrade.
-            for _component in (item.get("components") or {}).values():
-                if isinstance(_component, dict):
-                    _component.setdefault("ai_assisted", True)
-                    _component.setdefault("ai_layer", "Shared AI Validation")
-                    _component.setdefault("ai_advisory_only", True)
-            item["ai_layer"]="Shared AI Validation"
-            item["ai_advisory_only"]=True
-            item["candle_time"]=candle_time
-            # Every timeframe and signal component is calculated from the same
-            # TradingView OHLC series returned by get_candles(). No secondary
-            # market-data or provider-intelligence result is merged into the signal.
-            return tf,{**item,"mode":mode,"warning":warning}
-        except Exception as exc:
-            return tf,{"interval":tf,"signal":"UNAVAILABLE","entry":None,"stop_loss":None,"take_profit":[],
-                       "confidence":0,"score":0,"setup":"ERROR","components":{},
-                       "reason":str(exc),"mode":"error","warning":str(exc)}
-    pairs=await asyncio.gather(*(one(tf) for tf in intervals))
-    return {"symbol":clean_symbol(symbol),"timeframes":{tf:data for tf,data in pairs},
-            "generated_at":datetime.now(timezone.utc).isoformat()}
-
-
 
 
 async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
@@ -4852,7 +4833,8 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 5
     never treated as a new signal.
     """
     rows = list(session.scalars(select(SignalHistory).where(
-        SignalHistory.user_id == user_id
+        SignalHistory.user_id == user_id,
+        ~SignalHistory.source.in_(LEGACY_EXCLUDED_SIGNAL_SOURCES)
     ).order_by(SignalHistory.created_at.desc(), SignalHistory.id.desc()).limit(limit)).all())
 
     def parse_dt(value: Any) -> datetime | None:
@@ -6084,7 +6066,7 @@ def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[di
             "session_filter":session_ok,"volatility_ratio":round(vol_ratio,2)}
 
 def _autotrade_source_excluded(source: str) -> bool:
-    # The standalone "Signals" section is retired: never forward its records to AutoTrade.
+    # Retired legacy sources are never forwarded to AutoTrade.
     normalized = re.sub(r"[\s_\-/]+", " ", str(source or "").strip().lower()).strip()
     blocked = {
         "book + openai", "book openai", "book/openai", "book-openai",
@@ -6175,7 +6157,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
 async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     """Forward all active SignalX strategy families into History and the MT5 queue.
 
-    Active sources include Signal Engine, Technical Analysis, Classic Trade, Auto Trend Line,
+    Active sources include Technical Analysis, Classic Trade, Auto Trend Line,
     ICT Signals, AI Smart Analysis, MSAI/SNR, SMC, Algo/SMC, Patterns, Trend Channel Engine,
     Fibonacci and Yangi Strategiya. Removed modules remain blocked. AutoTrade additionally
     requires non-M1, valid geometry/risk, AI/market validation and RR >= 1.50.
@@ -6473,7 +6455,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             if len(candles) < 40:
                 continue
             candle_time = _normalize_history_candle_time(candles[-1].get("time"))
-            source = _normalize_history_source(c.get("source") or "Signals")
+            source = _normalize_history_source(c.get("source") or HISTORY_DEFAULT_SOURCE)
             original_direction = direction
             original_item = dict(item)
 
@@ -6786,14 +6768,6 @@ async def trend_lines(symbol: str, interval: str = DEFAULT_INTERVAL) -> dict[str
                 "mode": "mt5_unavailable", "warning": str(exc), "provider": "Exness MT5",
                 "generated_at": datetime.now(timezone.utc).isoformat()}
 
-@app.get("/api/v1/signals/live/{symbol:path}")
-async def live_signals(symbol: str, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    require_admin(authorization, session)
-    # Every request recomputes signals from the current live candle feed.
-    # No demo/static signal data is used.
-    result = await build_advanced_signals(clean_symbol(symbol), news_blocked=False)
-    return {**result, "mode": "live", "source": f"TradingView {tv_symbol_for(symbol)} chart series"}
-
 
 @app.get("/api/v1/ai-signals/live/{symbol:path}")
 async def ai_signals_live(symbol: str, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
@@ -6876,7 +6850,7 @@ class MT5ReportBody(BaseModel):
 class ModuleSignalBody(BaseModel):
     symbol: str = DEFAULT_SYMBOL
     interval: str = DEFAULT_INTERVAL
-    source: str = "Signals"
+    source: str = HISTORY_DEFAULT_SOURCE
     direction: str = "WAIT"
     confidence: float | None = None
     entry: float | None = None
@@ -6896,7 +6870,7 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     """
     user = current_user(authorization, session)
     direction = str(body.direction or "WAIT").upper()
-    source = _normalize_history_source(body.source or "Signals")
+    source = _normalize_history_source(body.source or HISTORY_DEFAULT_SOURCE)
     if _autotrade_source_excluded(source):
         return {"saved": False, "reason": "MODULE_REMOVED"}
     interval = validate_interval(body.interval)
@@ -7009,7 +6983,7 @@ async def signal_analytics(period: str = Query("all"), date: str | None = Query(
 
     for r in rows:
         item = by_tf.setdefault(r.interval, bucket())
-        src = getattr(r, "source", None) or "Signals"
+        src = getattr(r, "source", None) or HISTORY_DEFAULT_SOURCE
         src_item = by_source.setdefault(src, bucket())
         dt = r.created_at
         if dt is None:
@@ -7207,7 +7181,7 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
         items.append({"id":r.id,"signal_id":r.signal_uid,"symbol":r.symbol,"direction":r.direction,"score":r.signal_score,"strength":r.signal_strength,
                       "entry":entry,"sl":sl,"tp1":tp1,"tp2":tp2,"rr":r.risk_reward,"created_at":dt.isoformat(),"closed_at":closed.isoformat() if closed else None,
                       "duration_minutes":duration,"status":status,"result":r.result or (status if status in {"TP2 HIT","SL HIT"} else None),
-                      "profit_loss":r.profit_loss,"r_multiple":r.r_multiple,"result_price":(payload.get("result", {}).get("price") if isinstance(payload.get("result"), dict) else None),"source":r.source or "Signals","interval":r.interval,"candle_time":r.candle_time,
+                      "profit_loss":r.profit_loss,"r_multiple":r.r_multiple,"result_price":(payload.get("result", {}).get("price") if isinstance(payload.get("result"), dict) else None),"source":r.source or HISTORY_DEFAULT_SOURCE,"interval":r.interval,"candle_time":r.candle_time,
                       "auto_entry":bool(payload.get("auto_entry")),"snapshot":snap})
     return {"ok":True,"timezone":"Asia/Tashkent","items":items,"count":len(items),"total_count":total_count,"offset":offset,"limit":limit}
 
@@ -7216,7 +7190,10 @@ async def signal_history_refresh_v2(authorization: str | None = Header(default=N
     user = current_user(authorization, session)
     try:
         await refresh_signal_outcomes(session, user.id, limit=2000)
-        rows = list(session.scalars(select(SignalHistory).where(SignalHistory.user_id == user.id)).all())
+        rows = list(session.scalars(select(SignalHistory).where(
+            SignalHistory.user_id == user.id,
+            ~SignalHistory.source.in_(LEGACY_EXCLUDED_SIGNAL_SOURCES)
+        )).all())
         counts = {"active": 0, "tp1": 0, "wins": 0, "losses": 0, "target_reached": 0, "cancelled": 0}
         for r in rows:
             st = _history_status(r)
@@ -7265,7 +7242,7 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
     def bucket(): return {"signals":0,"wins":0,"losses":0,"active":0,"tp1":0,"tp2":0,"total_r":0.0,"total_profit":0.0,"avg_rr":0.0,"winrate":0.0}
     overall=bucket(); by_module={}; by_day={}; by_symbol={}; by_direction={}
     for r in rows:
-        s=st(r); k=(r.source or "Signals")
+        s=st(r); k=(r.source or HISTORY_DEFAULT_SOURCE)
         dt=r.created_at
         if dt is None:
             continue
@@ -7287,17 +7264,6 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
         b["avg_rr"]=round(b["avg_rr"]/b["signals"],2) if b["signals"] else 0.0
         b["total_r"]=round(b["total_r"],2); b["total_profit"]=round(b["total_profit"],2)
     return {"ok":True,"timezone":"Asia/Tashkent","overall":overall,"by_module":by_module,"by_day":dict(sorted(by_day.items(),reverse=True)),"by_symbol":by_symbol,"by_direction":by_direction}
-
-@app.post("/api/v1/signals/save")
-async def save_signal(symbol: str, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    user = current_user(authorization, session)
-    analysis = await build_full_analysis(symbol, interval)
-    snap=_history_snapshot_payload(analysis,"Signals",analysis["symbol"],analysis["interval"],analysis["direction"],analysis.get("confidence"),analysis.get("current_price"),analysis.get("stop_loss"),analysis.get("take_profit"),analysis.get("candle_time"))
-    item = SignalHistory(user_id=user.id, symbol=analysis["symbol"], interval=analysis["interval"], direction=analysis["direction"], headline=analysis["headline"], price=analysis["current_price"], payload=json.dumps({**analysis,"source":"Signals","candle_time":analysis.get("candle_time"),"history_snapshot":snap}), outcome="OPEN", status="ACTIVE", created_at=datetime.now(timezone.utc), source="Signals", candle_time=str(analysis.get("candle_time") or ""))
-    _history_sync_row(item, {**analysis,"confidence_at_entry":analysis.get("confidence"),"setup":{"entry":analysis.get("current_price"),"stop_loss":analysis.get("stop_loss"),"take_profit":analysis.get("take_profit",[])}})
-    session.add(item); session.commit(); session.refresh(item)
-    return {"id": item.id, "status": "saved", "outcome": item.outcome}
-
 
 @app.get("/api/v1/signals/history")
 async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Query("all"), date: str | None = Query(None), symbol: str = Query(""), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
@@ -7348,7 +7314,7 @@ async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Que
         tp_value = setup.get("take_profit", [])
         sl_value = setup.get("stop_loss")
         tp_pips, tp_pips_total, sl_pips = history_level_pips(r.symbol, entry_value, tp_value, sl_value)
-        items.append({"id": r.id, "symbol": r.symbol, "interval": r.interval, "source": getattr(r, "source", None) or "Signals", "candle_time": getattr(r, "candle_time", None), "direction": r.direction, "entry": entry_value, "tp": tp_value, "sl": sl_value, "tp_pips": tp_pips, "tp_pips_total": tp_pips_total, "sl_pips": sl_pips, "pip_size": history_pip_size(r.symbol), "headline": r.headline, "price": r.price, "outcome": r.outcome, "result_price": result.get("price"), "duration_seconds": duration_seconds, "duration_minutes": round(duration_seconds/60,2) if duration_seconds is not None else None, "auto_entry": bool(payload.get("auto_entry")), "confidence": payload.get("confidence_at_entry", ((payload.get("signal") or {}).get("confidence") if isinstance(payload.get("signal"), dict) else None)), "setup_strength": payload.get("setup_strength", setup_strength), "setup_grade": payload.get("setup_grade", setup_grade), "strong_setup": bool(payload.get("strong_setup", strong_setup)), "created_at": created_at.isoformat(), "closed_at": closed_at.isoformat() if closed_at else None})
+        items.append({"id": r.id, "symbol": r.symbol, "interval": r.interval, "source": getattr(r, "source", None) or HISTORY_DEFAULT_SOURCE, "candle_time": getattr(r, "candle_time", None), "direction": r.direction, "entry": entry_value, "tp": tp_value, "sl": sl_value, "tp_pips": tp_pips, "tp_pips_total": tp_pips_total, "sl_pips": sl_pips, "pip_size": history_pip_size(r.symbol), "headline": r.headline, "price": r.price, "outcome": r.outcome, "result_price": result.get("price"), "duration_seconds": duration_seconds, "duration_minutes": round(duration_seconds/60,2) if duration_seconds is not None else None, "auto_entry": bool(payload.get("auto_entry")), "confidence": payload.get("confidence_at_entry", ((payload.get("signal") or {}).get("confidence") if isinstance(payload.get("signal"), dict) else None)), "setup_strength": payload.get("setup_strength", setup_strength), "setup_grade": payload.get("setup_grade", setup_grade), "strong_setup": bool(payload.get("strong_setup", strong_setup)), "created_at": created_at.isoformat(), "closed_at": closed_at.isoformat() if closed_at else None})
     return {"items": items}
 
 
