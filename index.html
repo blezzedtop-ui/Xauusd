@@ -707,7 +707,23 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 #historySection .history th,#historySection .history td{vertical-align:middle;}
 @media(max-width:700px){#historySection .card{overflow:visible;}#historySection .scroll{max-width:100%;touch-action:pan-x pan-y;-webkit-overflow-scrolling:touch;}#historySection .history{min-width:1180px;}}
 </style>
-<style id="signalx-history-v2">#historySection .sx-history-v2{width:100%;display:flex;flex-direction:column;gap:14px}.sx-history-header{display:flex;justify-content:space-between;align-items:center;gap:12px}.sx-history-filters{display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:10px;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:18px;background:rgba(12,16,25,.72);backdrop-filter:blur(16px)}.filter-block{display:flex;flex-direction:column;gap:6px;min-width:0}.filter-block.wide{grid-column:span 2}.filter-block>span{font-size:10px;letter-spacing:.12em;opacity:.62}.filter-block select,.filter-block input{width:100%;min-height:38px}.filter-row{display:flex;flex-wrap:wrap;gap:6px}.h2-date{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:inherit;border-radius:10px;padding:8px 11px;cursor:pointer}.h2-date.active{box-shadow:0 0 0 1px rgba(255,255,255,.25),0 0 20px rgba(0,180,255,.12)}.sx-kpi-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:10px}.sx-kpi,.sx-module{border:1px solid rgba(255,255,255,.08);background:linear-gradient(160deg,rgba(255,255,255,.055),rgba(255,255,255,.018));border-radius:16px;padding:14px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05)}.sx-kpi small,.sx-module small{display:block;opacity:.6;font-size:10px;letter-spacing:.08em}.sx-kpi b{font-size:22px;display:block;margin-top:5px}.sx-history-subhead{display:flex;align-items:end;justify-content:space-between;gap:10px}.sx-day-performance{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.sx-module-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.sx-module b{font-size:20px}.sx-module .line{font-size:12px;opacity:.78;margin-top:5px}.sx-signal-list{display:flex;flex-direction:column;gap:10px}.sx-signal-card{border:1px solid rgba(255,255,255,.08);border-radius:18px;background:rgba(9,13,21,.78);padding:16px;position:relative;overflow:hidden;color:rgba(255,255,255,.92)}.sx-signal-card:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:currentColor;opacity:.85}.sx-signal-card.buy:before{background:#69ff9d}.sx-signal-card.sell:before{background:#ff6767}.sx-signal-top{display:flex;justify-content:space-between;gap:12px;align-items:center}.sx-signal-badge{font-weight:800;font-size:20px}.sx-signal-meta{color:rgba(255,255,255,.68);font-size:12px}.sx-signal-levels{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin-top:12px}.sx-level{border-radius:12px;background:rgba(255,255,255,.035);padding:9px}.sx-level span{display:block;opacity:.56;font-size:10px}.sx-level b{display:block;margin-top:3px;font-size:14px}.sx-signal-bottom{display:flex;justify-content:space-between;align-items:center;margin-top:12px;gap:8px}.sx-status{padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.06);font-size:11px;font-weight:800}.sx-history-detail{max-width:1000px}.sx-detail-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}.sx-detail-section{margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08)}.sx-detail-section h4{margin:0 0 8px}.sx-evidence-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.sx-evidence{padding:10px;border-radius:12px;background:rgba(255,255,255,.035)}.sx-timeline{position:relative;padding-left:18px}.sx-timeline:before{content:"";position:absolute;left:5px;top:0;bottom:0;width:1px;background:rgba(255,255,255,.14)}.sx-timeline-item{position:relative;padding:0 0 12px 12px}.sx-timeline-item:before{content:"";position:absolute;left:-1px;top:4px;width:7px;height:7px;border-radius:50%;background:currentColor}.sx-empty{padding:28px;text-align:center;opacity:.65;border:1px dashed rgba(255,255,255,.1);border-radius:16px}@media(max-width:950px){.sx-history-filters{grid-template-columns:repeat(2,1fr)}.filter-block.wide{grid-column:span 2}.sx-kpi-grid{grid-template-columns:repeat(3,1fr)}.sx-day-performance,.sx-module-grid{grid-template-columns:repeat(2,1fr)}.sx-signal-levels{grid-template-columns:repeat(3,1fr)}}@media(max-width:600px){.sx-history-filters{grid-template-columns:1fr}.filter-block.wide{grid-column:span 1}.sx-kpi-grid{grid-template-columns:repeat(2,1fr)}.sx-day-performance,.sx-module-grid{grid-template-columns:1fr}.sx-signal-levels{grid-template-columns:repeat(2,1fr)}.sx-history-header{align-items:flex-start}.sx-signal-bottom{align-items:flex-start;flex-direction:column}}
+<style id="signalx-history-v2">
+#historySection .sx-history-v2{width:100%;display:flex;flex-direction:column;gap:14px;min-width:0}
+.sx-history-header{display:flex;justify-content:space-between;align-items:center;gap:12px;min-width:0;flex-wrap:wrap}
+.sx-history-header>div{min-width:0;flex:1 1 420px}
+.sx-history-header .btn{flex:0 0 auto;white-space:nowrap;min-height:40px}
+.sx-history-filters{display:grid;grid-template-columns:repeat(6,minmax(120px,1fr));gap:10px;padding:14px;border:1px solid rgba(255,255,255,.08);border-radius:18px;background:rgba(12,16,25,.72);backdrop-filter:blur(16px);min-width:0}
+.filter-block{display:flex;flex-direction:column;gap:6px;min-width:0}.filter-block.wide{grid-column:span 2}.filter-block>span{font-size:10px;letter-spacing:.12em;opacity:.62}
+.filter-block select,.filter-block input{width:100%;min-height:38px;min-width:0;box-sizing:border-box}.filter-row{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+.h2-date{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.03);color:inherit;border-radius:10px;padding:8px 11px;cursor:pointer;white-space:nowrap;min-height:36px;line-height:1.15;flex:0 0 auto}.h2-date.active{box-shadow:0 0 0 1px rgba(255,255,255,.25),0 0 20px rgba(0,180,255,.12)}
+.sx-kpi-grid{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:10px;min-width:0}.sx-kpi,.sx-module{min-width:0;border:1px solid rgba(255,255,255,.08);background:linear-gradient(160deg,rgba(255,255,255,.055),rgba(255,255,255,.018));border-radius:16px;padding:14px;box-shadow:inset 0 1px 0 rgba(255,255,255,.05);overflow:hidden}.sx-kpi small,.sx-module small{display:block;opacity:.6;font-size:10px;letter-spacing:.08em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sx-kpi b{font-size:22px;display:block;margin-top:5px;overflow:hidden;text-overflow:ellipsis}.sx-history-subhead{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;flex-wrap:wrap}.sx-day-performance{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.sx-module-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.sx-module b{font-size:20px}.sx-module .line{font-size:12px;opacity:.78;margin-top:5px;overflow-wrap:anywhere}
+.sx-signal-list{display:flex;flex-direction:column;gap:10px;min-width:0}.sx-signal-card{border:1px solid rgba(255,255,255,.08);border-radius:18px;background:rgba(9,13,21,.78);padding:16px;position:relative;overflow:hidden;color:rgba(255,255,255,.92);min-width:0}.sx-signal-card:before{content:"";position:absolute;inset:0 auto 0 0;width:3px;background:currentColor;opacity:.85}.sx-signal-card.buy:before{background:#69ff9d}.sx-signal-card.sell:before{background:#ff6767}
+.sx-signal-top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;min-width:0;flex-wrap:wrap}.sx-signal-top>div:first-child{min-width:0;flex:1 1 360px}.sx-signal-badge{font-weight:800;font-size:20px;white-space:nowrap}.sx-signal-meta{color:rgba(255,255,255,.68);font-size:12px;overflow-wrap:anywhere;line-height:1.45}.sx-status{padding:6px 10px;border-radius:999px;background:rgba(255,255,255,.06);font-size:11px;font-weight:800;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;flex:0 1 auto}
+.sx-signal-levels{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:12px}.sx-level{border-radius:12px;background:rgba(255,255,255,.035);padding:9px;min-width:0;overflow:hidden}.sx-level span{display:block;opacity:.56;font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sx-level b{display:block;margin-top:3px;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sx-signal-bottom{display:flex;justify-content:space-between;align-items:flex-start;margin-top:12px;gap:10px;flex-wrap:wrap}.sx-signal-bottom .sx-signal-meta{min-width:0;flex:1 1 300px}.sx-signal-bottom .btn{flex:0 0 auto;white-space:nowrap;min-height:36px}
+.sx-history-detail{max-width:1000px;width:min(100%,1000px)}.sx-detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.sx-detail-section{margin-top:16px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08)}.sx-detail-section h4{margin:0 0 8px}.sx-evidence-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.sx-evidence{padding:10px;border-radius:12px;background:rgba(255,255,255,.035);min-width:0;overflow-wrap:anywhere}.sx-timeline{position:relative;padding-left:18px}.sx-timeline:before{content:"";position:absolute;left:5px;top:0;bottom:0;width:1px;background:rgba(255,255,255,.14)}.sx-timeline-item{position:relative;padding:0 0 12px 12px}.sx-timeline-item:before{content:"";position:absolute;left:-1px;top:4px;width:7px;height:7px;border-radius:50%;background:currentColor}.sx-empty{padding:28px;text-align:center;opacity:.65;border:1px dashed rgba(255,255,255,.1);border-radius:16px}
+@media(max-width:1100px){.sx-history-filters{grid-template-columns:repeat(3,minmax(120px,1fr))}.filter-block.wide{grid-column:span 3}.sx-kpi-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.sx-signal-levels{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:950px){.sx-history-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.filter-block.wide{grid-column:span 2}.sx-kpi-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.sx-day-performance,.sx-module-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:600px){.sx-history-filters{grid-template-columns:1fr;padding:10px}.filter-block.wide{grid-column:span 1}.sx-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.sx-day-performance,.sx-module-grid{grid-template-columns:1fr}.sx-signal-levels{grid-template-columns:repeat(2,minmax(0,1fr))}.sx-history-header{align-items:stretch}.sx-history-header .btn{width:100%}.sx-signal-top>div:first-child{flex-basis:100%}.sx-status{white-space:normal;overflow:visible;text-overflow:clip}.sx-signal-bottom{flex-direction:column}.sx-signal-bottom .btn{width:100%}.sx-detail-grid,.sx-evidence-grid{grid-template-columns:1fr}}
 </style>
 
 <style id="ai-qa-ui">
@@ -774,13 +790,58 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 <style id="signalx-msai-v1">
 .msai-page h2{font-size:24px!important;letter-spacing:.015em}.msai-page h3{margin:0}.msai-hero-grid{display:grid;grid-template-columns:1.35fr 1fr;gap:12px;margin-top:12px}.msai-main-card{min-height:190px}.msai-ai-card{min-height:190px}.msai-subhead{margin-top:14px!important}.msai-check-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.msai-mtf-grid{grid-template-columns:repeat(4,minmax(0,1fr));margin-top:10px}.msai-rule-list{line-height:1.65}.msai-footer{margin-top:12px;text-align:right}.msai-page .signal-main.buy{color:var(--green);text-shadow:0 0 22px rgba(65,255,153,.2)}.msai-page .signal-main.sell{color:var(--red);text-shadow:0 0 22px rgba(255,79,94,.2)}.msai-page .signal-main.wait{color:#ffc14f}.msai-page .advanced-signal.buy{color:var(--green)}.msai-page .advanced-signal.sell{color:var(--red)}.msai-page .advanced-signal.wait{color:#ffc14f}.msai-page .component b.msai-pass{color:var(--green)}.msai-page .component b.msai-miss{color:#ffc14f}.msai-page .component b.msai-fail{color:var(--red)}@media(max-width:950px){.msai-hero-grid{grid-template-columns:1fr}.msai-check-grid,.msai-mtf-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:600px){.msai-page h2{font-size:20px!important}.msai-check-grid,.msai-mtf-grid{grid-template-columns:1fr}.msai-footer{text-align:left}}
 </style>
+
+<style id="signalx-supplied-logo-final-20260919">
+/* Supplied SignalX brand artwork — keep the image and sidebar text separated. */
+.brand-image-only{
+  display:block!important;
+  padding:8px 6px 14px!important;
+  margin:0 0 12px!important;
+  border-bottom:1px solid rgba(45,153,255,.20)!important;
+  min-height:0!important;
+}
+.brand-logo-image-link{
+  display:flex!important;
+  align-items:center!important;
+  justify-content:center!important;
+  width:100%!important;
+  max-width:100%!important;
+  text-decoration:none!important;
+  line-height:0!important;
+  overflow:hidden!important;
+  border-radius:14px!important;
+  background:#07101d!important;
+  border:1px solid rgba(45,153,255,.24)!important;
+  box-shadow:0 10px 28px rgba(0,0,0,.30),0 0 24px rgba(30,160,255,.10)!important;
+}
+.brand-full-logo{
+  display:block!important;
+  width:100%!important;
+  max-width:100%!important;
+  height:auto!important;
+  aspect-ratio:1120/820!important;
+  object-fit:cover!important;
+  object-position:center!important;
+  border-radius:13px!important;
+}
+.brand-image-only + .nav{margin-top:0!important}
+@media(max-width:900px){
+  .brand-image-only{padding:5px 4px 10px!important;margin-bottom:9px!important}
+  .brand-logo-image-link{max-width:250px!important;margin:0 auto!important}
+}
+@media(max-width:480px){
+  .brand-image-only{padding:4px 3px 8px!important}
+  .brand-logo-image-link{max-width:235px!important}
+}
+</style>
+
 </head>
 <body>
 <div class="gold-3d-orb"></div>
 <div class="gold-photo-bg" aria-hidden="true"></div>
 <div class="sx-sidebar-overlay" id="sxSidebarOverlay"></div><div id="toast" class="toast" role="status" aria-live="polite"></div><div class="app">
-<aside class="sidebar">
-  <div class="brand"><div class="brand-logo sx-logo-mark"><img alt="SignalX" decoding="async" height="34" src="assets/logo/signalx-icon.svg" width="34"/></div><div class="brand-copy"><b>SignalX</b><span>XAUUSD TRADING</span></div></div>
+<aside class="sidebar" id="sxSidebar">
+  <div class="brand brand-image-only"><a class="brand-logo-image-link" href="#" aria-label="SignalX home"><img class="brand-full-logo" src="assets/logo/signalx-brand.jpg" alt="SignalX — Trade Smarter Live Better" decoding="async"/></a></div>
   <div class="nav">
     <button type="button" class="active" data-section="overview"><span class="sx-nav-icon" data-icon="home" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.8 12 3l9 7.8v9.2a1 1 0 0 1-1 1h-5.2v-6h-5.6v6H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Overview</span></button>
     <button type="button" data-section="chartSection"><span class="sx-nav-icon" data-icon="chart" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 18V7m4 11v-5m4 5V4m4 14v-8m4 8V6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M3 18h18" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".55"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Live Chart</span></button>
@@ -803,7 +864,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
     <button type="button" data-section="historySection"><span class="sx-nav-icon" data-icon="history" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h13M4 12h16M4 17h10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M18 4v6l3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal History</span></button>
     <button type="button" data-section="activeSessionsSection"><span class="sx-nav-icon" data-icon="status" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M12 2v3m0 14v3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Aktiv Seanslar</span></button>
     <button type="button" class="admin-only" data-section="mt5Section"><span class="sx-nav-icon" data-icon="terminal" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m7 9 3 3-3 3m5 0h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">MetaTrader 5</span></button>
-    <button type="button" data-section="patternsSection"><span class="sx-nav-icon" data-icon="pattern" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16 4-5 4 3 4-7 4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><circle cx="4" cy="16" r="1.3" fill="currentColor"/><circle cx="8" cy="11" r="1.3" fill="currentColor"/><circle cx="12" cy="14" r="1.3" fill="currentColor"/><circle cx="16" cy="7" r="1.3" fill="currentColor"/><circle cx="20" cy="11" r="1.3" fill="currentColor"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Patterns</span></button></div></aside><main class="main"><div class="topbar"><div><h1 id="pageTitle" class="title-shimmer">XAUUSD Market Overview</h1><p>Har bir bo‘lim alohida ishlaydi. Timeframe o‘zgarsa tanlangan modul qayta hisoblanadi.</p></div><div class="tools"><div class="health"><span class="dot"></span><span class="pill" id="mode">Checking…</span></div><span class="pill" id="plan">Guest</span><button class="btn primary auth-top" id="authBtn">Kirish</button></div></div>
+    <button type="button" data-section="patternsSection"><span class="sx-nav-icon" data-icon="pattern" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16 4-5 4 3 4-7 4 4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><circle cx="4" cy="16" r="1.3" fill="currentColor"/><circle cx="8" cy="11" r="1.3" fill="currentColor"/><circle cx="12" cy="14" r="1.3" fill="currentColor"/><circle cx="16" cy="7" r="1.3" fill="currentColor"/><circle cx="20" cy="11" r="1.3" fill="currentColor"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Patterns</span></button></div></aside><main class="main"><div class="topbar"><button type="button" id="sxMobileMenu" class="sx-mobile-menu" aria-label="Open navigation" aria-expanded="false" aria-controls="sxSidebar">☰</button><div class="sx-title-wrap"><h1 id="pageTitle" class="title-shimmer">XAUUSD Market Overview</h1><p>Har bir bo‘lim alohida ishlaydi. Timeframe o‘zgarsa tanlangan modul qayta hisoblanadi.</p></div><div class="tools"><div class="health"><span class="dot"></span><span class="pill" id="mode">Checking…</span></div><span class="pill" id="plan">Guest</span><button class="btn primary auth-top" id="authBtn">Kirish</button></div></div>
     <div class="signalx-visual-hero" aria-hidden="true">
       <div class="sx-hero-copy"><span>WELCOME TO</span><strong>SignalX</strong><em>AI POWERED TRADING TERMINAL</em></div>
       <div class="sx-hero-orbit"><i></i><b></b><span></span></div>
@@ -1938,7 +1999,7 @@ body:not(.sx-menu-open) .sidebar{pointer-events:auto!important;}
 /* FINAL PHONE CLEANUP — desktop >=1101px intentionally untouched. */
 @media (max-width:1100px){
   /* The dimmer is not needed on phones and must never block taps or darken the UI. */
-  #sxSidebarOverlay,.sx-sidebar-overlay{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+  #sxSidebarOverlay,.sx-sidebar-overlay{display:block!important;visibility:visible!important;}
   html,body{overflow-x:hidden!important;overflow-y:auto!important;-webkit-text-size-adjust:100%!important;}
   .app{display:block!important;min-width:0!important;}
   .sidebar{position:fixed!important;left:0!important;top:0!important;bottom:0!important;width:min(300px,88vw)!important;height:100dvh!important;max-height:100dvh!important;transform:translate3d(-105%,0,0)!important;z-index:50000!important;pointer-events:none!important;opacity:1!important;filter:none!important;overflow-y:auto!important;overflow-x:hidden!important;background:rgba(5,10,18,.99)!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
@@ -1986,7 +2047,7 @@ body:not(.sx-menu-open) .sidebar{pointer-events:auto!important;}
   function phoneFix(){
     if(window.innerWidth>1100)return;
     var ov=document.getElementById('sxSidebarOverlay');
-    if(ov){ov.style.display='none';ov.style.pointerEvents='none';ov.style.opacity='0';}
+    if(ov && !document.body.classList.contains('sx-menu-open')){ov.style.display='block';ov.style.pointerEvents='none';ov.style.opacity='0';}
     document.querySelectorAll('.sidebar .sx-nav-icon,.sidebar .sx-nav-icon svg').forEach(function(el){el.style.visibility='visible';el.style.opacity='1';});
   }
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',phoneFix,{once:true});else phoneFix();

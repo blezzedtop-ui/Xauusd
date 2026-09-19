@@ -14,6 +14,9 @@ input long SignalXMagic=26091601;
 input int MaxDeviationPoints=100;
 input int MaxSpreadPoints=80;
 input int ExecutionRetries=2;
+input string XAUTradeSymbol="XAUUSDm";
+input int DuplicateCooldownSeconds=30;
+input int MaxOpenPositionsPerSymbol=0; // 0=unlimited; counts SignalX magic positions only
 
 string g_token="";
 datetime g_last_poll=0, g_last_state=0;
@@ -64,7 +67,7 @@ string FindBrokerSymbol(string canonical){
    for(int i=0;i<n;i++){
       string s=SymbolName(i,false);
       string c=Compact(s);
-      if((StringFind(c,target)==0 || StringFind(c,target)>0) && IsUsable(s)) return s;
+      if(StringFind(c,target)>=0 && IsUsable(s)) return s;
    }
    return "";
 }
@@ -127,7 +130,17 @@ bool IsUsableSymbol(string symbol)
 
 bool IsExactAllowedSymbol(string symbol)
 {
-   return (symbol=="XAUUSDm");
+   // Multi-broker XAU/USD guard: accept broker-specific suffix/prefix variants
+   // while refusing unrelated instruments.
+   return (Canonical(symbol)=="XAU/USD");
+}
+
+double NormalizePrice(string symbol,double price)
+{
+   double tick_size=SymbolInfoDouble(symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(tick_size<=0) tick_size=SymbolInfoDouble(symbol,SYMBOL_POINT);
+   if(tick_size<=0) return price;
+   return NormalizeDouble(MathRound(price/tick_size)*tick_size,(int)SymbolInfoInteger(symbol,SYMBOL_DIGITS));
 }
 
 bool IsBlockedSource(string source)
@@ -164,6 +177,43 @@ void MarkOrderGuard(string order_id)
    if(order_id!="") GlobalVariableSet(OrderGuardKey(order_id),(double)TimeCurrent());
 }
 
+
+int CountSignalXPositions(string symbol)
+{
+   int count=0;
+   for(int i=0;i<PositionsTotal();i++)
+   {
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0 || !PositionSelectByTicket(ticket)) continue;
+      string ps=PositionGetString(POSITION_SYMBOL);
+      long magic=PositionGetInteger(POSITION_MAGIC);
+      if(ps==symbol && magic==SignalXMagic) count++;
+   }
+   return count;
+}
+
+bool HasEnoughMargin(string symbol,string dir,double volume)
+{
+   MqlTick tick;
+   if(!SymbolInfoTick(symbol,tick)) return false;
+   double margin=0.0;
+   ENUM_ORDER_TYPE type=(dir=="BUY" ? ORDER_TYPE_BUY : ORDER_TYPE_SELL);
+   double price=(dir=="BUY" ? tick.ask : tick.bid);
+   if(!OrderCalcMargin(type,symbol,volume,price,margin)) return false;
+   double free=AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   return (margin>0.0 && free>=margin);
+}
+
+bool IsTransientRetcode(uint retcode)
+{
+   return (retcode==TRADE_RETCODE_REQUOTE ||
+           retcode==TRADE_RETCODE_PRICE_CHANGED ||
+           retcode==TRADE_RETCODE_PRICE_OFF ||
+           retcode==TRADE_RETCODE_TIMEOUT ||
+           retcode==TRADE_RETCODE_CONNECTION ||
+           retcode==TRADE_RETCODE_TOO_MANY_REQUESTS);
+}
+
 bool ValidSignalLevels(string symbol,string dir,double sl,double tp)
 {
    if(!IsExactAllowedSymbol(symbol) || !IsUsableSymbol(symbol)) return false;
@@ -184,6 +234,89 @@ bool ValidSignalLevels(string symbol,string dir,double sl,double tp)
    return false;
 }
 
+bool IsPendingOrderType(string orderType)
+{
+   return orderType=="BUY_STOP" || orderType=="SELL_STOP" ||
+          orderType=="BUY_LIMIT" || orderType=="SELL_LIMIT";
+}
+
+bool PendingEntryValid(string symbol,string orderType,double entry)
+{
+   if(!IsPendingOrderType(orderType) || entry<=0 || !MathIsValidNumber(entry)) return false;
+   MqlTick tick;
+   if(!SymbolInfoTick(symbol,tick)) return false;
+   double point=SymbolInfoDouble(symbol,SYMBOL_POINT);
+   double tickSize=SymbolInfoDouble(symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(point<=0) return false;
+   if(tickSize<=0) tickSize=point;
+   entry=NormalizePrice(symbol,entry);
+   int stops=(int)SymbolInfoInteger(symbol,SYMBOL_TRADE_STOPS_LEVEL);
+   int freeze=(int)SymbolInfoInteger(symbol,SYMBOL_TRADE_FREEZE_LEVEL);
+   double minDist=MathMax(stops,freeze)*point;
+   if(minDist<tickSize) minDist=tickSize;
+   if(orderType=="BUY_STOP")  return entry >= tick.ask + minDist;
+   if(orderType=="SELL_STOP") return entry <= tick.bid - minDist;
+   if(orderType=="BUY_LIMIT") return entry <= tick.ask - minDist;
+   if(orderType=="SELL_LIMIT")return entry >= tick.bid + minDist;
+   return false;
+}
+
+bool CancelPendingBySignalId(string orderId)
+{
+   bool found=false;
+   for(int i=OrdersTotal()-1;i>=0;i--)
+   {
+      ulong ticket=OrderGetTicket(i);
+      if(ticket==0) continue;
+      long magic=OrderGetInteger(ORDER_MAGIC);
+      if(magic!=SignalXMagic) continue;
+      string comment=OrderGetString(ORDER_COMMENT);
+      string symbol=OrderGetString(ORDER_SYMBOL);
+      ENUM_ORDER_TYPE type=(ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+      bool pending=(type==ORDER_TYPE_BUY_LIMIT || type==ORDER_TYPE_SELL_LIMIT ||
+                    type==ORDER_TYPE_BUY_STOP || type==ORDER_TYPE_SELL_STOP ||
+                    type==ORDER_TYPE_BUY_STOP_LIMIT || type==ORDER_TYPE_SELL_STOP_LIMIT);
+      if(!pending) continue;
+      if(StringFind(comment,orderId)<0) continue;
+      if(trade.OrderDelete(ticket))
+      {
+         found=true;
+         Print("[AUTO TRADE] PENDING CANCELLED order_id=",orderId,
+               " ticket=",ticket," symbol=",symbol);
+      }
+      else
+      {
+         Print("[AUTO TRADE] PENDING CANCEL FAILED order_id=",orderId,
+               " ticket=",ticket," retcode=",trade.ResultRetcode(),
+               " desc=",trade.ResultRetcodeDescription());
+      }
+   }
+   return found;
+}
+
+void ProcessCancelCommands(string json)
+{
+   int scan=0;
+   while((scan=StringFind(json,"\"cancel_orders\":[",scan))>=0)
+   {
+      int p=StringFind(json,"{",scan);
+      if(p<0) break;
+      int e=StringFind(json,"}",p);
+      if(e<0) break;
+      string c=StringSubstr(json,p,e-p+1);
+      string id=JsonString(c,"order_id");
+      if(id=="") id=JsonString(c,"signal_id");
+      if(id!="")
+      {
+         CancelPendingBySignalId(id);
+         string rr;
+         string body="{\"order_id\":"+id+",\"status\":\"CANCELLED\",\"broker_message\":\"Pending setup cancelled by SignalX\"}";
+         Http("POST","/api/v1/mt5/gateway/report",body,rr);
+      }
+      scan=e+1;
+   }
+}
+
 double NormalizeVolume(string symbol,double requested)
 {
    double minv=SymbolInfoDouble(symbol,SYMBOL_VOLUME_MIN);
@@ -199,9 +332,11 @@ double NormalizeVolume(string symbol,double requested)
 
 string ExecSymbol(string market)
 {
-   string wanted=XAUTradeSymbol;
-   if(!IsExactAllowedSymbol(wanted) || !IsUsableSymbol(wanted)) return "";
-   return wanted;
+   string wanted=market;
+   if(wanted=="") wanted=XAUTradeSymbol;
+   if(IsExactAllowedSymbol(wanted) && IsUsableSymbol(wanted)) return wanted;
+   if(Canonical(wanted)=="XAU/USD") return FindBrokerSymbol("XAU/USD");
+   return "";
 }
 
 string SymbolsJson(){
@@ -355,8 +490,9 @@ bool SendState(){
 }
 
 bool ParseAndExecute(string json){
+   ProcessCancelCommands(json);
    int p=StringFind(json,"\"orders\":[");
-   if(p<0) return false;
+   if(p<0) return true;
    p=StringFind(json,"{",p);
    if(p<0) return false;
    int e=StringFind(json,"}",p);
@@ -364,21 +500,56 @@ bool ParseAndExecute(string json){
    string o=StringSubstr(json,p,e-p+1);
    string order_id=JsonString(o,"order_id");
    string symbol=JsonString(o,"execution_symbol");
+   symbol=ExecSymbol(symbol);
    string direction=JsonString(o,"direction");
+   string order_type=JsonString(o,"order_type");
+   if(order_type=="") order_type="MARKET";
+   StringToUpper(order_type);
+   double entry=JsonNumber(o,"entry");
    double volume=JsonNumber(o,"volume");
    double sl=JsonNumber(o,"stop_loss");
    double tp=JsonNumber(o,"take_profit");
+    double tp1=JsonNumber(o,"tp1");
+    double tp2=JsonNumber(o,"tp2");
+    if(tp2<=0) tp2=tp;
+    if(tp<=0) tp=tp2;
    if(order_id=="" || symbol=="" || (direction!="BUY" && direction!="SELL")) return false;
-   if(!IsUsable(symbol)){
-      string report="{\"order_id\":"+order_id+",\"status\":\"REJECTED\",\"broker_message\":\"Symbol unavailable: "+JsonEscape(symbol)+"\"}";
+   if(order_type!="MARKET" && !IsPendingOrderType(order_type)) return false;
+   if(!IsExactAllowedSymbol(symbol)){
+      string report="{\"order_id\":\""+JsonEscape(order_id)+"\",\"status\":\"REJECTED\",\"broker_message\":\"Unsupported execution symbol\"}";
       string rr; Http("POST","/api/v1/mt5/gateway/report",report,rr); return false;
+   }
+   if(!GuardAllows(order_id)){
+      string report="{\"order_id\":\""+JsonEscape(order_id)+"\",\"status\":\"REJECTED\",\"broker_message\":\"Duplicate cooldown\"}";
+      string rr; Http("POST","/api/v1/mt5/gateway/report",report,rr); return false;
+   }
+   if(!IsUsable(symbol)){
+      string report="{\"order_id\":\""+JsonEscape(order_id)+"\",\"status\":\"REJECTED\",\"broker_message\":\"Symbol unavailable: "+JsonEscape(symbol)+"\"}";
+      string rr; Http("POST","/api/v1/mt5/gateway/report",report,rr); return false;
+   }
+   if(IsPendingOrderType(order_type))
+   {
+      if(entry<=0) {
+         string report="{\"order_id\":"+order_id+",\"status\":\"REJECTED\",\"broker_message\":\"Missing pending entry\"}";
+         string rr; Http("POST","/api/v1/mt5/gateway/report",report,rr); return false;
+      }
+      entry=NormalizePrice(symbol,entry);
+      if(!PendingEntryValid(symbol,order_type,entry))
+      {
+         string report="{\"order_id\":"+order_id+",\"status\":\"REJECTED\",\"broker_message\":\"INVALID_PENDING_ENTRY\"}";
+         string rr; Http("POST","/api/v1/mt5/gateway/report",report,rr); return false;
+      }
    }
    double bid=SymbolInfoDouble(symbol,SYMBOL_BID), ask=SymbolInfoDouble(symbol,SYMBOL_ASK);
    double point=SymbolInfoDouble(symbol,SYMBOL_POINT);
    if(point<=0) point=_Point;
    double spread=(ask-bid)/point;
    if(spread>MaxSpreadPoints){
-      string report="{\"order_id\":"+order_id+",\"status\":\"REJECTED\",\"broker_message\":\"Spread guard\"}";
+      string report="{\"order_id\":\""+JsonEscape(order_id)+"\",\"status\":\"REJECTED\",\"broker_message\":\"Spread guard\"}";
+      string rr; Http("POST","/api/v1/mt5/gateway/report",report,rr); return false;
+   }
+   if(!ValidSignalLevels(symbol,direction,sl,tp)){
+      string report="{\"order_id\":\""+JsonEscape(order_id)+"\",\"status\":\"REJECTED\",\"broker_message\":\"INVALID_LEVEL_GEOMETRY\"}";
       string rr; Http("POST","/api/v1/mt5/gateway/report",report,rr); return false;
    }
    if(volume<=0) volume=DefaultLot;
@@ -386,36 +557,76 @@ bool ParseAndExecute(string json){
    if(vmin>0 && volume<vmin) volume=vmin;
    if(vmax>0 && volume>vmax) volume=vmax;
    if(vstep>0) volume=MathFloor(volume/vstep)*vstep;
+   if(volume<=0){
+      string report="{\"order_id\":\""+JsonEscape(order_id)+"\",\"status\":\"REJECTED\",\"broker_message\":\"INVALID_VOLUME\"}";
+      string rr; Http("POST","/api/v1/mt5/gateway/report",report,rr); return false;
+   }
+   if(MaxOpenPositionsPerSymbol>0 && CountSignalXPositions(symbol)>=MaxOpenPositionsPerSymbol){
+      string report="{\"order_id\":\""+JsonEscape(order_id)+"\",\"status\":\"REJECTED\",\"broker_message\":\"MAX_OPEN_POSITIONS\"}";
+      string rr; Http("POST","/api/v1/mt5/gateway/report",report,rr); return false;
+   }
+   if(!HasEnoughMargin(symbol,direction,volume)){
+      string report="{\"order_id\":\""+JsonEscape(order_id)+"\",\"status\":\"REJECTED\",\"broker_message\":\"INSUFFICIENT_FREE_MARGIN\"}";
+      string rr; Http("POST","/api/v1/mt5/gateway/report",report,rr); return false;
+   }
    trade.SetExpertMagicNumber(SignalXMagic);
    trade.SetDeviationInPoints(MaxDeviationPoints);
    bool sent=false;
    string last="";
-   for(int attempt=0;attempt<=ExecutionRetries && !sent;attempt++){
+   int attempts=MathMax(1,MathMin(3,ExecutionRetries+1));
+   datetime expiry=0;
+   string expiryText=JsonString(o,"expires_at");
+   if(expiryText!="")
+   {
+      // ISO timestamps are parsed server-side; MT5 receives a Unix timestamp when supplied.
+      double expiryEpoch=JsonNumber(o,"expiry_epoch");
+      if(expiryEpoch>0) expiry=(datetime)expiryEpoch;
+   }
+   if(expiry<=TimeCurrent()) expiry=TimeCurrent()+900;
+
+   for(int attempt=0;attempt<attempts && !sent;attempt++){
       ResetLastError();
-      if(direction=="BUY") sent=trade.Buy(volume,symbol,0,sl,tp,"SignalX "+order_id);
-      else sent=trade.Sell(volume,symbol,0,sl,tp,"SignalX "+order_id);
-      if(!sent) last=trade.ResultRetcodeDescription();
-      if(!sent) Sleep(300);
+      if(IsPendingOrderType(order_type))
+      {
+         if(!PendingEntryValid(symbol,order_type,entry)){ last="INVALID_PENDING_ENTRY"; break; }
+         if(!ValidSignalLevels(symbol,direction,sl,tp)){ last="INVALID_LEVEL_GEOMETRY"; break; }
+         ENUM_ORDER_TYPE_TIME tt=(expiry>TimeCurrent() ? ORDER_TIME_SPECIFIED : ORDER_TIME_GTC);
+         datetime ex=(tt==ORDER_TIME_SPECIFIED ? expiry : 0);
+         if(order_type=="BUY_STOP") sent=trade.BuyStop(volume,entry,symbol,sl,tp2,tt,ex,"SignalX "+order_id);
+         else if(order_type=="SELL_STOP") sent=trade.SellStop(volume,entry,symbol,sl,tp2,tt,ex,"SignalX "+order_id);
+         else if(order_type=="BUY_LIMIT") sent=trade.BuyLimit(volume,entry,symbol,sl,tp2,tt,ex,"SignalX "+order_id);
+         else if(order_type=="SELL_LIMIT") sent=trade.SellLimit(volume,entry,symbol,sl,tp2,tt,ex,"SignalX "+order_id);
+      }
+      else
+      {
+         if(!ValidSignalLevels(symbol,direction,sl,tp)){ last="INVALID_LEVEL_GEOMETRY"; break; }
+         if(!HasEnoughMargin(symbol,direction,volume)){ last="INSUFFICIENT_FREE_MARGIN"; break; }
+         if(direction=="BUY") sent=trade.Buy(volume,symbol,0,sl,tp2,"SignalX "+order_id);
+         else sent=trade.Sell(volume,symbol,0,sl,tp2,"SignalX "+order_id);
+      }
+      if(sent) SXStoreTPLevels(order_id,tp1,tp2);
+       uint rc=trade.ResultRetcode();
+      if(!sent){
+         last=trade.ResultRetcodeDescription();
+         if(!IsTransientRetcode(rc)) break;
+         if(attempt+1<attempts) Sleep(300);
+      }
    }
    ulong deal_ticket=trade.ResultDeal();
    ulong order_ticket=trade.ResultOrder();
-   string status=!sent?"FAILED":(deal_ticket>0?"FILLED":"SENT");
+   string status=!sent?"FAILED":(IsPendingOrderType(order_type)?"PENDING_PLACED":(deal_ticket>0?"FILLED":"SENT"));
    string report="{\"order_id\":"+order_id+",\"status\":\""+status+"\",\"broker_ticket\":\""+IntegerToString((long)(deal_ticket>0?deal_ticket:order_ticket));
    report+="\",\"broker_retcode\":\""+IntegerToString((int)trade.ResultRetcode())+"\",\"broker_message\":\""+JsonEscape(sent?"ORDER_SENT":last)+"\"}";
    string rr; Http("POST","/api/v1/mt5/gateway/report",report,rr);
+   if(sent) MarkOrderGuard(order_id);
    Print("[SIGNALX GATEWAY] ",status," order=",order_id," symbol=",symbol," direction=",direction," volume=",DoubleToString(volume,2));
    return sent;
 }
 
 void Poll(){
    if(!g_registered) return;
-   string sessionSource="";
-   string sessionSymbol=FindBrokerSymbol("XAU/USD");
-   if(sessionSymbol=="" || !SymbolSessionOpenNow(sessionSymbol,sessionSource))
-   {
-      Print("[SIGNALX GATEWAY] POLL SKIPPED reason=MARKET_CLOSED source=",sessionSource," symbol=",sessionSymbol);
-      return;
-   }
+   // Poll even when the market is closed so SignalX can deliver cancellation
+   // commands for already-placed pending BUY/SELL STOP/LIMIT orders.
    string response;
    if(Http("GET","/api/v1/mt5/gateway/poll","",response)) ParseAndExecute(response);
 }
@@ -426,9 +637,128 @@ int OnInit(){
    return INIT_SUCCEEDED;
 }
 
+
+// --- SignalX TP1/TP2 partial-close lifecycle ---
+string SXTP1Key(string order_id) { return "SignalX.TP1."+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN))+"."+order_id; }
+string SXTP2Key(string order_id) { return "SignalX.TP2."+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN))+"."+order_id; }
+string SXTPDoneKey(ulong ticket) { return "SignalX.TP1DONE."+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN))+"."+IntegerToString((long)ticket); }
+
+double SXNormalizeVolume(double v,string symbol)
+{
+   double vmin=SymbolInfoDouble(symbol,SYMBOL_VOLUME_MIN);
+   double vmax=SymbolInfoDouble(symbol,SYMBOL_VOLUME_MAX);
+   double step=SymbolInfoDouble(symbol,SYMBOL_VOLUME_STEP);
+   if(step<=0) step=vmin;
+   if(step<=0) return 0;
+   v=MathMin(v,vmax);
+   v=MathFloor(v/step+1e-9)*step;
+   int digits=0; double x=step;
+   while(digits<8 && MathAbs(x-MathRound(x))>1e-9){x*=10.0;digits++;}
+   return NormalizeDouble(v,digits);
+}
+
+void SXStoreTPLevels(string order_id,double tp1,double tp2)
+{
+   if(order_id=="" || tp1<=0 || tp2<=0) return;
+   GlobalVariableSet(SXTP1Key(order_id),tp1);
+   GlobalVariableSet(SXTP2Key(order_id),tp2);
+}
+
+bool SXGetOrderIdFromComment(string comment,string &order_id)
+{
+   int p=StringFind(comment,"SignalX ");
+   if(p<0) return false;
+   int a=p+8;
+   int e=StringFind(comment," ",a);
+   if(e<0) order_id=StringSubstr(comment,a);
+   else order_id=StringSubstr(comment,a,e-a);
+   return order_id!="";
+}
+
+void SXHandleTP1TP2()
+{
+   if(!EnableTP1PartialClose) return;
+
+   for(int i=PositionsTotal()-1;i>=0;--i)
+   {
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0 || !PositionSelectByTicket(ticket)) continue;
+
+      string symbol=PositionGetString(POSITION_SYMBOL);
+      string comment=PositionGetString(POSITION_COMMENT);
+      string order_id="";
+      if(!SXGetOrderIdFromComment(comment,order_id)) continue;
+
+      string k1=SXTP1Key(order_id), k2=SXTP2Key(order_id), kd=SXTP1DoneKey(ticket);
+      if(!GlobalVariableCheck(k1) || !GlobalVariableCheck(k2) || GlobalVariableCheck(kd)) continue;
+
+      double tp1=GlobalVariableGet(k1);
+      double tp2=GlobalVariableGet(k2);
+      if(tp1<=0 || tp2<=0) continue;
+
+      long type=PositionGetInteger(POSITION_TYPE);
+      double bid=SymbolInfoDouble(symbol,SYMBOL_BID);
+      double ask=SymbolInfoDouble(symbol,SYMBOL_ASK);
+      bool reached=(type==POSITION_TYPE_BUY ? bid>=tp1 : ask<=tp1);
+      if(!reached) continue;
+
+      double volume=PositionGetDouble(POSITION_VOLUME);
+      double vmin=SymbolInfoDouble(symbol,SYMBOL_VOLUME_MIN);
+
+      // SignalX rule:
+      // > minimum lot: close 75% at TP1; keep 25% for TP2.
+      // SL is moved to the original entry (break-even) after TP1.
+      // A 0.01 minimum position cannot be split below broker minimum,
+      // so it is handled as a single TP1-final position.
+      bool is_min_lot=(volume <= vmin + 1e-9);
+      double closeVol=0.0;
+
+      if(!is_min_lot)
+         closeVol=SXNormalizeVolume(volume*0.75,symbol);
+
+      bool action_ok=false;
+
+      if(is_min_lot || closeVol<=0.0 || (volume-closeVol)<vmin)
+      {
+         // Broker minimum lot cannot leave a valid 25% remainder.
+         // TP1 is therefore the effective final target for this minimum lot.
+         action_ok=true;
+      }
+      else
+      {
+         ResetLastError();
+         action_ok=trade.PositionClosePartial(ticket,closeVol);
+      }
+
+      if(action_ok)
+      {
+         double entry=PositionGetDouble(POSITION_PRICE_OPEN);
+         double be=NormalizePrice(symbol,entry);
+
+         if(is_min_lot)
+         {
+            if(PositionSelectByTicket(ticket))
+               trade.PositionModify(ticket,be,tp1);
+         }
+         else
+         {
+            // Remaining 25% continues to TP2; SL is now at break-even.
+            if(PositionSelectByTicket(ticket))
+               trade.PositionModify(ticket,be,tp2);
+         }
+
+         GlobalVariableSet(kd,1.0);
+      }
+   }
+}
+
+
+
 void OnDeinit(const int reason){ EventKillTimer(); }
 
 void OnTimer(){
+   SXHandleTP1TP2();
+
    datetime now=TimeCurrent();
    if(!g_registered && StringLen(PairingCode)>=6) Register();
    if(g_registered && (now-g_last_state)>=StateSeconds){ SendState(); g_last_state=now; }

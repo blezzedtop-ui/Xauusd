@@ -466,12 +466,19 @@ def detect_patterns(candles: list[dict[str, Any]], candles_by_tf: dict[str, list
     ranked.sort(key=lambda x:(x.get("state") == "READY_FOR_AI", x.get("raw_score",0)), reverse=True)
     best=ranked[0] if ranked else None
     result={"interval":interval,"detected":len(ranked),"patterns":ranked,"best":best,
-            "signal":"WAIT","confidence":0,"pattern":None,"pattern_type":None,
-            "entry":None,"stop_loss":None,"take_profit":[],"reason":"No confirmed pattern breakout."}
+            "signal":"WAIT","raw_direction":"WAIT","confidence":0,"score":0,"state":"DETECTED_WAIT",
+            "pattern":None,"pattern_type":None,
+            "entry":None,"stop_loss":None,"take_profit":[],"risk_reward":None,
+            "ai_gate":{"required":True,"passed":False,"minimum_confidence":85,"minimum_agreement":70,"strict":True},
+            "reason":"No confirmed pattern breakout."}
     if best and best.get("state")=="READY_FOR_AI":
-        result.update({"signal":best["direction"],"confidence":best["raw_score"],"pattern":best["name"],
+        entry=float(best["entry"]); sl=float(best["stop_loss"]); tp1=float((best.get("take_profit") or [0])[0])
+        risk=abs(entry-sl); reward=abs(tp1-entry)
+        rr=round(reward/risk,2) if risk>0 else None
+        result.update({"signal":best["direction"],"raw_direction":best["direction"],"confidence":best["raw_score"],
+                       "score":best["raw_score"],"state":"READY_FOR_AI","pattern":best["name"],
                        "pattern_type":best["category"],"entry":best["entry"],"stop_loss":best["stop_loss"],
-                       "take_profit":best["take_profit"],
+                       "take_profit":best["take_profit"],"risk_reward":rr,
                        "reason":f'{best["name"]} {best["category"]} confirmed by breakout; AI validation pending.',
                        "pattern_details":best})
     return result

@@ -19,6 +19,7 @@ input int    MaxSpreadPoints=80; // XAUUSDm maximum bid/ask spread in points
 input string BridgeClientId=""; // blank = account-specific client id
 input bool   SingleSession=true; // only one EA instance per MT5 terminal/account
 input int    SessionLeaseSeconds=15;
+input int    MaxOpenPositionsPerSymbol=0; // 0=unlimited; counts SignalX magic positions only
 
 string Url(string path){ return ApiBase+path; }
 datetime g_last_state=0;
@@ -135,9 +136,41 @@ bool IsUsableSymbol(string symbol)
    return (SymbolInfoDouble(symbol,SYMBOL_BID)>0);
 }
 
+string Compact(string symbol)
+{
+   string c=symbol;
+   StringToUpper(c);
+   StringReplace(c,"/","");
+   StringReplace(c,"-","");
+   StringReplace(c,"_","");
+   StringReplace(c,".","");
+   return c;
+}
+
+string Canonical(string symbol)
+{
+   string c=Compact(symbol);
+   if(StringFind(c,"XAUUSD")>=0) return "XAU/USD";
+   return symbol;
+}
+
 bool IsExactAllowedSymbol(string symbol)
 {
-   return (symbol=="XAUUSDm");
+   return (Canonical(symbol)=="XAU/USD");
+}
+
+string FindBrokerXAU()
+{
+   // Prefer the configured symbol, then discover broker suffix/prefix variants.
+   if(IsExactAllowedSymbol(XAUTradeSymbol) && IsUsableSymbol(XAUTradeSymbol))
+      return XAUTradeSymbol;
+   int total=SymbolsTotal(false);
+   for(int i=0;i<total;i++)
+   {
+      string s=SymbolName(i,false);
+      if(Canonical(s)=="XAU/USD" && IsUsableSymbol(s)) return s;
+   }
+   return "";
 }
 
 bool IsBlockedSource(string source)
@@ -172,6 +205,30 @@ bool GuardAllows(string order_id)
 void MarkOrderGuard(string order_id)
 {
    if(order_id!="") GlobalVariableSet(OrderGuardKey(order_id),(double)TimeCurrent());
+}
+
+
+int CountSignalXPositions(string symbol)
+{
+   int count=0;
+   for(int i=0;i<PositionsTotal();i++)
+   {
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0 || !PositionSelectByTicket(ticket)) continue;
+      if(PositionGetString(POSITION_SYMBOL)==symbol && PositionGetInteger(POSITION_MAGIC)==SignalXMagic) count++;
+   }
+   return count;
+}
+
+bool HasEnoughMargin(string symbol,string dir,double volume)
+{
+   MqlTick tick;
+   if(!SymbolInfoTick(symbol,tick)) return false;
+   double margin=0.0;
+   ENUM_ORDER_TYPE type=(dir=="BUY" ? ORDER_TYPE_BUY : ORDER_TYPE_SELL);
+   double price=(dir=="BUY" ? tick.ask : tick.bid);
+   if(!OrderCalcMargin(type,symbol,volume,price,margin)) return false;
+   return (margin>0.0 && AccountInfoDouble(ACCOUNT_MARGIN_FREE)>=margin);
 }
 
 bool ValidSignalLevels(string symbol,string dir,double sl,double tp)
@@ -209,14 +266,13 @@ double NormalizeVolume(string symbol,double requested)
 
 string ExecSymbol(string market)
 {
-   string wanted=XAUTradeSymbol;
-   if(!IsExactAllowedSymbol(wanted) || !IsUsableSymbol(wanted)) return "";
-   return wanted;
+   if(market!="" && IsExactAllowedSymbol(market) && IsUsableSymbol(market)) return market;
+   return FindBrokerXAU();
 }
 
 string XAUStateSymbol()
 {
-   return (XAUTradeSymbol=="XAUUSDm" && IsUsableSymbol(XAUTradeSymbol)) ? XAUTradeSymbol : "";
+   return FindBrokerXAU();
 }
 
 
@@ -331,7 +387,7 @@ void ReportState()
 
    string body="{";
    body += "\"connected\":true";
-   body += ",\"symbol\":\"XAUUSDm\"";
+   body += ",\"symbol\":\""+JsonEscape(xau)+"\"";
    body += ",\"login\":\""+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN))+"\"";
    body += ",\"server\":\""+JsonEscape(AccountInfoString(ACCOUNT_SERVER))+"\"";
    body += ",\"balance\":"+DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE),2);
@@ -393,6 +449,78 @@ double ExtractFirstTP(string json,int from_pos)
    return StringToDouble(StringSubstr(json,s,e-s));
 }
 
+bool IsPendingOrderType(string orderType)
+{
+   return orderType=="BUY_STOP" || orderType=="SELL_STOP" ||
+          orderType=="BUY_LIMIT" || orderType=="SELL_LIMIT";
+}
+
+bool PendingEntryValid(string symbol,string orderType,double entry)
+{
+   if(!IsPendingOrderType(orderType) || entry<=0 || !MathIsValidNumber(entry)) return false;
+   MqlTick tick;
+   if(!SymbolInfoTick(symbol,tick)) return false;
+   double point=SymbolInfoDouble(symbol,SYMBOL_POINT);
+   double tickSize=SymbolInfoDouble(symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(point<=0) return false;
+   if(tickSize<=0) tickSize=point;
+   entry=NormalizePrice(symbol,entry);
+   int stops=(int)SymbolInfoInteger(symbol,SYMBOL_TRADE_STOPS_LEVEL);
+   int freeze=(int)SymbolInfoInteger(symbol,SYMBOL_TRADE_FREEZE_LEVEL);
+   double minDist=MathMax(stops,freeze)*point;
+   if(minDist<tickSize) minDist=tickSize;
+   if(orderType=="BUY_STOP") return entry>=tick.ask+minDist;
+   if(orderType=="SELL_STOP") return entry<=tick.bid-minDist;
+   if(orderType=="BUY_LIMIT") return entry<=tick.ask-minDist;
+   if(orderType=="SELL_LIMIT") return entry>=tick.bid+minDist;
+   return false;
+}
+
+bool CancelPendingBySignalId(string orderId)
+{
+   bool found=false;
+   for(int i=OrdersTotal()-1;i>=0;i--)
+   {
+      ulong ticket=OrderGetTicket(i);
+      if(ticket==0) continue;
+      if(OrderGetInteger(ORDER_MAGIC)!=SignalXMagic) continue;
+      ENUM_ORDER_TYPE type=(ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+      bool pending=(type==ORDER_TYPE_BUY_LIMIT || type==ORDER_TYPE_SELL_LIMIT ||
+                    type==ORDER_TYPE_BUY_STOP || type==ORDER_TYPE_SELL_STOP ||
+                    type==ORDER_TYPE_BUY_STOP_LIMIT || type==ORDER_TYPE_SELL_STOP_LIMIT);
+      if(!pending) continue;
+      string comment=OrderGetString(ORDER_COMMENT);
+      if(StringFind(comment,orderId)<0) continue;
+      if(trade.OrderDelete(ticket))
+      {
+         found=true;
+         Print("[MT5 BRIDGE] PENDING CANCELLED order_id=",orderId," ticket=",ticket);
+      }
+   }
+   return found;
+}
+
+void ProcessCancelCommands(string json)
+{
+   int scan=0;
+   while((scan=StringFind(json,"\"cancel_orders\":[",scan))>=0)
+   {
+      int p=StringFind(json,"{",scan);
+      if(p<0) break;
+      int e=StringFind(json,"}",p);
+      if(e<0) break;
+      string c=StringSubstr(json,p,e-p+1);
+      string id=ExtractString(c,"id",0);
+      if(id=="") id=ExtractString(c,"order_id",0);
+      if(id!="")
+      {
+         CancelPendingBySignalId(id);
+         SendReport(id,"CANCEL","CANCELLED","", "Pending setup cancelled by SignalX");
+      }
+      scan=e+1;
+   }
+}
+
 void SendReport(string order_id,string action,string status,string symbol,string message)
 {
    string rb=StringFormat(
@@ -407,7 +535,7 @@ int OnInit()
 {
    if(ApiBase=="" || StringFind(ApiBase,"http")!=0) return(INIT_PARAMETERS_INCORRECT);
    if(BridgeToken=="" || BridgeToken=="CHANGE_ME") return(INIT_PARAMETERS_INCORRECT);
-   if(XAUTradeSymbol!="XAUUSDm") return(INIT_PARAMETERS_INCORRECT);
+   if(FindBrokerXAU()=="") return(INIT_PARAMETERS_INCORRECT);
    if(!AcquireSession()) return(INIT_FAILED);
    trade.SetExpertMagicNumber(SignalXMagic);
    trade.SetAsyncMode(false);
@@ -419,6 +547,123 @@ int OnInit()
    return(INIT_SUCCEEDED);
 }
 
+
+// --- SignalX TP1/TP2 partial-close lifecycle ---
+string SXTP1Key(string order_id) { return "SignalX.TP1."+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN))+"."+order_id; }
+string SXTP2Key(string order_id) { return "SignalX.TP2."+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN))+"."+order_id; }
+string SXTPDoneKey(ulong ticket) { return "SignalX.TP1DONE."+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN))+"."+IntegerToString((long)ticket); }
+
+double SXNormalizeVolume(double v,string symbol)
+{
+   double vmin=SymbolInfoDouble(symbol,SYMBOL_VOLUME_MIN);
+   double vmax=SymbolInfoDouble(symbol,SYMBOL_VOLUME_MAX);
+   double step=SymbolInfoDouble(symbol,SYMBOL_VOLUME_STEP);
+   if(step<=0) step=vmin;
+   if(step<=0) return 0;
+   v=MathMin(v,vmax);
+   v=MathFloor(v/step+1e-9)*step;
+   int digits=0; double x=step;
+   while(digits<8 && MathAbs(x-MathRound(x))>1e-9){x*=10.0;digits++;}
+   return NormalizeDouble(v,digits);
+}
+
+void SXStoreTPLevels(string order_id,double tp1,double tp2)
+{
+   if(order_id=="" || tp1<=0 || tp2<=0) return;
+   GlobalVariableSet(SXTP1Key(order_id),tp1);
+   GlobalVariableSet(SXTP2Key(order_id),tp2);
+}
+
+bool SXGetOrderIdFromComment(string comment,string &order_id)
+{
+   int p=StringFind(comment,"SignalX ");
+   if(p<0) return false;
+   int a=p+8;
+   int e=StringFind(comment," ",a);
+   if(e<0) order_id=StringSubstr(comment,a);
+   else order_id=StringSubstr(comment,a,e-a);
+   return order_id!="";
+}
+
+void SXHandleTP1TP2()
+{
+   if(!EnableTP1PartialClose) return;
+
+   for(int i=PositionsTotal()-1;i>=0;--i)
+   {
+      ulong ticket=PositionGetTicket(i);
+      if(ticket==0 || !PositionSelectByTicket(ticket)) continue;
+
+      string symbol=PositionGetString(POSITION_SYMBOL);
+      string comment=PositionGetString(POSITION_COMMENT);
+      string order_id="";
+      if(!SXGetOrderIdFromComment(comment,order_id)) continue;
+
+      string k1=SXTP1Key(order_id), k2=SXTP2Key(order_id), kd=SXTP1DoneKey(ticket);
+      if(!GlobalVariableCheck(k1) || !GlobalVariableCheck(k2) || GlobalVariableCheck(kd)) continue;
+
+      double tp1=GlobalVariableGet(k1);
+      double tp2=GlobalVariableGet(k2);
+      if(tp1<=0 || tp2<=0) continue;
+
+      long type=PositionGetInteger(POSITION_TYPE);
+      double bid=SymbolInfoDouble(symbol,SYMBOL_BID);
+      double ask=SymbolInfoDouble(symbol,SYMBOL_ASK);
+      bool reached=(type==POSITION_TYPE_BUY ? bid>=tp1 : ask<=tp1);
+      if(!reached) continue;
+
+      double volume=PositionGetDouble(POSITION_VOLUME);
+      double vmin=SymbolInfoDouble(symbol,SYMBOL_VOLUME_MIN);
+
+      // SignalX rule:
+      // > minimum lot: close 75% at TP1; keep 25% for TP2.
+      // SL is moved to the original entry (break-even) after TP1.
+      // A 0.01 minimum position cannot be split below broker minimum,
+      // so it is handled as a single TP1-final position.
+      bool is_min_lot=(volume <= vmin + 1e-9);
+      double closeVol=0.0;
+
+      if(!is_min_lot)
+         closeVol=SXNormalizeVolume(volume*0.75,symbol);
+
+      bool action_ok=false;
+
+      if(is_min_lot || closeVol<=0.0 || (volume-closeVol)<vmin)
+      {
+         // Broker minimum lot cannot leave a valid 25% remainder.
+         // TP1 is therefore the effective final target for this minimum lot.
+         action_ok=true;
+      }
+      else
+      {
+         ResetLastError();
+         action_ok=trade.PositionClosePartial(ticket,closeVol);
+      }
+
+      if(action_ok)
+      {
+         double entry=PositionGetDouble(POSITION_PRICE_OPEN);
+         double be=NormalizePrice(symbol,entry);
+
+         if(is_min_lot)
+         {
+            if(PositionSelectByTicket(ticket))
+               trade.PositionModify(ticket,be,tp1);
+         }
+         else
+         {
+            // Remaining 25% continues to TP2; SL is now at break-even.
+            if(PositionSelectByTicket(ticket))
+               trade.PositionModify(ticket,be,tp2);
+         }
+
+         GlobalVariableSet(kd,1.0);
+      }
+   }
+}
+
+
+
 void OnDeinit(const int reason)
 {
    EventKillTimer();
@@ -428,12 +673,6 @@ void OnDeinit(const int reason)
 
 bool PollMarket(string requestedMarket,string expectedSymbol)
 {
-   string sessionSource="";
-   if(!SymbolSessionOpenNow(expectedSymbol,sessionSource))
-   {
-      Print("[MT5 BRIDGE] POLL SKIPPED market=",requestedMarket," reason=MARKET_CLOSED source=",sessionSource);
-      return true;
-   }
    string out;
    string encoded=requestedMarket;
    StringReplace(encoded,"/","%2F");
@@ -451,6 +690,7 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
    }
 
    Print("[MT5 BRIDGE] POLL RECEIVED market=",requestedMarket," response_len=",StringLen(out));
+   ProcessCancelCommands(out);
    int pos=0;
    while((pos=StringFind(out,"\"id\":\"",pos))>=0)
    {
@@ -459,9 +699,16 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
       string requested_symbol=ExtractString(out,"symbol",pos);
       string order_market=ExtractString(out,"market",pos);
       string source=ExtractString(out,"source",pos);
+      string order_type=ExtractString(out,"order_type",pos);
+      if(order_type=="") order_type="MARKET";
+      UpperInPlace(order_type);
       double entry=ExtractNumber(out,"entry",pos);
       double sl=ExtractNumber(out,"sl",pos);
       double tp=ExtractFirstTP(out,pos);
+       double tp1=ExtractNumber(out,"tp1",pos);
+       double tp2=ExtractNumber(out,"tp2",pos);
+       if(tp2<=0) tp2=tp;
+       if(tp<=0) tp=tp2;
       double vol=ExtractNumber(out,"volume",pos);
       Print("[AUTO TRADE] RECEIVED order_id=",order_id," market=",order_market," symbol=",requested_symbol," direction=",dir," entry=",DoubleToString(entry,5)," sl=",DoubleToString(sl,5)," tp=",DoubleToString(tp,5)," source=",source);
       if(vol<=0) vol=DefaultLot;
@@ -510,6 +757,22 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
       {
          SendReport(order_id,dir,"ORDER_FAILED",execSymbol,"BLOCKED: invalid broker volume");
          MarkOrderGuard(order_id);
+         pos+=MathMax(1,StringLen(order_id));
+         continue;
+      }
+      if(MaxOpenPositionsPerSymbol>0 && CountSignalXPositions(execSymbol)>=MaxOpenPositionsPerSymbol)
+      {
+         string msg="BLOCKED: max open SignalX positions reached";
+         Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," ",msg);
+         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,msg);
+         pos+=MathMax(1,StringLen(order_id));
+         continue;
+      }
+      if(!HasEnoughMargin(execSymbol,dir,vol))
+      {
+         string msg="BLOCKED: insufficient free margin";
+         Print("[AUTO TRADE] ORDER_FAILED order_id=",order_id," ",msg);
+         SendReport(order_id,dir,"ORDER_FAILED",execSymbol,msg);
          pos+=MathMax(1,StringLen(order_id));
          continue;
       }
@@ -576,7 +839,7 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
          continue;
       }
 
-      string comment="SignalX "+(source==""?"AUTO":source);
+      string comment="SignalX "+order_id+" "+(source==""?"AUTO":source);
       bool ok=false;
       uint retcode=0;
       string desc="";
@@ -620,13 +883,40 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
             retcode=TRADE_RETCODE_INVALID_STOPS;
             break;
          }
+         if(!HasEnoughMargin(execSymbol,dir,vol))
+         {
+            desc="Insufficient free margin";
+            retcode=TRADE_RETCODE_NO_MONEY;
+            break;
+         }
 
          trade.SetTypeFillingBySymbol(execSymbol);
          trade.SetDeviationInPoints(MaxDeviationPoints);
-         if(dir=="BUY")  ok=trade.Buy(vol,execSymbol,0,sl,tp,comment);
-         else             ok=trade.Sell(vol,execSymbol,0,sl,tp,comment);
+         if(IsPendingOrderType(order_type))
+         {
+            if(!PendingEntryValid(execSymbol,order_type,entry))
+            {
+               desc="Invalid pending entry against current bid/ask/stops";
+               retcode=TRADE_RETCODE_INVALID_PRICE;
+               break;
+            }
+            double expiry_epoch=ExtractNumber(out,"expiry_epoch",pos);
+            datetime expiry=(expiry_epoch>0 ? (datetime)expiry_epoch : TimeCurrent()+900);
+            ENUM_ORDER_TYPE_TIME tt=(expiry>TimeCurrent() ? ORDER_TIME_SPECIFIED : ORDER_TIME_GTC);
+            datetime ex=(tt==ORDER_TIME_SPECIFIED ? expiry : 0);
+            if(order_type=="BUY_STOP") ok=trade.BuyStop(vol,entry,execSymbol,sl,tp2,tt,ex,comment);
+            else if(order_type=="SELL_STOP") ok=trade.SellStop(vol,entry,execSymbol,sl,tp2,tt,ex,comment);
+            else if(order_type=="BUY_LIMIT") ok=trade.BuyLimit(vol,entry,execSymbol,sl,tp2,tt,ex,comment);
+            else if(order_type=="SELL_LIMIT") ok=trade.SellLimit(vol,entry,execSymbol,sl,tp2,tt,ex,comment);
+         }
+         else
+         {
+            if(dir=="BUY") ok=trade.Buy(vol,execSymbol,0,sl,tp2,comment);
+            else ok=trade.Sell(vol,execSymbol,0,sl,tp2,comment);
+         }
 
-         retcode=trade.ResultRetcode();
+         if(ok) SXStoreTPLevels(order_id,tp1,tp2);
+          retcode=trade.ResultRetcode();
          desc=trade.ResultRetcodeDescription();
          deal=trade.ResultDeal();
          ord=trade.ResultOrder();
@@ -682,6 +972,8 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
 
 void OnTimer()
 {
+   SXHandleTP1TP2();
+
    RefreshSession();
    if(g_last_state==0 || (TimeCurrent()-g_last_state)>=StateSeconds)
    {

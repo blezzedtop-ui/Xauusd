@@ -206,6 +206,8 @@ AI_PROVIDER_ENABLED: dict[str, bool] = {
     "huggingface": True, "openrouter": True,
 }
 AI_AUTO_MODE = True
+# Control state machine: AUTO, ALL_ON, ALL_OFF, CUSTOM.
+AI_CONTROL_MODE = "AUTO"
 AI_SIGNAL_CONFIRM_ONLY = os.getenv("AI_SIGNAL_CONFIRM_ONLY", "true").lower() == "true"
 
 # Market Gate: close automated signal/AI/AutoTrade activity during broker-closed
@@ -690,6 +692,8 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
     preferred = [AI_PROVIDER] if AI_PROVIDER not in {"auto", ""} else []
     raw_order = _dedupe_provider_order(preferred + AI_FALLBACK_ORDER)
     candidates = [p for p in raw_order if configured.get(p, False) and AI_PROVIDER_ENABLED.get(p, True)]
+    if AI_CONTROL_MODE == "ALL_OFF":
+        raise RuntimeError("AI network is ALL_OFF")
     if not AI_PAID_FALLBACK_ENABLED:
         candidates = [p for p in candidates if p not in AI_PAID_PROVIDER_IDS]
     if not candidates:
@@ -721,7 +725,9 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
             base -= 80
         return round(base, 2)
 
-    order = sorted(candidates, key=route_score, reverse=True) if AI_ROUTER_MODE == "score" else candidates
+    # AUTO uses health/quality-aware routing; ALL_ON/CUSTOM use the configured fallback order.
+    use_score_routing = AI_CONTROL_MODE == "AUTO" or AI_ROUTER_MODE == "score"
+    order = sorted(candidates, key=route_score, reverse=True) if use_score_routing else candidates
     attempted: set[str] = set()
 
     for provider in order:
@@ -938,6 +944,9 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
                 entry=float(entry), sl=float(sl), tp=tps, volume=MT5_LOT_SIZE,
                 confidence=confidence, candle_time=str(row.candle_time or row.created_at.isoformat()),
                 risk_reward=rr_value,
+                order_type=str(payload.get("order_type") or payload.get("pending_type") or "MARKET"),
+                expires_at=str(payload.get("expires_at") or payload.get("expiry_at") or ""),
+                signal_id=row.signal_uid,
             )
         except Exception as exc:
             print(f"[HISTORY AUTOTRADE BRIDGE] error signal_id={row.signal_uid} source={source}: {type(exc).__name__}: {exc}")
@@ -1041,7 +1050,7 @@ class SignalHistory(Base):
     source: Mapped[str] = mapped_column(String(40), default=HISTORY_DEFAULT_SOURCE, index=True)
     candle_time: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
     signal_uid: Mapped[str] = mapped_column(String(40), unique=True, index=True, default=lambda: "SIG-" + secrets.token_hex(10).upper())
-    status: Mapped[str] = mapped_column(String(20), default="ACTIVE", index=True)
+    status: Mapped[str] = mapped_column(String(40), default="ACTIVE", index=True)
     signal_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     signal_strength: Mapped[str | None] = mapped_column(String(30), nullable=True)
     entry_price: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -1139,7 +1148,7 @@ def ensure_schema() -> None:
             # Professional Signal History v2 fields. Existing rows remain intact.
             sig_cols = {c["name"] for c in inspect(engine).get_columns("signal_history")}
             extra_columns = {
-                "signal_uid": "VARCHAR(40)", "status": "VARCHAR(20) DEFAULT 'ACTIVE'",
+                "signal_uid": "VARCHAR(40)", "status": "VARCHAR(40) DEFAULT 'ACTIVE'",
                 "signal_score": "FLOAT", "signal_strength": "VARCHAR(30)",
                 "entry_price": "FLOAT", "stop_loss": "FLOAT", "take_profit_1": "FLOAT",
                 "take_profit_2": "FLOAT", "risk_reward": "FLOAT", "result": "VARCHAR(30)",
@@ -1148,6 +1157,10 @@ def ensure_schema() -> None:
             for col, ddl in extra_columns.items():
                 if col not in sig_cols:
                     conn.exec_driver_sql(f"ALTER TABLE signal_history ADD COLUMN {col} {ddl}")
+            # Execution lifecycle states can be longer than the original v2 VARCHAR(20).
+            # Widen the persistent PostgreSQL column before writing pending/cancellation states.
+            if engine.dialect.name == "postgresql":
+                conn.exec_driver_sql("ALTER TABLE signal_history ALTER COLUMN status TYPE VARCHAR(40)")
             conn.exec_driver_sql("UPDATE signal_history SET status = CASE WHEN status IS NULL OR status='' THEN CASE outcome WHEN 'OPEN' THEN 'ACTIVE' WHEN 'TP HIT' THEN 'TP2 HIT' WHEN 'SL HIT' THEN 'SL HIT' WHEN 'AMBIGUOUS' THEN 'CANCELLED' ELSE outcome END ELSE status END")
             conn.exec_driver_sql("UPDATE signal_history SET result = CASE WHEN result IS NULL AND outcome IN ('TP HIT','SL HIT') THEN outcome ELSE result END")
             # Backfill stable public IDs deterministically from DB IDs for legacy rows.
@@ -3661,10 +3674,10 @@ def _smart_module_gate(item: dict[str, Any], ai: dict[str, Any], candles: list[d
     live_ai = mode not in {"fallback","rule_based"}
     if mode == "live" or (mode not in {"fallback","rule_based","unavailable","deferred","skipped"}):
         live_ai = True
-        ai_ok = ai_signal == direction and ai_conf >= 65 and ai_agree >= 55
+        ai_ok = ai_signal == direction and ai_conf >= 85 and ai_agree >= 70
         add("AI Direction", ai_signal==direction, f"AI={ai_signal}")
-        add("AI Confidence", ai_conf>=65, f"AI confidence={ai_conf}%")
-        add("AI Agreement", ai_agree>=55, f"AI agreement={ai_agree}%")
+        add("AI Confidence", ai_conf>=85, f"AI confidence={ai_conf}%")
+        add("AI Agreement", ai_agree>=70, f"AI agreement={ai_agree}%")
     elif mode in {"skipped","unavailable","deferred"}:
         live_ai = False
         ai_ok = False
@@ -4590,7 +4603,7 @@ async def build_msai_strategy(symbol: str, selected: str) -> dict[str, Any]:
                 cached_payload.pop("_failure_cache", None)
                 ai = cached_payload
         if ai is None:
-            ai = {"signal":"WAIT", "confidence":0, "validation":False,
+            ai = {"signal":"WAIT", "confidence":0, "agreement":0, "validation":False,
                   "provider":None, "mode":"unavailable", "reason":"AI network unavailable; no signal emitted.", "risk_flags":[]}
             ai_context = {
                 "symbol": key,
@@ -4629,6 +4642,7 @@ async def build_msai_strategy(symbol: str, selected: str) -> dict[str, Any]:
                 ai = {
                     "signal": sig if sig in {"BUY", "SELL", "WAIT"} else "WAIT",
                     "confidence": max(0, min(100, int(parsed.get("confidence", 0)))),
+                    "agreement": max(0, min(100, int(parsed.get("agreement", 0)))),
                     "validation": bool(parsed.get("validation", False)),
                     "provider": provider,
                     "mode": "live_ai",
@@ -4644,7 +4658,7 @@ async def build_msai_strategy(symbol: str, selected: str) -> dict[str, Any]:
                 MSAI_AI_CACHE[ai_key] = (ai_now, candle_time, {**ai, "_failure_cache": True})
 
     deterministic_ready = bool(base.get("signal") in {"BUY", "SELL"})
-    ai_ready = bool(ai.get("validation") and ai.get("signal") == base.get("raw_direction") and int(ai.get("confidence", 0)) >= 65)
+    ai_ready = bool(ai.get("validation") and ai.get("signal") == base.get("raw_direction") and int(ai.get("confidence", 0)) >= 85 and int(ai.get("agreement", 0)) >= 70)
     final_signal = base.get("raw_direction") if deterministic_ready and ai_ready else "WAIT"
     if final_signal in {"BUY", "SELL"}:
         base["signal"] = final_signal
@@ -4662,7 +4676,7 @@ async def build_msai_strategy(symbol: str, selected: str) -> dict[str, Any]:
         base["take_profit"] = []
 
     base["ai"] = ai
-    base["ai_gate"] = {"required": True, "passed": ai_ready}
+    base["ai_gate"] = {"required": True, "passed": ai_ready, "minimum_confidence": 85, "minimum_agreement": 70, "strict": True}
     base["strategy_engine"] = "SIGNALX — MSAI STRATEGY v1.0"
     base["strategy_source"] = "Trading SNR the Malaysian Way + AI validation"
     base["session_context"] = (await market_sessions()).get("sessions", [])
@@ -4905,7 +4919,7 @@ async def build_smc_strategy(symbol: str, selected: str) -> dict[str, Any]:
                 cached_payload.pop("_failure_cache", None)
                 ai = cached_payload
         if ai is None:
-            ai = {"signal":"WAIT", "confidence":0, "validation":False,
+            ai = {"signal":"WAIT", "confidence":0, "agreement":0, "validation":False,
                   "provider":None, "mode":"unavailable", "reason":"AI network unavailable; no signal emitted.", "risk_flags":[]}
             ai_context = {
                 "symbol": key,
@@ -4938,6 +4952,7 @@ async def build_smc_strategy(symbol: str, selected: str) -> dict[str, Any]:
                 ai = {
                     "signal": sig if sig in {"BUY","SELL","WAIT"} else "WAIT",
                     "confidence": max(0, min(100, int(parsed.get("confidence", 0)))),
+                    "agreement": max(0, min(100, int(parsed.get("agreement", 0)))),
                     "validation": bool(parsed.get("validation", False)),
                     "provider": provider,
                     "mode": "live_ai",
@@ -4953,10 +4968,10 @@ async def build_smc_strategy(symbol: str, selected: str) -> dict[str, Any]:
                 SMC_AI_CACHE[ai_key] = (ai_now, candle_time, {**ai, "_failure_cache": True})
 
     deterministic_ready = bool(raw_direction in {"BUY","SELL"} and checks.get("structure_bos_choch") and checks.get("entry_module") and checks.get("ltf_confirmation") and checks.get("mtf_alignment") and checks.get("rr_ok"))
-    ai_gate = bool(deterministic_ready and ai.get("validation") and ai.get("signal") == raw_direction and int(ai.get("confidence", 0)) >= 75)
+    ai_gate = bool(deterministic_ready and ai.get("validation") and ai.get("signal") == raw_direction and int(ai.get("confidence", 0)) >= 85 and int(ai.get("agreement", 0)) >= 70)
     base["signal"] = raw_direction if ai_gate else "WAIT"
     base["ai"] = ai
-    base["ai_gate"] = {"passed": ai_gate, "threshold": 75}
+    base["ai_gate"] = {"passed": ai_gate, "minimum_confidence": 85, "minimum_agreement": 70, "strict": True}
     if ai_gate:
         base["state"] = "AI_CONFIRMED"
         base["setup"] = "SMC_AI_CONFIRMED"
@@ -5501,6 +5516,10 @@ async def build_fibonacci_strategy(symbol: str, selected: str = "5min", validate
                 "generated_at": datetime.now(timezone.utc).isoformat()}
 
     deterministic = analyze_fibonacci(selected_data, higher)
+    # Normalize legacy/internal direction labels before the shared AI gate/frontend contract.
+    _sig = str(deterministic.get("signal") or "").upper()
+    if _sig == "BULLISH": deterministic["signal"] = "BUY"
+    elif _sig == "BEARISH": deterministic["signal"] = "SELL"
     candle_time = selected_data[-2].get("time") if len(selected_data) > 1 else selected_data[-1].get("time")
     if validate_ai:
         ai = await ai_validate_module_signal("Fibonacci", key, selected, candle_time, deterministic)
@@ -5813,7 +5832,7 @@ def _finalize_pattern_result(raw: dict[str, Any], candles_by_tf: dict[str, list[
         ai_agree=int(live_ai.get("agreement") or 0)
         is_live=mode not in {"fallback","rule_based"}
         if is_live:
-            ai_ok=(ai_signal==direction and ai_conf>=65 and ai_agree>=55)
+            ai_ok=(ai_signal==direction and ai_conf>=85 and ai_agree>=70)
             combined=round(raw_score*0.70 + ai_conf*0.30)
         else:
             ai_ok=True
@@ -6340,16 +6359,121 @@ def _autotrade_source_excluded(source: str) -> bool:
     return normalized in blocked or "book" in normalized and "openai" in normalized
 
 
+
+def _mark_signal_execution_history(signal_id: str, state: str, *, reason: str = "",
+                                    ticket: str = "", price: float | None = None,
+                                    profit: float | None = None, order_type: str = "") -> bool:
+    """Synchronize MT5 execution lifecycle into Signal History.
+
+    Pending/market execution states are kept on the same SignalHistory row so the
+    journal shows the complete lifecycle without creating duplicate signal records.
+    """
+    sid = str(signal_id or "").strip()
+    if not sid:
+        return False
+    state = str(state or "").upper().strip()
+    allowed = {
+        "PENDING_CREATED", "PENDING_TRIGGERED", "MARKET_OPENED",
+        "TP1_HIT", "TP2_HIT", "SL_HIT", "CANCELLED",
+        "CANCELLED_SETUP_INVALID", "CANCELLED_SETUP_EXPIRED",
+        "INVALID_LEVEL_GEOMETRY", "AUTO_TRADE_REJECTED",
+    }
+    if state not in allowed:
+        return False
+    try:
+        with SessionLocal() as session:
+            row = session.scalar(select(SignalHistory).where(SignalHistory.signal_uid == sid))
+            if row is None:
+                return False
+            payload = {}
+            try:
+                payload = json.loads(row.payload or "{}")
+                if not isinstance(payload, dict):
+                    payload = {}
+            except Exception:
+                payload = {}
+            execution = payload.get("execution") if isinstance(payload.get("execution"), dict) else {}
+            timeline = execution.get("timeline") if isinstance(execution.get("timeline"), dict) else {}
+            now = datetime.now(timezone.utc)
+            timeline[state] = now.isoformat()
+            execution.update({
+                "state": state,
+                "ticket": str(ticket or execution.get("ticket") or ""),
+                "reason": str(reason or execution.get("reason") or ""),
+                "timeline": timeline,
+            })
+            if order_type:
+                execution["order_type"] = str(order_type).upper()
+                payload["order_type"] = str(order_type).upper()
+                payload["pending"] = str(order_type).upper() in {"BUY_STOP","SELL_STOP","BUY_LIMIT","SELL_LIMIT"}
+            payload["execution"] = execution
+            if price is not None:
+                payload["execution_price"] = float(price)
+            if profit is not None:
+                payload["execution_profit"] = float(profit)
+
+            terminal = state in {
+                "TP2_HIT", "SL_HIT", "CANCELLED",
+                "CANCELLED_SETUP_INVALID", "CANCELLED_SETUP_EXPIRED",
+                "INVALID_LEVEL_GEOMETRY", "AUTO_TRADE_REJECTED",
+            }
+            if state in {"CANCELLED_SETUP_INVALID", "CANCELLED_SETUP_EXPIRED", "INVALID_LEVEL_GEOMETRY", "AUTO_TRADE_REJECTED"}:
+                row.status = "CANCELLED"
+                row.outcome = "CANCELLED"
+                row.result = reason or state
+                row.closed_at = row.closed_at or now
+            elif state == "CANCELLED":
+                row.status = "CANCELLED"
+                row.outcome = "CANCELLED"
+                row.result = reason or "CANCELLED"
+                row.closed_at = row.closed_at or now
+            else:
+                row.status = state
+                if state in {"TP2_HIT", "SL_HIT"}:
+                    row.outcome = "TP HIT" if state == "TP2_HIT" else "SL HIT"
+                    row.result = state
+                    row.closed_at = row.closed_at or now
+                    if profit is not None:
+                        row.profit_loss = float(profit)
+                elif state in {"PENDING_CREATED", "PENDING_TRIGGERED", "MARKET_OPENED", "TP1_HIT"}:
+                    row.outcome = "OPEN"
+                    if state == "TP1_HIT":
+                        row.result = "TP1 HIT"
+            if ticket:
+                execution["ticket"] = str(ticket)
+            payload["execution"] = execution
+            row.payload = json.dumps(payload, ensure_ascii=False, default=str)
+            session.commit()
+            return True
+    except Exception as exc:
+        print(f"[SIGNAL HISTORY] execution sync skipped signal_id={sid}: {type(exc).__name__}: {exc}")
+        return False
+
+
 def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction: str,
                            entry: float, sl: float, tp: list[float], volume: float,
                            confidence: float | None, candle_time: str,
-                           risk_reward: float | None = None) -> dict[str, Any] | None:
+                           risk_reward: float | None = None,
+                           order_type: str = "MARKET",
+                           expires_at: str | None = None,
+                           signal_id: str = "") -> dict[str, Any] | None:
     """Put one eligible signal into the in-memory MT5 queue exactly once.
 
     The queue key is symbol/source/timeframe/closed-candle/direction. Retired modules are
     explicitly excluded. All values are copied from the freshly validated signal.
     """
     if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
+        return None
+    order_type = str(order_type or "MARKET").upper()
+    if order_type not in {"MARKET", "BUY_STOP", "SELL_STOP", "BUY_LIMIT", "SELL_LIMIT"}:
+        return None
+    if order_type == "BUY_STOP" and direction.upper() != "BUY":
+        return None
+    if order_type == "SELL_STOP" and direction.upper() != "SELL":
+        return None
+    if order_type == "BUY_LIMIT" and direction.upper() != "BUY":
+        return None
+    if order_type == "SELL_LIMIT" and direction.upper() != "SELL":
         return None
     # AutoTrade hard filter: only setups with RR >= 1.50 may reach MT5.
     # Calculate it from the final levels when the caller did not provide it, so no
@@ -6400,21 +6524,28 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
         "execution_symbol": "XAUUSDm",
         "interval": interval,
         "direction": direction.upper(),
+        "order_type": order_type,
         "entry": float(entry),
         "sl": float(sl),
         "tp": [float(x) for x in tp[:2]],
         "volume": float(volume or MT5_LOT_SIZE),
         "source": source.strip(),
+        "signal_id": str(signal_id or ""),
         "confidence": float(confidence or 0),
         "risk_reward": float(rr_eval),
         "candle_time": str(candle_time),
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "expires_at": str(expires_at or ""),
         "claimed": False,
         "status": "QUEUED",
         "queue_key": [market, source.strip(), interval, str(candle_time), direction.upper()],
     }
     MT5_ORDER_ATTEMPTS[order_id] = 0
     MT5_ORDER_QUEUE.append(order)
+    if signal_id and order_type != "MARKET":
+        _mark_signal_execution_history(signal_id, "PENDING_CREATED",
+                                       ticket=order_id, reason="Pending order queued for MT5",
+                                       order_type=order_type)
     print(f"[AUTO TRADE QUEUE] QUEUED market={market} source={source} tf={interval} dir={direction} entry={entry} sl={sl} tp={tp}")
     return order
 
@@ -7529,7 +7660,11 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
                       "entry":entry,"sl":sl,"tp1":tp1,"tp2":tp2,"rr":r.risk_reward,"created_at":dt.isoformat(),"closed_at":closed.isoformat() if closed else None,
                       "duration_minutes":duration,"status":status,"result":r.result or (status if status in {"TP2 HIT","SL HIT"} else None),
                       "profit_loss":r.profit_loss,"r_multiple":r.r_multiple,"result_price":(payload.get("result", {}).get("price") if isinstance(payload.get("result"), dict) else None),"source":r.source or HISTORY_DEFAULT_SOURCE,"interval":r.interval,"candle_time":r.candle_time,
-                      "auto_entry":bool(payload.get("auto_entry")),"snapshot":snap})
+                      "auto_entry":bool(payload.get("auto_entry")),
+                      "order_type": payload.get("order_type") or payload.get("execution", {}).get("order_type") if isinstance(payload.get("execution"), dict) else payload.get("order_type"),
+                      "pending": bool(payload.get("pending") or payload.get("is_pending") or (str(payload.get("order_type") or "").upper() in {"BUY_STOP","SELL_STOP","BUY_LIMIT","SELL_LIMIT"})),
+                      "cancel_reason": (payload.get("result", {}).get("reason") if isinstance(payload.get("result"), dict) else None) or payload.get("cancel_reason"),
+                      "snapshot":snap})
     return {"ok":True,"timezone":"Asia/Tashkent","items":items,"count":len(items),"total_count":total_count,"offset":offset,"limit":limit}
 
 @app.post("/api/v2/signal-history/refresh")
@@ -7669,23 +7804,45 @@ class AIControlBody(BaseModel):
     provider: str | None = None
     enabled: bool | None = None
     all_enabled: bool | None = None
+    mode: str | None = None  # AUTO | ALL_ON | ALL_OFF
+
+def _ai_control_state() -> dict[str, Any]:
+    return {
+        "mode": AI_CONTROL_MODE,
+        "auto_mode": AI_CONTROL_MODE == "AUTO",
+        "enabled": dict(AI_PROVIDER_ENABLED),
+    }
 
 @app.post("/api/v1/ai/providers/control")
 async def ai_providers_control(body: AIControlBody, authorization: str | None = Header(default=None), session: Session = Depends(db)):
     require_admin(authorization, session)
-    global AI_AUTO_MODE
+    global AI_AUTO_MODE, AI_CONTROL_MODE
+    mode = (body.mode or "").strip().upper()
+    if mode:
+        if mode not in {"AUTO", "ALL_ON", "ALL_OFF"}:
+            raise HTTPException(status_code=400, detail="mode AUTO, ALL_ON yoki ALL_OFF bo‘lishi kerak")
+        AI_CONTROL_MODE = mode
+        AI_AUTO_MODE = mode == "AUTO"
+        enabled = mode != "ALL_OFF"
+        for p in list(AI_PROVIDER_ENABLED):
+            AI_PROVIDER_ENABLED[p] = enabled
+        return {"ok": True, **_ai_control_state()}
     if body.all_enabled is not None:
+        mode = "ALL_ON" if bool(body.all_enabled) else "ALL_OFF"
+        AI_CONTROL_MODE = mode
+        AI_AUTO_MODE = False
         for p in list(AI_PROVIDER_ENABLED):
             AI_PROVIDER_ENABLED[p] = bool(body.all_enabled)
-        AI_AUTO_MODE = bool(body.all_enabled)
-        return {"ok":True,"auto_mode":AI_AUTO_MODE,"enabled":dict(AI_PROVIDER_ENABLED)}
+        return {"ok": True, **_ai_control_state()}
     if body.provider:
         provider = body.provider.strip().lower()
         if provider not in AI_PROVIDER_ENABLED:
             raise HTTPException(status_code=404, detail="Unknown AI provider")
         AI_PROVIDER_ENABLED[provider] = (not AI_PROVIDER_ENABLED[provider]) if body.enabled is None else bool(body.enabled)
-        return {"ok":True,"provider":provider,"enabled":AI_PROVIDER_ENABLED[provider],"auto_mode":AI_AUTO_MODE}
-    raise HTTPException(status_code=400, detail="provider yoki all_enabled kerak")
+        AI_CONTROL_MODE = "CUSTOM"
+        AI_AUTO_MODE = False
+        return {"ok": True, "provider": provider, "enabled": AI_PROVIDER_ENABLED[provider], **_ai_control_state()}
+    raise HTTPException(status_code=400, detail="provider, mode yoki all_enabled kerak")
 
 @app.get("/api/v1/market/providers")
 async def get_market_providers() -> dict[str, Any]:
@@ -7800,6 +7957,7 @@ async def ai_providers_status(authorization: str | None = Header(default=None), 
         prof=AI_PROVIDER_PROFILE.get(p,{"quality":70,"speed":70,"capacity":60,"cost":60})
         providers.append({"id":p,"configured":True,"enabled":AI_PROVIDER_ENABLED.get(p,True),"status":("OFF" if not AI_PROVIDER_ENABLED.get(p,True) else status),"model":models[p],"reason":("Qo‘lda o‘chirilgan — router bu AI'ni chaqirmaydi." if not AI_PROVIDER_ENABLED.get(p,True) else reason),"error":error,"http_status":hard.get("http_status", st.get("http_status")),"checked_at":st.get("checked_at"),"cooldown_seconds_remaining":cooldown_remaining_now,"score":display_score(p),"quality":prof["quality"],"speed":prof["speed"],"capacity":prof["capacity"],"cost":prof["cost"],"hard_blocked":bool(hard)})
     return {
+        "control": _ai_control_state(),
         "market_gate": market_gate,
         "order":[x["id"] for x in providers],
         "router": AI_ROUTER_MODE,
@@ -7873,10 +8031,58 @@ async def mt5_poll(token: str = Query(...), market: str = Query(...), client_id:
     client = re.sub(r"[^A-Za-z0-9._:-]+", "_", str(client_id or "").strip())[:100]
     if not client:
         client = "legacy"
+    # Reconcile queued pending setups before claiming new work. A SignalHistory
+    # cancellation/expiry must reach the EA so an already-placed MT5 pending order
+    # is removed instead of waiting indefinitely.
+    cancel_orders = []
+    for item in list(MT5_ORDER_QUEUE):
+        if _mt5_market_key(item.get("market") or item.get("symbol")) != requested_market:
+            continue
+        reason = ""
+        exp = str(item.get("expires_at") or "").strip()
+        if exp:
+            try:
+                exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
+                if exp_dt.tzinfo is None:
+                    exp_dt = exp_dt.replace(tzinfo=timezone.utc)
+                if exp_dt <= datetime.now(timezone.utc):
+                    reason = "CANCELLED_SETUP_EXPIRED"
+            except Exception:
+                pass
+        sid = str(item.get("signal_id") or "")
+        if not reason and sid:
+            try:
+                with SessionLocal() as s:
+                    hist = s.scalar(select(SignalHistory).where(SignalHistory.signal_uid == sid))
+                    if hist is not None:
+                        hs = str(getattr(hist, "status", "") or "").upper()
+                        ho = str(getattr(hist, "outcome", "") or "").upper()
+                        if hs not in {"ACTIVE", "OPEN", "READY", "QUEUED"} or ho in {"CANCELLED","INVALID","SL HIT","TP HIT","CLOSED","EXPIRED"}:
+                            reason = "CANCELLED_SETUP_INVALID"
+            except Exception:
+                pass
+        if reason:
+            item["status"] = reason
+            item["claimed"] = False
+            sid = str(item.get("signal_id") or "")
+            if sid:
+                _mark_signal_execution_history(
+                    sid, reason, ticket=str(item.get("id") or ""), reason=reason,
+                    order_type=str(item.get("order_type") or "MARKET")
+                )
+            cancel_orders.append({
+                "id": item.get("id"),
+                "order_id": item.get("id"),
+                "signal_id": sid,
+                "reason": reason,
+                "order_type": item.get("order_type") or "MARKET",
+            })
+
     gate = market_gate_status(requested_market)
     if not gate.get("open"):
-        MT5_ORDER_QUEUE[:] = [item for item in MT5_ORDER_QUEUE if item.get("claimed")]
-        return {"ok": True, "market": requested_market, "orders": [], "client_id": client, "reason": gate.get("reason"), "market_gate": gate}
+        return {"ok": True, "market": requested_market, "orders": [],
+                "cancel_orders": cancel_orders, "client_id": client,
+                "reason": gate.get("reason"), "market_gate": gate}
     # Expire dead-client leases so a crashed terminal cannot permanently hold an order.
     for item in MT5_ORDER_QUEUE:
         if item.get("claimed") and float(item.get("claim_expires", 0) or 0) <= now:
@@ -7890,7 +8096,7 @@ async def mt5_poll(token: str = Query(...), market: str = Query(...), client_id:
     # using the same token cannot take an active lease away from the first one.
     orders = []
     for item in MT5_ORDER_QUEUE:
-        if item.get("claimed"):
+        if item.get("claimed") or str(item.get("status") or "").startswith("CANCELLED"):
             continue
         item_market = _mt5_market_key(item.get("market") or item.get("symbol"))
         if item_market != requested_market:
@@ -7905,7 +8111,9 @@ async def mt5_poll(token: str = Query(...), market: str = Query(...), client_id:
         orders.append(item)
         if len(orders) >= 10:
             break
-    return {"ok": True, "market": requested_market, "orders": orders, "client_id": client, "lease_seconds": MT5_CLAIM_LEASE_SECONDS}
+    return {"ok": True, "market": requested_market, "orders": orders,
+            "cancel_orders": cancel_orders, "client_id": client,
+            "lease_seconds": MT5_CLAIM_LEASE_SECONDS}
 
 @app.post("/api/v1/mt5/state")
 async def mt5_state(body: MT5StateBody, token: str = Query(...)) -> dict[str, Any]:
@@ -7968,13 +8176,40 @@ async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, 
             report_client = re.sub(r"[^A-Za-z0-9._:-]+", "_", str(body.client_id or "").strip())[:100]
             if claimed_by and report_client and claimed_by != report_client:
                 break
-            if status in {"order_sent", "sent", "success", "filled"}:
+            item_type = str(item.get("order_type") or "MARKET").upper()
+            item_signal_id = str(item.get("signal_id") or "")
+            if status in {"order_sent", "sent", "success", "filled", "pending_placed"}:
                 qk = item.get("queue_key")
                 if isinstance(qk, list) and len(qk) == 5:
                     MT5_EXECUTED_KEYS.add(tuple(str(x) for x in qk))
+                if item_signal_id:
+                    lifecycle_state = "PENDING_TRIGGERED" if (item_type != "MARKET" and status in {"filled", "success"}) else (
+                        "PENDING_CREATED" if item_type != "MARKET" else "MARKET_OPENED"
+                    )
+                    _mark_signal_execution_history(
+                        item_signal_id, lifecycle_state, ticket=str(body.ticket or item.get("id") or ""),
+                        price=body.price, profit=body.profit, reason=body.message or "MT5 execution report",
+                        order_type=item_type
+                    )
+                MT5_ORDER_QUEUE.pop(idx)
+                MT5_ORDER_ATTEMPTS.pop(str(body.ticket), None)
+            elif status in {"cancelled", "canceled"}:
+                if item_signal_id:
+                    reason = body.message or "Pending order cancelled"
+                    state = "CANCELLED_SETUP_EXPIRED" if "EXPIRED" in reason.upper() else "CANCELLED"
+                    _mark_signal_execution_history(
+                        item_signal_id, state, ticket=str(body.ticket or item.get("id") or ""),
+                        price=body.price, profit=body.profit, reason=reason,
+                        order_type=item_type
+                    )
                 MT5_ORDER_QUEUE.pop(idx)
                 MT5_ORDER_ATTEMPTS.pop(str(body.ticket), None)
             elif status in {"error", "failed", "order_failed"}:
+                if item_signal_id and "INVALID_LEVEL_GEOMETRY" in (body.message or "").upper():
+                    _mark_signal_execution_history(
+                        item_signal_id, "INVALID_LEVEL_GEOMETRY", ticket=str(body.ticket or item.get("id") or ""),
+                        reason=body.message
+                    )
                 attempts = MT5_ORDER_ATTEMPTS.get(str(body.ticket), 1)
                 if attempts >= 3:
                     MT5_ORDER_QUEUE.pop(idx)

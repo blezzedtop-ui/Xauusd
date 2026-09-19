@@ -366,7 +366,8 @@ def analyze_fibonacci(candles: list[dict[str, Any]], higher_frames: dict[str, li
                 rr = abs(targets[1]-entry) / max(abs(entry-stop), atr*0.35)
 
     hard_wait = high_volatility and not fib_cluster and not sr_confluence
-    deterministic_signal = raw_direction if score >= 75 and rr >= 1.50 and not hard_wait else "WAIT"
+    # External SignalX contract uses BUY/SELL. Keep BULLISH/BEARISH as internal trend labels only.
+    deterministic_signal = ("BUY" if raw_direction == "BULLISH" else "SELL" if raw_direction == "BEARISH" else "WAIT") if score >= 75 and rr >= 1.50 and not hard_wait else "WAIT"
 
     reasons: list[str] = []
     reasons.append(f"Trend {trend}")
