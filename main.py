@@ -64,9 +64,25 @@ FOREX_FACTORY_CALENDAR_URL = os.getenv("FOREX_FACTORY_CALENDAR_URL", "https://ww
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-sol").strip() or "gpt-5.6-sol"
 HF_TOKEN = (os.getenv("HF_TOKEN", "").strip() or os.getenv("HUGGINGFACE_API_KEY", "").strip())
-HF_MODEL = os.getenv("HF_MODEL", "openai/gpt-oss-120b:fastest").strip() or "openai/gpt-oss-120b:fastest"
+# Railway may use HUGGINGFACE_MODEL; keep HF_MODEL as a backwards-compatible alias.
+HF_MODEL = (
+    os.getenv("HUGGINGFACE_MODEL", "").strip()
+    or os.getenv("HF_MODEL", "").strip()
+    or "openai/gpt-oss-120b:fastest"
+)
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b").strip() or "openai/gpt-oss-120b"
+# Optional second Groq account/key. This is a separate provider slot so a
+# failure/cooldown on Groq #1 does not prevent the router from using Groq #2.
+GROQ_API_KEY_2 = (
+    os.getenv("GROQ_API_KEY_2", "").strip()
+    or os.getenv("GROQ2_API_KEY", "").strip()
+)
+GROQ_MODEL_2 = (
+    os.getenv("GROQ_MODEL_2", "qwen/qwen3.8-27b").strip()
+    or os.getenv("GROQ2_MODEL", "qwen/qwen3.8-27b").strip()
+    or "qwen/qwen3.8-27b"
+)
 GROQ_QWEN_MODEL = os.getenv("GROQ_QWEN_MODEL", "qwen/qwen3.6-27b").strip() or "qwen/qwen3.6-27b"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash").strip() or "gemini-3.8-flash"
@@ -87,7 +103,7 @@ if DEEPSEEK_MODEL == "deepseek-v4-flash":
     DEEPSEEK_MODEL = "deepseek-flash"
 AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto"
 _DEFAULT_AI_FALLBACK_ORDER = [
-    "groq", "deepseek", "gemini", "groq_qwen", "openrouter",
+    "groq", "groq_2", "deepseek", "gemini", "groq_qwen", "openrouter",
     "mistral", "cerebras", "cloudflare", "huggingface", "openai",
 ]
 _raw_ai_order = [x.strip().lower() for x in os.getenv("AI_FALLBACK_ORDER", "").split(",") if x.strip()]
@@ -100,6 +116,7 @@ AI_ROUTER_MODE = os.getenv("AI_ROUTER_MODE", "score").strip().lower() or "score"
 # These are routing heuristics, not provider guarantees; live status is weighted dynamically.
 AI_PROVIDER_PROFILE = {
     "groq": {"quality": 95, "speed": 99, "capacity": 78, "cost": 94},
+    "groq_2": {"quality": 90, "speed": 99, "capacity": 82, "cost": 96},
     "deepseek": {"quality": 96, "speed": 88, "capacity": 99, "cost": 97},
     "gemini": {"quality": 94, "speed": 91, "capacity": 88, "cost": 88},
     "groq_qwen": {"quality": 86, "speed": 98, "capacity": 78, "cost": 94},
@@ -136,7 +153,7 @@ AI_PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
 AI_PROVIDER_STATUS: dict[str, dict[str, Any]] = {}
 # Runtime AI controls. OFF providers are never called by the router.
 AI_PROVIDER_ENABLED: dict[str, bool] = {
-    "groq": True, "deepseek": True, "gemini": True, "groq_qwen": True,
+    "groq": True, "groq_2": True, "deepseek": True, "gemini": True, "groq_qwen": True,
     "openai": True, "mistral": True, "cerebras": True, "cloudflare": True,
     "huggingface": True, "openrouter": True,
 }
@@ -216,6 +233,8 @@ async def _cloudflare_completion(prompt: str) -> tuple[str, str]:
 async def _provider_call(provider: str, prompt: str) -> tuple[str, str]:
     if provider == "groq" and GROQ_API_KEY:
         return await _openai_compatible_completion(GROQ_API_KEY, "https://api.groq.com/openai/v1", GROQ_MODEL, prompt, "groq")
+    if provider == "groq_2" and GROQ_API_KEY_2:
+        return await _openai_compatible_completion(GROQ_API_KEY_2, "https://api.groq.com/openai/v1", GROQ_MODEL_2, prompt, "groq_2")
     if provider == "groq_qwen" and GROQ_API_KEY:
         return await _openai_compatible_completion(GROQ_API_KEY, "https://api.groq.com/openai/v1", GROQ_QWEN_MODEL, prompt, "groq_qwen")
     if provider == "gemini" and GEMINI_API_KEY:
@@ -432,6 +451,7 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
     """
     configured = {
         "groq": bool(GROQ_API_KEY),
+        "groq_2": bool(GROQ_API_KEY_2),
         "gemini": bool(GEMINI_API_KEY),
         "openrouter": bool(OPENROUTER_API_KEY),
         "groq_qwen": bool(GROQ_API_KEY),
@@ -2795,7 +2815,7 @@ async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
             "Confidence must be an integer 0-100. Do not claim certainty or guaranteed profits.\n\n"
             + json.dumps(analysis_context, ensure_ascii=False, default=str)
         )
-        if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY,
+        if any((GROQ_API_KEY, GROQ_API_KEY_2, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY,
                 CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, DEEPSEEK_API_KEY, OPENAI_API_KEY, HF_TOKEN)):
             try:
                 text, ai_provider = await ai_json_completion(prompt)
@@ -2880,7 +2900,7 @@ async def ai_validate_module_signal(source: str, symbol: str, interval: str, can
             "technical": {k:v for k,v in deterministic.items() if k not in {"recent_candles","candles"}},
         }
         result=None
-        if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY,
+        if any((GROQ_API_KEY, GROQ_API_KEY_2, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY,
                 CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, DEEPSEEK_API_KEY, OPENAI_API_KEY, HF_TOKEN)):
             try:
                 if source.strip().lower() == "fibonacci":
@@ -6981,6 +7001,7 @@ async def ai_providers_status(authorization: str | None = Header(default=None), 
     # providers are intentionally hidden instead of showing "OFFLINE".
     configured={
         "groq": bool(GROQ_API_KEY),
+        "groq_2": bool(GROQ_API_KEY_2),
         "gemini": bool(GEMINI_API_KEY),
         "openrouter": bool(OPENROUTER_API_KEY),
         "groq_qwen": bool(GROQ_API_KEY),
@@ -6991,7 +7012,7 @@ async def ai_providers_status(authorization: str | None = Header(default=None), 
         "openai": bool(OPENAI_API_KEY),
         "huggingface": bool(HF_TOKEN),
     }
-    models={"groq":GROQ_MODEL,"gemini":GEMINI_MODEL,"openrouter":OPENROUTER_MODEL,"groq_qwen":GROQ_QWEN_MODEL,"mistral":MISTRAL_MODEL,"cerebras":CEREBRAS_MODEL,"cloudflare":CLOUDFLARE_MODEL,"deepseek":DEEPSEEK_MODEL,"openai":OPENAI_MODEL,"huggingface":HF_MODEL}
+    models={"groq":GROQ_MODEL,"groq_2":GROQ_MODEL_2,"gemini":GEMINI_MODEL,"openrouter":OPENROUTER_MODEL,"groq_qwen":GROQ_QWEN_MODEL,"mistral":MISTRAL_MODEL,"cerebras":CEREBRAS_MODEL,"cloudflare":CLOUDFLARE_MODEL,"deepseek":DEEPSEEK_MODEL,"openai":OPENAI_MODEL,"huggingface":HF_MODEL}
     providers=[]
     now_mono = asyncio.get_running_loop().time()
     def display_score(p: str) -> float:

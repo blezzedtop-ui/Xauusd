@@ -15,3 +15,11 @@ Groq, DeepSeek, Gemini, Groq Qwen, OpenRouter, Mistral, Cerebras, Cloudflare Wor
 
 ## Safety
 AI is advisory/validation only. Existing deterministic and AutoTrade execution gates remain separate; provider failover does not bypass RR, structure, geometry, or execution protections.
+
+
+## Railway provider slots
+- `GROQ_API_KEY_2` + `GROQ_MODEL_2` are supported as a separate Groq failover slot.
+- `GROQ_MODEL_2` can be set to `qwen/qwen3.8-27b`.
+- `OPENROUTER_API_KEY` is read directly from Railway and remains in the automatic fallback chain.
+- `HUGGINGFACE_MODEL` is supported directly; this can be set to `Qwen/Qwen3-32B`.
+- A failure/cooldown on Groq #1 does not disable Groq #2.
