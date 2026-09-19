@@ -17,3 +17,9 @@ Changes:
 - MT5 EA also blocks the retired sources as a defense-in-depth measure.
 
 Remaining active strategy families continue to operate independently.
+
+## 2026-09-19 Signals / Signal Engine retirement
+- The visible Signal Engine/Signals section is removed from the web UI.
+- Signal Engine and generic Signals sources are excluded from the AutoTrade queue.
+- Signal Engine is also removed from the AutoTrade consensus vote.
+- Underlying API functions remain only for backward compatibility and are not part of the AutoTrade pipeline.

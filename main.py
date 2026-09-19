@@ -42,6 +42,18 @@ load_dotenv()
 
 APP_TITLE = os.getenv("APP_TITLE", "Trading SaaS Analytics Platform")
 MARKET_PROVIDER = os.getenv("MARKET_PROVIDER", "auto").lower()
+# Shared market-data router: a preferred provider is only the first attempt.
+# Every module uses the same symbol/timeframe snapshot and automatically falls
+# through to the next available provider when the current provider fails.
+_DEFAULT_MARKET_FALLBACK_ORDER = ["tradingview", "realmarketapi", "twelvedata", "yahoo"]
+_raw_market_order = [x.strip().lower() for x in os.getenv("MARKET_FALLBACK_ORDER", "").split(",") if x.strip()]
+MARKET_FALLBACK_ORDER: list[str] = []
+for _market_provider_name in (_raw_market_order + _DEFAULT_MARKET_FALLBACK_ORDER):
+    if _market_provider_name not in MARKET_FALLBACK_ORDER:
+        MARKET_FALLBACK_ORDER.append(_market_provider_name)
+MARKET_PROVIDER_COOLDOWN_SECONDS = max(3, int(os.getenv("MARKET_PROVIDER_COOLDOWN_SECONDS", "20")))
+MARKET_PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
+MARKET_PROVIDER_STATUS: dict[str, dict[str, Any]] = {}
 REALMARKET_API_KEY = os.getenv("REALMARKET_API_KEY", "").strip()
 REALMARKET_API_BASE = os.getenv("REALMARKET_API_BASE", "https://api.realmarketapi.com").strip().rstrip("/")
 TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
@@ -74,7 +86,15 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash").strip() or "deeps
 if DEEPSEEK_MODEL == "deepseek-v4-flash":
     DEEPSEEK_MODEL = "deepseek-flash"
 AI_PROVIDER = os.getenv("AI_PROVIDER", "auto").strip().lower() or "auto"
-AI_FALLBACK_ORDER = [x.strip().lower() for x in os.getenv("AI_FALLBACK_ORDER", "groq,deepseek,gemini,groq_qwen,openai,mistral,cerebras,cloudflare,huggingface,openrouter").split(",") if x.strip()]
+_DEFAULT_AI_FALLBACK_ORDER = [
+    "groq", "deepseek", "gemini", "groq_qwen", "openrouter",
+    "mistral", "cerebras", "cloudflare", "huggingface", "openai",
+]
+_raw_ai_order = [x.strip().lower() for x in os.getenv("AI_FALLBACK_ORDER", "").split(",") if x.strip()]
+AI_FALLBACK_ORDER: list[str] = []
+for _provider_name in (_raw_ai_order + _DEFAULT_AI_FALLBACK_ORDER):
+    if _provider_name not in AI_FALLBACK_ORDER:
+        AI_FALLBACK_ORDER.append(_provider_name)
 AI_ROUTER_MODE = os.getenv("AI_ROUTER_MODE", "score").strip().lower() or "score"
 # Provider profile: quality, speed, capacity/limits, cost-efficiency (0-100).
 # These are routing heuristics, not provider guarantees; live status is weighted dynamically.
@@ -107,9 +127,9 @@ REQUIRE_EMAIL_DELIVERY = os.getenv("REQUIRE_EMAIL_DELIVERY", "false").lower() ==
 SMTP_USE_STARTTLS = os.getenv("SMTP_USE_STARTTLS", "true").lower() == "true"
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", "86400"))
-# Cache AI results for the entire candle lifetime; candle_time is part of every key.
-# This prevents repeated requests on the same candle and greatly reduces quota use.
-AI_RATE_LIMIT_RETRY_NEXT_CANDLE = True
+# Live AI results can be cached for the candle; provider-failure fallbacks use a short
+# cache so a recovered provider can be used without waiting for a new candle.
+AI_FAILURE_CACHE_TTL = max(5, int(os.getenv("AI_FAILURE_CACHE_TTL", "20")))
 AI_PROVIDER_COOLDOWN_SECONDS = int(os.getenv("AI_PROVIDER_COOLDOWN_SECONDS", "120"))
 AI_PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
 
@@ -374,14 +394,43 @@ async def build_ai_qa_context(symbol: str, interval: str) -> dict[str, Any]:
         },
     }
 
-async def ai_json_completion(prompt: str) -> tuple[str, str]:
-    """Free-first AI router with automatic provider failover.
+def _extract_json_object(raw: str) -> dict[str, Any]:
+    """Parse provider JSON while tolerating markdown fences and surrounding prose."""
+    text = str(raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```$", "", text)
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError("provider returned non-JSON content")
+        value = json.loads(text[start:end + 1])
+    if not isinstance(value, dict):
+        raise ValueError("provider JSON must be an object")
+    return value
 
-    TradingView/quant data is supplied by the caller; this router never fetches
-    market data. A provider error, timeout or rate limit immediately advances
-    to the next configured provider. The deterministic engine remains the final fallback.
+
+def _dedupe_provider_order(values: list[str]) -> list[str]:
+    out: list[str] = []
+    for value in values:
+        name = str(value or "").strip().lower()
+        if name and name in AI_PROVIDER_ENABLED and name not in out:
+            out.append(name)
+    return out
+
+
+async def ai_json_completion(prompt: str) -> tuple[str, str]:
+    """Shared multi-provider AI router used by every AI-assisted module.
+
+    A module never depends on a single provider. The router prefers healthy/available
+    providers, applies per-provider cooldowns, and immediately advances to the next
+    configured provider on rate-limit, auth, model, network, timeout, or invalid-JSON
+    failures. The final caller may then use its own deterministic fallback.
     """
-    configured={
+    configured = {
         "groq": bool(GROQ_API_KEY),
         "gemini": bool(GEMINI_API_KEY),
         "openrouter": bool(OPENROUTER_API_KEY),
@@ -393,49 +442,78 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
         "openai": bool(OPENAI_API_KEY),
         "huggingface": bool(HF_TOKEN),
     }
-    raw_order = [AI_PROVIDER] if AI_PROVIDER not in {"auto", ""} else AI_FALLBACK_ORDER
-    # Never call or mark a provider that has no credentials configured.
+
+    # Even when AI_PROVIDER is explicitly set, it is only the preferred provider.
+    # All other configured providers remain eligible as automatic fallbacks.
+    preferred = [AI_PROVIDER] if AI_PROVIDER not in {"auto", ""} else []
+    raw_order = _dedupe_provider_order(preferred + AI_FALLBACK_ORDER)
     candidates = [p for p in raw_order if configured.get(p, False) and AI_PROVIDER_ENABLED.get(p, True)]
-    errors=[]
+    if not candidates:
+        raise RuntimeError("No configured AI providers are available")
+
+    errors: list[str] = []
     now_mono = asyncio.get_running_loop().time()
 
     def route_score(provider: str) -> float:
-        prof = AI_PROVIDER_PROFILE.get(provider, {"quality":70,"speed":70,"capacity":60,"cost":60})
-        base = (prof["quality"]*0.40 + prof["speed"]*0.20 + prof["capacity"]*0.25 + prof["cost"]*0.15)
+        prof = AI_PROVIDER_PROFILE.get(provider, {"quality": 70, "speed": 70, "capacity": 60, "cost": 60})
+        base = (prof["quality"] * 0.40 + prof["speed"] * 0.20 + prof["capacity"] * 0.25 + prof["cost"] * 0.15)
         st = AI_PROVIDER_STATUS.get(provider) or {}
         status = st.get("status")
-        if status == "ONLINE": base += 8
-        elif status == "LIMITED": base -= 18
-        if AI_PROVIDER_COOLDOWN_UNTIL.get(provider, 0.0) > now_mono: base -= 35
+        if status == "ONLINE":
+            base += 18
+        elif status == "LIMITED":
+            base -= 30
+        elif status == "OFFLINE":
+            base -= 12
+        if AI_PROVIDER_COOLDOWN_UNTIL.get(provider, 0.0) > now_mono:
+            base -= 80
         return round(base, 2)
 
-    # In AUTO mode choose the best currently healthy provider by a weighted
-    # quality/speed/capacity/cost score. If it fails, immediately fall through
-    # the remaining providers in descending score order.
     order = sorted(candidates, key=route_score, reverse=True) if AI_ROUTER_MODE == "score" else candidates
+
     for provider in order:
-        # Skip a provider briefly after a rate-limit response instead of hammering it.
         cooldown_until = AI_PROVIDER_COOLDOWN_UNTIL.get(provider, 0.0)
         if cooldown_until > now_mono:
-            AI_PROVIDER_STATUS[provider] = {"status":"LIMITED", "checked_at":datetime.now(timezone.utc).isoformat(),
-                                            "error":f"rate-limit cooldown ({int(cooldown_until-now_mono)}s remaining)"}
+            remaining = max(1, int(cooldown_until - now_mono))
+            AI_PROVIDER_STATUS[provider] = {
+                "status": "LIMITED",
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "error": f"provider cooldown ({remaining}s remaining)",
+            }
             errors.append(f"{provider}: cooldown")
             continue
+
         try:
             text, used = await _provider_call(provider, prompt)
-            AI_PROVIDER_STATUS[used] = {"status":"ONLINE", "checked_at":datetime.now(timezone.utc).isoformat(), "error":""}
+            # Every current AI-assisted feature requests strict JSON. Validate it here
+            # so malformed output from one provider cannot block the rest of the network.
+            _extract_json_object(text)
+            AI_PROVIDER_STATUS[used] = {
+                "status": "ONLINE",
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "last_success_at": datetime.now(timezone.utc).isoformat(),
+                "error": "",
+            }
             AI_PROVIDER_COOLDOWN_UNTIL.pop(used, None)
             return text, used
         except Exception as exc:
             msg, http_status = _provider_error_details(exc)
-            low=msg.lower()
+            low = msg.lower()
+            invalid_json = "non-json" in low or "json" in low and "provider returned" in low
             limited = http_status == 429 or "rate limit" in low or "rate_limit" in low or "quota" in low or "too many requests" in low
-            if limited:
+            if limited or invalid_json:
                 AI_PROVIDER_COOLDOWN_UNTIL[provider] = now_mono + AI_PROVIDER_COOLDOWN_SECONDS
-            AI_PROVIDER_STATUS[provider] = {"status":"LIMITED" if limited else "OFFLINE", "checked_at":datetime.now(timezone.utc).isoformat(), "error":msg[:360], "http_status":http_status}
+            AI_PROVIDER_STATUS[provider] = {
+                "status": "LIMITED" if limited else "OFFLINE",
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "error": msg[:360],
+                "http_status": http_status,
+            }
             errors.append(f"{provider}: {msg[:180]}")
             continue
+
     raise RuntimeError("All configured AI providers failed: " + " | ".join(errors))
+
 
 CANDLE_LIMIT = max(50, min(int(os.getenv("CANDLE_LIMIT", "220")), 500))
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "12"))
@@ -531,6 +609,13 @@ TRADINGVIEW_CACHE_TTL = float(os.getenv("TRADINGVIEW_CACHE_TTL", "2.0"))
 TV_CANDLE_CACHE: dict[tuple[str,str], tuple[float, list[dict[str,Any]]]] = {}
 TV_CANDLE_LOCKS: dict[tuple[str,str], asyncio.Lock] = {}
 TV_CANDLE_LOCKS_GUARD = asyncio.Lock()
+# Canonical snapshot cache shared by every strategy and endpoint. The cache key is
+# strictly symbol + timeframe, so Technical Analysis, Algo/SMC, SMC, Fibonacci,
+# Trend Channel, MSAI and MTF reuse identical OHLC data for the same request.
+MARKET_SNAPSHOT_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+MARKET_SNAPSHOT_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
+MARKET_SNAPSHOT_LOCKS_GUARD = asyncio.Lock()
+MARKET_SNAPSHOT_TTL = max(0.5, float(os.getenv("MARKET_SNAPSHOT_TTL", "2.0")))
 NODE_QUOTE_TIMEOUT = float(os.getenv("NODE_QUOTE_TIMEOUT", "2.5"))
 MARKET_TIMEZONE = os.getenv("MARKET_TIMEZONE", "UTC").strip() or "UTC"
 # SECRET_KEY is automatically generated when Railway does not provide one.
@@ -1396,22 +1481,177 @@ def realmarket_timeframe(interval: str) -> str:
         raise MarketDataError(f"RealMarketAPI does not publish {interval} in its documented timeframe set; use Twelve Data for this timeframe.")
     return REALMARKET_TIMEFRAMES[interval]
 
+def _market_provider_enabled(provider: str) -> bool:
+    provider = str(provider or "").lower().strip()
+    if provider == "tradingview":
+        return True
+    if provider == "realmarketapi":
+        return bool(REALMARKET_API_KEY)
+    if provider == "twelvedata":
+        return bool(TWELVE_DATA_API_KEY)
+    if provider == "yahoo":
+        return True
+    return False
+
+
+def _market_provider_order() -> list[str]:
+    preferred = MARKET_PROVIDER.strip().lower() or "auto"
+    order = []
+    if preferred in {"realmarket", "realmarketapi"}:
+        order.append("realmarketapi")
+    elif preferred == "twelvedata":
+        order.append("twelvedata")
+    elif preferred == "yahoo":
+        order.append("yahoo")
+    elif preferred == "tradingview":
+        order.append("tradingview")
+    for provider in MARKET_FALLBACK_ORDER:
+        if provider not in order:
+            order.append(provider)
+    return [p for p in order if _market_provider_enabled(p)]
+
+
+def _mark_market_provider_success(provider: str, *, symbol: str, interval: str, candles: list[dict[str, Any]]) -> None:
+    MARKET_PROVIDER_COOLDOWN_UNTIL.pop(provider, None)
+    MARKET_PROVIDER_STATUS[provider] = {
+        "status": "ONLINE",
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "symbol": symbol,
+        "interval": interval,
+        "bars": len(candles),
+        "last_error": "",
+    }
+
+
+def _mark_market_provider_failure(provider: str, exc: Exception) -> str:
+    now_mono = asyncio.get_running_loop().time()
+    cooldown_until = now_mono + MARKET_PROVIDER_COOLDOWN_SECONDS
+    MARKET_PROVIDER_COOLDOWN_UNTIL[provider] = cooldown_until
+    message = f"{type(exc).__name__}: {exc}"[:400]
+    MARKET_PROVIDER_STATUS[provider] = {
+        "status": "OFFLINE",
+        "checked_at": datetime.now(timezone.utc).isoformat(),
+        "error": message,
+        "cooldown_until": cooldown_until,
+    }
+    return message
+
+
+def _market_provider_name(provider: str) -> str:
+    return {
+        "tradingview": "TradingView",
+        "realmarketapi": "RealMarketAPI",
+        "twelvedata": "Twelve Data",
+        "yahoo": "Yahoo Finance",
+    }.get(provider, provider)
+
+
+async def _fetch_market_candles_provider(provider: str, symbol: str, interval: str, limit: int) -> list[dict[str, Any]]:
+    if provider == "tradingview":
+        return await fetch_tradingview_candles(symbol, interval, limit, allow_stale=False)
+    if provider == "realmarketapi":
+        return await fetch_realmarket_candles(symbol, interval, limit)
+    if provider == "twelvedata":
+        return await fetch_twelvedata_candles(symbol, interval, limit)
+    if provider == "yahoo":
+        return await fetch_yahoo_candles(symbol, interval, limit)
+    raise MarketDataError(f"Unknown market provider: {provider}")
+
+
+def _normalize_market_candles(candles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = []
+    for c in candles or []:
+        try:
+            item = {
+                "time": int(float(c["time"])),
+                "open": float(c["open"]),
+                "high": float(c["high"]),
+                "low": float(c["low"]),
+                "close": float(c["close"]),
+            }
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not all(math.isfinite(item[k]) for k in ("open", "high", "low", "close")):
+            continue
+        if item["high"] < max(item["open"], item["close"]) or item["low"] > min(item["open"], item["close"]):
+            continue
+        normalized.append(item)
+    dedup = {c["time"]: c for c in normalized}
+    return [dedup[k] for k in sorted(dedup)]
+
+
+async def get_market_snapshot(symbol: str, interval: str, limit: int = 220) -> dict[str, Any]:
+    """Canonical market snapshot with provider failover.
+
+    The selected provider is recorded with the snapshot and the same snapshot is
+    reused by every module for this symbol/timeframe until its short TTL expires.
+    A provider failure is isolated with a cooldown, so the router immediately moves
+    to the next configured provider instead of returning an empty series.
+    """
+    key = clean_symbol(symbol)
+    interval = validate_interval(interval)
+    limit = max(2, min(int(limit), 500))
+    cache_key = (key, interval)
+    now_mono = asyncio.get_running_loop().time()
+    cached = MARKET_SNAPSHOT_CACHE.get(cache_key)
+    if cached and now_mono - cached[0] < MARKET_SNAPSHOT_TTL:
+        return cached[1]
+
+    async with MARKET_SNAPSHOT_LOCKS_GUARD:
+        lock = MARKET_SNAPSHOT_LOCKS.setdefault(cache_key, asyncio.Lock())
+    async with lock:
+        now_mono = asyncio.get_running_loop().time()
+        cached = MARKET_SNAPSHOT_CACHE.get(cache_key)
+        if cached and now_mono - cached[0] < MARKET_SNAPSHOT_TTL:
+            return cached[1]
+
+        errors: list[dict[str, str]] = []
+        providers = _market_provider_order()
+        if not providers:
+            raise MarketDataError("No market-data providers are configured")
+
+        for provider in providers:
+            cooldown = MARKET_PROVIDER_COOLDOWN_UNTIL.get(provider, 0.0)
+            if cooldown > now_mono:
+                errors.append({"provider": provider, "error": "provider cooldown active"})
+                continue
+            try:
+                candles = _normalize_market_candles(await _fetch_market_candles_provider(provider, key, interval, limit))
+                minimum = 35 if interval in {"1min", "5min", "15min", "30min"} else 40
+                if len(candles) < min(minimum, limit):
+                    raise MarketDataError(f"{_market_provider_name(provider)} returned only {len(candles)} usable candles")
+                candles = candles[-limit:]
+                current_price = float(candles[-1]["close"])
+                snapshot = {
+                    "symbol": key,
+                    "interval": interval,
+                    "provider": provider,
+                    "provider_name": _market_provider_name(provider),
+                    "mode": "live",
+                    "current_price": current_price,
+                    "candle": candles[-1],
+                    "candles": candles,
+                    "warning": (
+                        f"Primary market provider failed; automatically switched to {_market_provider_name(provider)}."
+                        if errors else None
+                    ),
+                    "provider_errors": errors,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                }
+                _mark_market_provider_success(provider, symbol=key, interval=interval, candles=candles)
+                MARKET_SNAPSHOT_CACHE[cache_key] = (asyncio.get_running_loop().time(), snapshot)
+                return snapshot
+            except Exception as exc:
+                errors.append({"provider": provider, "error": _mark_market_provider_failure(provider, exc)})
+
+        detail = " | ".join(f"{e['provider']}: {e['error']}" for e in errors)
+        raise MarketDataError(f"All market-data providers failed for {key} {interval}. {detail}")
+
+
 def live_provider() -> str | None:
-    if MARKET_PROVIDER in ("realmarketapi", "realmarket") and REALMARKET_API_KEY:
-        return "realmarketapi"
-    if MARKET_PROVIDER == "twelvedata" and TWELVE_DATA_API_KEY:
-        return "twelvedata"
-    if MARKET_PROVIDER == "yahoo":
-        return "yahoo"
-    if MARKET_PROVIDER == "auto":
-        if REALMARKET_API_KEY:
-            return "realmarketapi"
-        if TWELVE_DATA_API_KEY:
-            return "twelvedata"
-        # Cloud/no-key fallback: Yahoo Finance chart endpoint. This keeps the app
-        # usable after deployment without requiring the user's PC or a market API key.
-        return "yahoo"
-    return None
+    """Return the preferred configured live provider (router still fails over)."""
+    order = _market_provider_order()
+    return order[0] if order else None
 
 
 def validate_interval(interval: str) -> str:
@@ -1858,8 +2098,8 @@ async def fetch_yahoo_price(symbol: str) -> float:
     return float(rows[-1]["close"])
 
 async def get_chart_history(symbol: str, interval: str, days: int = 31) -> tuple[list[dict[str, Any]], str, str | None]:
-    data=await fetch_tradingview_candles(symbol,interval,min(CANDLE_LIMIT,TRADINGVIEW_BARS))
-    return data,"tradingview",f"TradingView {tv_symbol_for(symbol)} chart series"
+    snapshot = await get_market_snapshot(symbol, interval, min(CANDLE_LIMIT, 500))
+    return snapshot["candles"], "market-router", snapshot.get("warning")
 
 
 def _tv_session(prefix: str) -> str:
@@ -2055,23 +2295,13 @@ def demo_candles() -> list[dict[str, Any]]:
 
 
 async def fetch_live_price_any(symbol: str, interval: str = DEFAULT_INTERVAL) -> tuple[float, str]:
-    """Return the latest close from the exact TradingView chart series used by analysis."""
-    key=clean_symbol(symbol); now=asyncio.get_running_loop().time()
-    cached=LIVE_PRICE_CACHE.get(key)
-    if cached and now-cached[0]<1.0:return cached[1],cached[2]
-    bars=await fetch_tradingview_candles(symbol,interval,2)
-    if not bars: raise MarketDataError("TradingView returned no live candle")
-    price=float(bars[-1]["close"]); source=f"TradingView {tv_symbol_for(symbol)} chart series"
-    LIVE_PRICE_CACHE[key]=(now,price,source); return price,source
+    """Return price from the canonical market snapshot used by analysis."""
+    snapshot = await get_market_snapshot(symbol, interval, 220)
+    return float(snapshot["current_price"]), snapshot["provider_name"]
+
 
 def merge_live_price_into_candles(candles: list[dict[str, Any]], interval: str, price: float) -> list[dict[str, Any]]:
-    """Make the analysis candle represent the current live quote.
-
-    TradingView is an embedded iframe, so its internal ticks cannot be read by the
-    surrounding page. We therefore use the same configured live market providers
-    for every analysis module and update the currently forming backend candle with
-    the freshest quote.
-    """
+    """Update the currently-forming candle with a provider-matched quote."""
     if not candles:
         return candles
     seconds = TIMEFRAME_SECONDS[validate_interval(interval)]
@@ -2087,28 +2317,30 @@ def merge_live_price_into_candles(candles: list[dict[str, Any]], interval: str, 
         out.append({"time": bucket, "open": price, "high": price, "low": price, "close": price})
     else:
         last["close"] = price
-    return out[-max(2, min(len(out), 500)):]
+    return out[-max(2, min(len(out), 500)): ]
 
 
 async def get_candles(symbol: str, interval: str, limit: int) -> tuple[list[dict[str, Any]], str, str | None]:
-    """Fresh TradingView candles for the exact symbol/timeframe. No stale fallback.
+    """Canonical market data entry point shared by every strategy.
 
-    Signal and auto-trade paths use the active/live chart bar so Entry/SL/TP are
-    derived from the current chart series rather than a previously cached snapshot.
+    The router uses the same symbol/timeframe snapshot across all modules and
+    automatically fails over TradingView -> configured paid providers -> Yahoo.
     """
-    key = clean_symbol(symbol)
-    interval = validate_interval(interval)
-    data = await fetch_tradingview_candles(key, interval, max(31, min(limit, 260)), allow_stale=False)
-    if not data:
-        raise MarketDataError(f"TradingView {tv_symbol_for(key)} returned no fresh candles")
-    return data[-limit:], "tradingview-live", f"TradingView {tv_symbol_for(key)} live chart series"
+    snapshot = await get_market_snapshot(symbol, interval, max(31, min(limit, 500)))
+    provider = snapshot["provider_name"]
+    warning = snapshot.get("warning")
+    if snapshot.get("provider_errors") and not warning:
+        warning = "Market provider fallback active."
+    return snapshot["candles"][-limit:], "market-router", warning
 
 
 async def get_pivot_reference(symbol: str) -> tuple[dict[str, float], str | None]:
-    data=await fetch_tradingview_candles(symbol,"1day",5)
-    if not data: raise MarketDataError("TradingView daily candles unavailable for pivot")
-    base=data[-2] if len(data)>=2 else data[-1]
-    return {"high":float(base["high"]),"low":float(base["low"]),"close":float(base["close"])},None
+    snapshot = await get_market_snapshot(symbol, "1day", 5)
+    data = snapshot["candles"]
+    if not data:
+        raise MarketDataError("Daily market candles unavailable for pivot")
+    base = data[-2] if len(data) >= 2 else data[-1]
+    return {"high": float(base["high"]), "low": float(base["low"]), "close": float(base["close"])}, snapshot.get("warning")
 
 def timeframe_trend(candles: list[dict[str, Any]]) -> dict[str, Any]:
     closes = [float(c["close"]) for c in candles]
@@ -2531,12 +2763,11 @@ async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict
     return levels, warning
 
 async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
-    """OpenAI analysis with candle-level cache and request coalescing.
+    """AI analysis with candle-level cache and request coalescing.
 
-    The cache key is symbol/timeframe/candle_time, not the full mutable context.
-    Therefore price ticks inside one candle never trigger another OpenAI request.
-    A 429 is cached for that candle and the next request is allowed only after the
-    candle timestamp changes.
+    The shared multi-provider router is used instead of binding this module to one
+    vendor. Live AI results are cached for the candle; provider failures use only a
+    short cache so the network can recover and automatically switch back.
     """
     symbol = str(analysis_context.get("symbol", "XAU/USD"))
     timeframe = str(analysis_context.get("timeframe", "5min"))
@@ -2551,8 +2782,12 @@ async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
         cached = AI_CACHE.get(cache_key)
         if cached:
             cached_at, cached_candle, cached_result = cached
-            if cached_candle == str(candle_time) and now - cached_at < AI_CACHE_TTL:
-                return dict(cached_result)
+            if cached_candle == str(candle_time):
+                cached_ttl = AI_FAILURE_CACHE_TTL if cached_result.get("_failure_cache") else AI_CACHE_TTL
+                if now - cached_at < cached_ttl:
+                    out = dict(cached_result)
+                    out.pop("_failure_cache", None)
+                    return out
 
         prompt = (
             "You are a disciplined market-analysis assistant. Based ONLY on the supplied XAU/USD technical context, "
@@ -2560,7 +2795,8 @@ async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
             "Confidence must be an integer 0-100. Do not claim certainty or guaranteed profits.\n\n"
             + json.dumps(analysis_context, ensure_ascii=False, default=str)
         )
-        if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY, CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, DEEPSEEK_API_KEY, OPENAI_API_KEY)):
+        if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY,
+                CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, DEEPSEEK_API_KEY, OPENAI_API_KEY, HF_TOKEN)):
             try:
                 text, ai_provider = await ai_json_completion(prompt)
                 if text:
@@ -2578,17 +2814,15 @@ async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
                     return result
             except Exception as exc:
                 msg = str(exc)
-                if "429" in msg or "rate limit" in msg.lower():
-                    result = {
-                        "mode": "rate_limited", "warning": "OpenAI rate limit (429).",
-                        "summary": "OpenAI 429: natija shu candle uchun cache qilindi; keyingi candle'da qayta tekshiriladi.",
-                        "bias": analysis_context.get("bias", "NEUTRAL"),
-                        "confidence": 0,
-                        "advice": "Keyingi candle ochilganda OpenAI avtomatik qayta tekshiriladi."
-                    }
-                else:
-                    result = {"mode": "fallback", "warning": f"AI provider unavailable: {msg}", "summary": "OpenAI vaqtincha mavjud emas.", "bias": analysis_context.get("bias", "NEUTRAL"), "confidence": 0, "advice": "Keyingi candle'da qayta tekshiriladi."}
-                AI_CACHE[cache_key] = (now, str(candle_time), result)
+                result = {
+                    "mode": "fallback",
+                    "warning": f"AI network unavailable: {msg}",
+                    "summary": "Barcha ulangan AI providerlar vaqtincha javob bermadi; tizim keyingi so‘rovda avtomatik qayta urinadi.",
+                    "bias": analysis_context.get("bias", "NEUTRAL"),
+                    "confidence": 0,
+                    "advice": "AI tarmog‘i avtomatik ravishda keyingi ishlayotgan providerga o‘tadi."
+                }
+                AI_CACHE[cache_key] = (now, str(candle_time), {**result, "_failure_cache": True})
                 return result
 
         bias = analysis_context.get("bias", "NEUTRAL")
@@ -2629,8 +2863,12 @@ async def ai_validate_module_signal(source: str, symbol: str, interval: str, can
     async with lock:
         now=datetime.now(timezone.utc).timestamp()
         cached=AI_SIGNAL_CACHE.get(key)
-        if cached and cached[1] == str(candle_time) and now-cached[0] < AI_CACHE_TTL:
-            return dict(cached[2])
+        if cached and cached[1] == str(candle_time):
+            cached_ttl = AI_FAILURE_CACHE_TTL if cached[2].get("_failure_cache") else AI_CACHE_TTL
+            if now-cached[0] < cached_ttl:
+                cached_result = dict(cached[2])
+                cached_result.pop("_failure_cache", None)
+                return cached_result
         base_signal=str(deterministic.get("signal", "WAIT")).upper()
         context={
             "source":source,"symbol":clean_symbol(symbol),"timeframe":validate_interval(interval),
@@ -2643,7 +2881,7 @@ async def ai_validate_module_signal(source: str, symbol: str, interval: str, can
         }
         result=None
         if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY,
-                CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, DEEPSEEK_API_KEY, OPENAI_API_KEY, HF_TOKEN)) and now >= OPENAI_GLOBAL_RATE_LIMIT_UNTIL:
+                CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, DEEPSEEK_API_KEY, OPENAI_API_KEY, HF_TOKEN)):
             try:
                 if source.strip().lower() == "fibonacci":
                     prompt=("You are the STRICT AI validation layer for SignalX's Fibonacci strategy. "
@@ -2688,16 +2926,18 @@ async def ai_validate_module_signal(source: str, symbol: str, interval: str, can
                         "risk_flags":risk_flags,"reasoning":str(parsed.get("reasoning","AI validation."))}
             except Exception as exc:
                 msg=str(exc)
-                if "429" in msg or "rate limit" in msg.lower():
-                    globals()["OPENAI_GLOBAL_RATE_LIMIT_UNTIL"]=now+OPENAI_GLOBAL_RATE_LIMIT_SECONDS
                 result={"mode":"fallback","signal":base_signal if base_signal in {"BUY","SELL"} else "WAIT",
                         "confidence":int(deterministic.get("confidence",0) or 0),"agreement":50,
-                        "risk_flags":["AI provider unavailable"],"reasoning":"Deterministic quantitative validation used."}
+                        "risk_flags":["AI network unavailable"],"reasoning":"All configured AI providers failed; deterministic quantitative validation retained."}
         else:
             result={"mode":"rule_based","signal":base_signal if base_signal in {"BUY","SELL"} else "WAIT",
                     "confidence":int(deterministic.get("confidence",0) or 0),"agreement":50,
-                    "risk_flags":[],"reasoning":"AI API unavailable or cooldown active; quantitative engine retained."}
-        AI_SIGNAL_CACHE[key]=(now,str(candle_time),result)
+                    "risk_flags":[],"reasoning":"AI network unavailable; quantitative engine retained until a provider recovers."}
+        if result.get("mode") in {"fallback", "rule_based", "unavailable"}:
+            # Do not lock the module to a failed AI network for an entire candle.
+            AI_SIGNAL_CACHE[key]=(now,str(candle_time),{**result, "_failure_cache": True})
+        else:
+            AI_SIGNAL_CACHE[key]=(now,str(candle_time),result)
         return dict(result)
 
 
@@ -3368,11 +3608,10 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
 
 
 async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
-    """Build the public dashboard analysis from ONE TradingView/OANDA OHLC source.
+    """Build dashboard analysis from the shared market-data snapshot.
 
-    No provider fallback is used here. Every market-derived field is calculated
-    from the exact candles returned by get_candles(), which itself is backed by
-    the shared TradingView cache.
+    Every market-derived field is calculated from get_candles(), which is backed by
+    the canonical multi-provider market router.
     """
     symbol = clean_symbol(symbol)
     interval = validate_interval(interval)
@@ -3398,8 +3637,7 @@ async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
     setup = build_key_level_signal(candles_data, levels, news_blocked=False)
     technical = technical_analysis(candles_data, levels, setup)
 
-    # MTF is also TradingView-only. It is intentionally fetched separately because
-    # each timeframe is a distinct TradingView series.
+    # MTF uses the same market router, with one canonical snapshot per timeframe.
     mtf = await multi_timeframe(symbol)
     ai_context = {
         "symbol": symbol,
@@ -3541,43 +3779,45 @@ USER QUESTION:
 
 @app.get("/api/v1/candles/{symbol:path}")
 async def candles_endpoint(symbol: str, interval: str = Query(DEFAULT_INTERVAL), limit: int = Query(220, ge=2, le=500)) -> dict[str, Any]:
-    """Canonical candle endpoint: TradingView/OANDA only."""
+    """Canonical candle endpoint backed by the shared market-data failover router."""
     interval = validate_interval(interval)
     try:
-        rows = await fetch_tradingview_candles(clean_symbol(symbol), interval, limit)
-        if not rows:
-            raise MarketDataError("TradingView returned no candles")
+        snapshot = await get_market_snapshot(clean_symbol(symbol), interval, limit)
         return {
             "ok": True,
-            "symbol": clean_symbol(symbol),
+            "symbol": snapshot["symbol"],
             "interval": interval,
             "mode": "live",
-            "provider": "TradingView",
-            "source": tv_symbol_for(symbol),
-            "candles": rows,
-            "candle": rows[-1],
-            "warning": None,
+            "provider": snapshot["provider_name"],
+            "provider_id": snapshot["provider"],
+            "source": tv_symbol_for(symbol) if snapshot["provider"] == "tradingview" else snapshot["provider_name"],
+            "current_price": round(float(snapshot["current_price"]), 4),
+            "candles": snapshot["candles"],
+            "candle": snapshot["candle"],
+            "warning": snapshot.get("warning"),
+            "provider_errors": snapshot.get("provider_errors", []),
         }
     except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"TradingView candles unavailable: {exc}")
+        raise HTTPException(status_code=503, detail=f"Market data unavailable: {exc}")
 
 
 @app.get("/api/v1/quote/{symbol:path}")
 async def quote(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
-    """Canonical quote from the same TradingView OANDA:XAUUSD chart series."""
+    """Quote from the exact market snapshot used by strategy calculations."""
     symbol = clean_symbol(symbol)
     interval = validate_interval(interval)
     try:
-        price, source = await fetch_live_price_any(symbol, interval)
-        bars = await fetch_tradingview_candles(symbol, interval, 2)
-        ts = int(bars[-1]["time"]) if bars else int(datetime.now(timezone.utc).timestamp())
+        snapshot = await get_market_snapshot(symbol, interval, 80)
+        ts = int(snapshot["candle"]["time"])
         return {
-            "symbol": symbol, "price": round(float(price), 4), "mode": "live",
-            "provider": source, "timestamp": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
-            "source": tv_symbol_for(symbol),
+            "symbol": symbol, "price": round(float(snapshot["current_price"]), 4), "mode": "live",
+            "provider": snapshot["provider_name"], "provider_id": snapshot["provider"],
+            "timestamp": datetime.fromtimestamp(ts, timezone.utc).isoformat(),
+            "source": tv_symbol_for(symbol) if snapshot["provider"] == "tradingview" else snapshot["provider_name"],
+            "warning": snapshot.get("warning"),
         }
     except Exception as exc:
-        raise HTTPException(status_code=503, detail="TradingView live quote unavailable: " + str(exc))
+        raise HTTPException(status_code=503, detail="Market data quote unavailable: " + str(exc))
 
 
 @app.get("/api/v1/pivots/{symbol:path}")
@@ -3703,11 +3943,16 @@ async def build_msai_strategy(symbol: str, selected: str) -> dict[str, Any]:
     async with ai_lock:
         ai_now = datetime.now(timezone.utc).timestamp()
         cached_ai = MSAI_AI_CACHE.get(ai_key)
+        ai = None
         if cached_ai and cached_ai[1] == candle_time:
-            ai = dict(cached_ai[2])
-        else:
+            cached_payload = dict(cached_ai[2])
+            cached_ttl = AI_FAILURE_CACHE_TTL if cached_payload.get("_failure_cache") else AI_CACHE_TTL
+            if ai_now - cached_ai[0] < cached_ttl:
+                cached_payload.pop("_failure_cache", None)
+                ai = cached_payload
+        if ai is None:
             ai = {"signal":"WAIT", "confidence":0, "validation":False,
-                  "provider":None, "mode":"unavailable", "reason":"AI provider unavailable; no signal emitted."}
+                  "provider":None, "mode":"unavailable", "reason":"AI network unavailable; no signal emitted.", "risk_flags":[]}
             ai_context = {
                 "symbol": key,
                 "timeframe": selected,
@@ -3754,7 +3999,10 @@ async def build_msai_strategy(symbol: str, selected: str) -> dict[str, Any]:
                 }
             except Exception as exc:
                 ai["reason"] = f"AI unavailable: {str(exc)}"
-            MSAI_AI_CACHE[ai_key] = (ai_now, candle_time, dict(ai))
+            if ai.get("mode") == "live_ai":
+                MSAI_AI_CACHE[ai_key] = (ai_now, candle_time, dict(ai))
+            else:
+                MSAI_AI_CACHE[ai_key] = (ai_now, candle_time, {**ai, "_failure_cache": True})
 
     deterministic_ready = bool(base.get("signal") in {"BUY", "SELL"})
     ai_ready = bool(ai.get("validation") and ai.get("signal") == base.get("raw_direction") and int(ai.get("confidence", 0)) >= 65)
@@ -3871,15 +4119,19 @@ async def build_algo_smc_strategy(symbol: str, selected: str, prefetched: dict[s
         base["signal"] = "WAIT"
     candle_time = selected_data[-1].get("time") if selected_data else None
 
-    ai = {"mode": "unavailable", "signal": "WAIT", "confidence": 0, "agreement": 0, "validation": False, "risk_flags": ["AI provider unavailable"], "reasoning": "Strict AI validation is required for Algo/SMC."}
-    if base.get("signal") in {"BUY", "SELL"} and base.get("state") == "READY_FOR_AI":
+    deterministic_ready = base.get("signal") in {"BUY", "SELL"} and base.get("state") == "READY_FOR_AI"
+    ai = {
+        "mode": "not_called", "signal": "WAIT", "confidence": 0, "agreement": 0,
+        "validation": False, "risk_flags": [],
+        "reasoning": "Deterministic setup is not ready for AI validation."
+    }
+    if deterministic_ready:
         try:
             ai = await ai_validate_module_signal("Algo/SMC", key, selected, candle_time, base)
         except Exception as exc:
             ai = {"mode": "unavailable", "signal": "WAIT", "confidence": 0, "agreement": 0, "validation": False, "risk_flags": ["AI validation exception"], "reasoning": str(exc)[:300]}
 
     ai_passed = bool(ai.get("validation") and ai.get("signal") == base.get("raw_direction") and int(ai.get("confidence", 0)) >= 85 and int(ai.get("agreement", 0)) >= 70)
-    deterministic_ready = base.get("signal") in {"BUY", "SELL"} and base.get("state") == "READY_FOR_AI"
     if deterministic_ready and ai_passed:
         base["signal"] = base.get("raw_direction")
         base["state"] = "AI_CONFIRMED"
@@ -3998,10 +4250,16 @@ async def build_smc_strategy(symbol: str, selected: str) -> dict[str, Any]:
     async with ai_lock:
         ai_now = datetime.now(timezone.utc).timestamp()
         cached_ai = SMC_AI_CACHE.get(ai_key)
+        ai = None
         if cached_ai and cached_ai[1] == candle_time:
-            ai = dict(cached_ai[2])
-        else:
-            ai = {"signal":"WAIT", "confidence":0, "validation":False, "provider":None, "mode":"unavailable", "reason":"AI provider unavailable; no signal emitted.", "risk_flags":[]}
+            cached_payload = dict(cached_ai[2])
+            cached_ttl = AI_FAILURE_CACHE_TTL if cached_payload.get("_failure_cache") else AI_CACHE_TTL
+            if ai_now - cached_ai[0] < cached_ttl:
+                cached_payload.pop("_failure_cache", None)
+                ai = cached_payload
+        if ai is None:
+            ai = {"signal":"WAIT", "confidence":0, "validation":False,
+                  "provider":None, "mode":"unavailable", "reason":"AI network unavailable; no signal emitted.", "risk_flags":[]}
             ai_context = {
                 "symbol": key,
                 "timeframe": selected,
@@ -4042,7 +4300,10 @@ async def build_smc_strategy(symbol: str, selected: str) -> dict[str, Any]:
                 }
             except Exception as exc:
                 ai["reason"] = f"AI unavailable: {str(exc)}"
-            SMC_AI_CACHE[ai_key] = (ai_now, candle_time, dict(ai))
+            if ai.get("mode") == "live_ai":
+                SMC_AI_CACHE[ai_key] = (ai_now, candle_time, dict(ai))
+            else:
+                SMC_AI_CACHE[ai_key] = (ai_now, candle_time, {**ai, "_failure_cache": True})
 
     deterministic_ready = bool(raw_direction in {"BUY","SELL"} and checks.get("structure_bos_choch") and checks.get("entry_module") and checks.get("ltf_confirmation") and checks.get("mtf_alignment") and checks.get("rr_ok"))
     ai_gate = bool(deterministic_ready and ai.get("validation") and ai.get("signal") == raw_direction and int(ai.get("confidence", 0)) >= 75)
@@ -5412,7 +5673,7 @@ def _autotrade_source_excluded(source: str) -> bool:
     normalized = re.sub(r"[\s_\-/]+", " ", str(source or "").strip().lower()).strip()
     blocked = {
         "book + openai", "book openai", "book/openai", "book-openai",
-        "signal lab", "algotrade", "signals",
+        "signal lab", "algotrade", "signals", "signal engine",
     }
     return normalized in blocked or "book" in normalized and "openai" in normalized
 
@@ -5513,8 +5774,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     symbols = ["XAU/USD"]
     if not AUTO_ENTRY_ENABLED:
         return {"enabled": False, "count": 0, "queued": 0, "symbols": symbols,
-                "excluded_sources": ["Signal Lab", "AlgoTrade", "Book + OpenAI", "M1 / 1min / 1m"],
-                "active_sources": ["Signal Engine", "Technical Analysis", "Classic Trade", "Auto Trend Line", "ICT Signals", "AI Smart Analysis", "MSAI/SNR", "SMC", "Algo/SMC", "Patterns", "Trend Channel Engine", "Fibonacci", "Yangi Strategiya"],
+                "excluded_sources": ["Signals", "Signal Engine", "Signal Lab", "AlgoTrade", "Book + OpenAI", "M1 / 1min / 1m"],
+                "active_sources": ["Technical Analysis", "Classic Trade", "Auto Trend Line", "ICT Signals", "AI Smart Analysis", "MSAI/SNR", "SMC", "Algo/SMC", "Patterns", "Trend Channel Engine", "Fibonacci", "Yangi Strategiya"],
                 "mode": "disabled"}
 
     now = datetime.now(timezone.utc)
@@ -5566,19 +5827,6 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                     candidates.append({"source":"Algo/SMC","interval":tf,"item":algo_item,"response":algo_result})
             except Exception as exc:
                 print(f"[ALGO/SMC] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
-
-        # Signal Engine: shared deterministic quantitative engine. It remains a first-class
-        # source for History/AutoTrade, while legacy removed sources stay excluded below.
-        for tf in intervals:
-            pc=live_by_tf.get(tf,([],"error",None))[0]
-            if len(pc)>=40:
-                try:
-                    sig_item=build_advanced_signal(pc,tf,news_blocked=False)
-                    sig_item["candle_time"]=pc[-2].get("time") if len(pc)>1 else pc[-1].get("time")
-                    if sig_item.get("signal") in {"BUY","SELL"}:
-                        candidates.append({"source":"Signal Engine","interval":tf,"item":sig_item,"response":sig_item})
-                except Exception as exc:
-                    print(f"[SIGNAL ENGINE] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
 
         # MSAI/SNR: deterministic Malaysian-SNR analysis is kept independent from ICT/SMC;
         # the common process layer adds live AI validation before History/AutoTrade.
@@ -5715,7 +5963,6 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         enter consensus; ties, conflicts and weak consensus become WAIT.
         """
         weights = {
-            "Signal Engine": 1.00,
             "Technical Analysis": 1.00,
             "Classic Trade": 1.00,
             "Auto Trend Line": 1.10,
@@ -5729,7 +5976,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             "Yangi Strategiya": 1.70,
         }
         families: dict[str, dict[str, Any]] = {}
-        aliases = {"signals": "Signal Engine"}
+        aliases = {}
         for c in candidates:
             if str(c.get("interval")) != interval:
                 continue
@@ -5986,8 +6233,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         "history_count": len(rows),
         "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
         "forward_mode": "EVERY CONFIRMED ACTIVE MODULE SIGNAL EXCEPT M1; MT5 requires RR >= 1.50",
-        "excluded_sources": ["Signal Lab", "AlgoTrade", "Book + OpenAI", "M1 / 1min / 1m"],
-        "active_sources": ["Signal Engine", "Technical Analysis", "Classic Trade", "Auto Trend Line", "ICT Signals", "AI Smart Analysis", "MSAI/SNR", "SMC", "Algo/SMC", "Patterns", "Trend Channel Engine", "Fibonacci", "Yangi Strategiya"],
+        "excluded_sources": ["Signals", "Signal Engine", "Signal Lab", "AlgoTrade", "Book + OpenAI", "M1 / 1min / 1m"],
+        "active_sources": ["Technical Analysis", "Classic Trade", "Auto Trend Line", "ICT Signals", "AI Smart Analysis", "MSAI/SNR", "SMC", "Algo/SMC", "Patterns", "Trend Channel Engine", "Fibonacci", "Yangi Strategiya"],
         "items": created_history,
         "user_id": int(user.id),
     }
@@ -6712,6 +6959,21 @@ async def ai_providers_control(body: AIControlBody, authorization: str | None = 
         return {"ok":True,"provider":provider,"enabled":AI_PROVIDER_ENABLED[provider],"auto_mode":AI_AUTO_MODE}
     raise HTTPException(status_code=400, detail="provider yoki all_enabled kerak")
 
+@app.get("/api/v1/market/providers")
+async def get_market_providers() -> dict[str, Any]:
+    now_mono = asyncio.get_running_loop().time()
+    rows = []
+    for provider in _market_provider_order():
+        status = dict(MARKET_PROVIDER_STATUS.get(provider, {}))
+        cooldown = MARKET_PROVIDER_COOLDOWN_UNTIL.get(provider, 0.0)
+        status["id"] = provider
+        status["name"] = _market_provider_name(provider)
+        status["enabled"] = _market_provider_enabled(provider)
+        status["cooldown_seconds_remaining"] = max(0, int(cooldown - now_mono))
+        rows.append(status)
+    return {"ok": True, "preferred": MARKET_PROVIDER or "auto", "order": MARKET_FALLBACK_ORDER, "providers": rows}
+
+
 @app.get("/api/v1/ai/providers")
 async def ai_providers_status(authorization: str | None = Header(default=None), session: Session = Depends(db)):
     require_admin(authorization, session)
@@ -6756,7 +7018,13 @@ async def ai_providers_status(authorization: str | None = Header(default=None), 
             reason="Hali real AI so‘rovi bilan tekshirilmagan."
         prof=AI_PROVIDER_PROFILE.get(p,{"quality":70,"speed":70,"capacity":60,"cost":60})
         providers.append({"id":p,"configured":True,"enabled":AI_PROVIDER_ENABLED.get(p,True),"status":("OFF" if not AI_PROVIDER_ENABLED.get(p,True) else status),"model":models[p],"reason":("Qo‘lda o‘chirilgan — router bu AI'ni chaqirmaydi." if not AI_PROVIDER_ENABLED.get(p,True) else reason),"error":error,"http_status":st.get("http_status"),"checked_at":st.get("checked_at"),"score":display_score(p),"quality":prof["quality"],"speed":prof["speed"],"capacity":prof["capacity"],"cost":prof["cost"]})
-    return {"order":[x["id"] for x in providers],"router":"score","providers":providers}
+    return {
+        "order":[x["id"] for x in providers],
+        "router": "score",
+        "preferred": None if AI_PROVIDER in {"auto", ""} else AI_PROVIDER,
+        "automatic_failover": True,
+        "providers": providers,
+    }
 
 @app.get("/api/v1/mt5/status")
 async def mt5_status(symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
