@@ -5408,10 +5408,11 @@ def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[di
             "session_filter":session_ok,"volatility_ratio":round(vol_ratio,2)}
 
 def _autotrade_source_excluded(source: str) -> bool:
+    # The standalone "Signals" section is retired: never forward its records to AutoTrade.
     normalized = re.sub(r"[\s_\-/]+", " ", str(source or "").strip().lower()).strip()
     blocked = {
         "book + openai", "book openai", "book/openai", "book-openai",
-        "signal lab", "algotrade",
+        "signal lab", "algotrade", "signals",
     }
     return normalized in blocked or "book" in normalized and "openai" in normalized
 

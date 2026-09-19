@@ -108,6 +108,7 @@ bool IsBlockedSource(string source)
    if(StringFind(x,"book")>=0 && StringFind(x,"openai")>=0) return true;
    if(StringFind(x,"signal lab")>=0) return true;
    if(StringFind(x,"algotrade")>=0) return true;
+   if(x=="signals" || StringFind(x,"signals")>=0) return true;
    return false;
 }
 
@@ -417,7 +418,7 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
 
       if(IsBlockedSource(source))
       {
-         SendReport(order_id,dir,"ORDER_FAILED",expectedSymbol,"BLOCKED: retired Signal Lab / AlgoTrade / Book + OpenAI source is excluded from AutoTrade");
+         SendReport(order_id,dir,"ORDER_FAILED",expectedSymbol,"BLOCKED: retired Signals / Signal Lab / AlgoTrade / Book + OpenAI source is excluded from AutoTrade");
          pos+=MathMax(1,StringLen(order_id));
          continue;
       }
