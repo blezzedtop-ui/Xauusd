@@ -60,6 +60,7 @@ class MT5Account(core.Base):
     trade_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
     connected: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     auto_trade_enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    pending_trade_enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     lot: Mapped[float] = mapped_column(Float, default=0.01)
     account_token_hash: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -141,6 +142,8 @@ def initialize_gateway_tables() -> None:
         acct_columns = {c["name"] for c in inspect(core.engine).get_columns(MT5Account.__tablename__)}
         if "lot" not in acct_columns:
             conn.execute(text("ALTER TABLE mt5_accounts ADD COLUMN lot FLOAT DEFAULT 0.01"))
+        if "pending_trade_enabled" not in acct_columns:
+            conn.execute(text("ALTER TABLE mt5_accounts ADD COLUMN pending_trade_enabled BOOLEAN DEFAULT TRUE"))
         order_columns = {c["name"] for c in inspect(core.engine).get_columns(MTOrder.__tablename__)}
         expiry_ddl = "TIMESTAMP WITH TIME ZONE" if core.engine.dialect.name == "postgresql" else "DATETIME"
         additions = {
@@ -201,7 +204,7 @@ def _account_dict(a: MT5Account) -> dict[str, Any]:
         "free_margin": a.free_margin, "margin": a.margin,
         "trade_allowed": a.trade_allowed,
         "connected": bool(a.connected and age is not None and age <= 45),
-        "last_seen_seconds": age, "auto_trade_enabled": a.auto_trade_enabled, "lot": float(a.lot or 0.01),
+        "last_seen_seconds": age, "auto_trade_enabled": a.auto_trade_enabled, "pending_trade_enabled": a.pending_trade_enabled, "lot": float(a.lot or 0.01),
         "terminal_build": a.terminal_build, "ea_version": a.ea_version,
     }
 
@@ -266,6 +269,19 @@ def _sync_core_queue(session):
                     row.cancel_sent = False
 
     for account in accounts:
+        # Account-level pending-order gate. MARKET orders remain controlled by
+        # auto_trade_enabled; pending orders have their own independent switch.
+        pending_types = {"BUY_STOP","SELL_STOP","BUY_LIMIT","SELL_LIMIT"}
+        if not bool(account.pending_trade_enabled):
+            stale_pending = list(session.scalars(select(MTOrder).where(
+                MTOrder.account_id == account.id,
+                MTOrder.order_type.in_(list(pending_types)),
+                MTOrder.status.in_(["PENDING","SENT"])
+            )))
+            for row in stale_pending:
+                row.status = "CANCELLED_PENDING_DISABLED"
+                row.claim_until = None
+                row.cancel_sent = False
         for o in queue:
             if str(o.get("interval") or "").lower() in {"1m", "1min", "m1"}:
                 continue
@@ -283,6 +299,8 @@ def _sync_core_queue(session):
             order_type = str(o.get("order_type") or o.get("pending_type") or "MARKET").upper()
             allowed_types = {"MARKET", "BUY_STOP", "SELL_STOP", "BUY_LIMIT", "SELL_LIMIT"}
             if order_type not in allowed_types:
+                continue
+            if order_type in pending_types and not bool(account.pending_trade_enabled):
                 continue
 
             entry = float(o.get("entry") or 0)
@@ -372,6 +390,28 @@ async def toggle(account_id: int, body: ToggleRequest, authorization: str | None
     session.commit()
     return {"ok": True, "account": _account_dict(a)}
 
+@router.post("/accounts/{account_id}/pending-trade")
+async def toggle_pending_trade(account_id: int, body: ToggleRequest, authorization: str | None = Header(default=None), session=Depends(core.db)):
+    user = _user(authorization, session)
+    a = session.scalar(select(MT5Account).where(MT5Account.id == account_id, MT5Account.user_id == user.id))
+    if not a:
+        raise HTTPException(404, "MT5 account not found")
+    if body.enabled and not a.connected:
+        raise HTTPException(409, "MT5 account is not connected")
+    a.pending_trade_enabled = bool(body.enabled)
+    if not a.pending_trade_enabled:
+        pending = list(session.scalars(select(MTOrder).where(
+            MTOrder.account_id == account_id,
+            MTOrder.order_type.in_(["BUY_STOP","SELL_STOP","BUY_LIMIT","SELL_LIMIT"]),
+            MTOrder.status.in_(["PENDING","SENT"])
+        )))
+        for row in pending:
+            row.status = "CANCELLED_PENDING_DISABLED"
+            row.claim_until = None
+            row.cancel_sent = False
+    session.commit()
+    return {"ok": True, "account": _account_dict(a)}
+
 @router.post("/accounts/{account_id}/lot")
 async def set_account_lot(account_id: int, body: LotRequest, authorization: str | None = Header(default=None), session=Depends(core.db)):
     user = _user(authorization, session)
@@ -412,6 +452,7 @@ async def disconnect(account_id: int, authorization: str | None = Header(default
         row.claim_until = None
     a.connected = False
     a.auto_trade_enabled = False
+    a.pending_trade_enabled = False
     a.account_token_hash = None
     a.token_expires_at = None
     session.commit()

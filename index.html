@@ -835,6 +835,25 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 }
 </style>
 
+
+<style id="signalx-mobile-final-hard-fix-20260919">
+/* FINAL MOBILE HARD FIX: never let a dimmer/blur layer black out the page or block the drawer. */
+@media (max-width:1100px){
+  html,body{background:#020611!important;color:#eaf4ff!important;overflow-x:hidden!important;overflow-y:auto!important;}
+  .gold-photo-bg,.gold-3d-orb{display:none!important;}
+  #sxSidebarOverlay,.sx-sidebar-overlay{display:none!important;visibility:hidden!important;opacity:0!important;pointer-events:none!important;}
+  .app{display:block!important;min-width:0!important;}
+  .main{position:relative!important;z-index:1!important;width:100%!important;min-width:0!important;max-width:none!important;}
+  .topbar{position:relative!important;z-index:10!important;}
+  .sx-mobile-menu{position:relative!important;z-index:60001!important;pointer-events:auto!important;touch-action:manipulation!important;}
+  .sidebar{position:fixed!important;left:0!important;top:0!important;bottom:0!important;width:min(300px,88vw)!important;height:100dvh!important;max-height:100dvh!important;transform:translate3d(-110%,0,0)!important;z-index:60000!important;pointer-events:none!important;opacity:1!important;visibility:visible!important;display:flex!important;overflow-y:auto!important;overflow-x:hidden!important;background:#050a12!important;backdrop-filter:none!important;-webkit-backdrop-filter:none!important;box-shadow:12px 0 35px rgba(0,0,0,.55)!important;}
+  body.sx-menu-open .sidebar{transform:translate3d(0,0,0)!important;pointer-events:auto!important;}
+  .sidebar .nav{position:relative!important;z-index:2!important;display:flex!important;flex-direction:column!important;overflow:visible!important;}
+  .sidebar .nav button,.sidebar .nav-external,.sidebar .nav-external-form button{position:relative!important;z-index:3!important;display:flex!important;align-items:center!important;pointer-events:auto!important;touch-action:manipulation!important;}
+  .sidebar .nav button>*,.sidebar .nav-external>*{pointer-events:none!important;}
+  .sidebar .nav button::before,.sidebar .nav button::after,.sidebar::before,.sidebar::after{display:none!important;pointer-events:none!important;content:none!important;}
+}
+</style>
 </head>
 <body>
 <div class="gold-3d-orb"></div>
@@ -1321,10 +1340,10 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
       </div>
       <div class="card" style="margin:0">
         <div class="section-head"><h3>ACCOUNT-LEVEL AUTO TRADING</h3><span class="pill">ALOHIDA</span></div>
-        <div class="mini">AutoTrade umumiy emas. Yuqoridagi har bir Demo yoki Real account o‘zining mustaqil ON/OFF tugmasiga ega.</div>
+        <div class="mini">AutoTrade va Auto Pending alohida. Har bir Demo yoki Real account o‘zining mustaqil ON/OFF boshqaruviga ega.</div>
         <div class="grid4" style="margin-top:10px"><div class="metric"><small>Balance</small><b id="mt5Balance">—</b></div><div class="metric"><small>Equity</small><b id="mt5Equity">—</b></div><div class="metric"><small>Free Margin</small><b id="mt5FreeMargin">—</b></div><div class="metric"><small>Open Positions</small><b id="mt5Positions">0</b></div></div>
         <div class="mini" style="margin-top:8px">Account OFF/Offline bo‘lsa, aynan shu hisobga yangi MT5 order yuborilmaydi. Boshqa ulangan accountlar mustaqil ishlaydi.</div>
-        <div class="signal-box" style="margin-top:10px"><b>REAL / DEMO mustaqil boshqaruv</b><div class="mini">Har bir account kartasida o‘zining AutoTrade ON/OFF va Lot Size sozlamasi bor. Bir hisobni o‘zgartirish boshqasiga ta’sir qilmaydi.</div></div>
+        <div class="signal-box" style="margin-top:10px"><b>REAL / DEMO mustaqil boshqaruv</b><div class="mini">Har bir account kartasida AutoTrade ON/OFF, Auto Pending ON/OFF va Lot Size alohida. Bir hisobni o‘zgartirish boshqasiga ta’sir qilmaydi.</div></div>
       </div>
     </div>
   </div>
@@ -2054,4 +2073,32 @@ body:not(.sx-menu-open) .sidebar{pointer-events:auto!important;}
   window.addEventListener('resize',phoneFix,{passive:true});
 })();
 </script>
-</main></div></body></html>
+</main></div>
+<script id="signalx-mobile-final-controller-20260919">
+(function(){
+  function setMenu(open){
+    if(window.innerWidth>1100) return;
+    document.body.classList.toggle('sx-menu-open',!!open);
+    var side=document.getElementById('sxSidebar');
+    var btn=document.getElementById('sxMobileMenu');
+    if(side){side.style.transform=open?'translate3d(0,0,0)':'translate3d(-110%,0,0)';side.style.pointerEvents=open?'auto':'none';side.style.zIndex='60000';}
+    if(btn) btn.setAttribute('aria-expanded',open?'true':'false');
+  }
+  function bind(){
+    var btn=document.getElementById('sxMobileMenu');
+    if(btn && btn.dataset.finalMobileBound!=='1'){
+      btn.dataset.finalMobileBound='1';
+      btn.addEventListener('click',function(){setMenu(document.body.classList.contains('sx-menu-open'));},false);
+    }
+    document.querySelectorAll('.sidebar .nav button[data-section]').forEach(function(b){
+      if(b.dataset.finalMobileNav!=='1'){
+        b.dataset.finalMobileNav='1';
+        b.addEventListener('click',function(){setMenu(false);},false);
+      }
+    });
+  }
+  if(document.readyState==='loading') document.addEventListener('DOMContentLoaded',bind,{once:true}); else bind();
+  window.addEventListener('load',bind,{once:true});
+})();
+</script>
+</body></html>

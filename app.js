@@ -746,6 +746,7 @@ async function loadMT5GatewayAccounts(){
       const status=connected?'ONLINE':'OFFLINE';
       const statusClass=connected?'buy':'sell';
       const autoOn=!!a.auto_trade_enabled;
+      const pendingOn=a.pending_trade_enabled!==false;
       const canEnable=connected && !!a.trade_allowed;
       const autoLabel=autoOn?'AUTO TRADE: ON':'AUTO TRADE: OFF';
       const actionLabel=autoOn?'⏹ AUTO TRADE OFF':'▶ AUTO TRADE ON';
@@ -779,6 +780,10 @@ async function loadMT5GatewayAccounts(){
           <div><div class="mt5-autotrade-title">${autoLabel}</div><div class="mini">Faqat shu ${type} account uchun.</div></div>
           <button class="mt5-auto-toggle ${autoOn?'off':'on'}" type="button" data-mt5-gateway-auto="${a.id}" data-enabled="${autoOn?'0':'1'}" ${actionDisabled?'disabled':''} title="${safeText(disableReason)}">${actionLabel}</button>
         </div>
+        <div class="mt5-account-autotrade ${pendingOn?'on':'off'}">
+          <div><div class="mt5-autotrade-title">${pendingOn?'AUTO PENDING: ON':'AUTO PENDING: OFF'}</div><div class="mini">BUY/SELL STOP va LIMIT orderlari faqat shu ${type} account uchun.</div></div>
+          <button class="mt5-auto-toggle ${pendingOn?'off':'on'}" type="button" data-mt5-gateway-pending="${a.id}" data-enabled="${pendingOn?'0':'1'}" ${(!pendingOn&&!connected)?'disabled':''}>${pendingOn?'⏹ PENDING OFF':'▶ PENDING ON'}</button>
+        </div>
         ${disableReason && !autoOn ? `<div class="mt5-disabled-note">⚠ ${safeText(disableReason)}</div>`:''}
         <div class="mt5-account-actions"><button class="btn danger" type="button" data-mt5-gateway-disconnect="${a.id}">DISCONNECT</button></div>
       </article>`;
@@ -808,6 +813,7 @@ async function mt5GatewaySetLot(id,lot){
   showToast(`Lot saqlandi: ${raw.toFixed(2)}`);
 }
 async function mt5GatewayToggle(id,enabled){await api(`/api/v1/mt5/gateway/accounts/${id}/auto-trade`,{method:'POST',body:JSON.stringify({enabled})});await loadMT5GatewayAccounts();}
+async function mt5GatewayPendingToggle(id,enabled){await api(`/api/v1/mt5/gateway/accounts/${id}/pending-trade`,{method:'POST',body:JSON.stringify({enabled})});await loadMT5GatewayAccounts();}
 async function mt5GatewayDisconnect(id){if(!confirm('Ushbu MT5 hisobni SignalXdan uzasizmi?'))return;await api(`/api/v1/mt5/gateway/accounts/${id}`,{method:'DELETE'});await loadMT5GatewayAccounts();}
 async function loadMT5Status(){ if(!IS_ADMIN)return;
   const d=await api(`/api/v1/mt5/status?symbol=${encodeURIComponent(symbol)}`); const st=d.state||{};
@@ -836,6 +842,7 @@ function bindUIActions(){
   if(document.body.dataset.actionsBound==='1')return;document.body.dataset.actionsBound='1';
   document.addEventListener('click',e=>{
     const ga=e.target.closest?.('[data-mt5-gateway-auto]'); if(ga){e.preventDefault();e.stopPropagation();mt5GatewayToggle(Number(ga.dataset.mt5GatewayAuto),ga.dataset.enabled==='1').catch(err=>showToast(err?.message||'MT5 AutoTrade xatosi'));return;}
+    const gp=e.target.closest?.('[data-mt5-gateway-pending]'); if(gp){e.preventDefault();e.stopPropagation();mt5GatewayPendingToggle(Number(gp.dataset.mt5GatewayPending),gp.dataset.enabled==='1').catch(err=>showToast(err?.message||'MT5 Auto Pending xatosi'));return;}
     const gl=e.target.closest?.('[data-mt5-lot-save]'); if(gl){e.preventDefault();e.stopPropagation();const id=Number(gl.dataset.mt5LotSave);const sel=document.querySelector(`[data-mt5-lot="${id}"]`);mt5GatewaySetLot(id,sel?.value).catch(err=>showToast(err?.message||'Lot saqlash xatosi'));return;}
     const gd=e.target.closest?.('[data-mt5-gateway-disconnect]'); if(gd){e.preventDefault();e.stopPropagation();mt5GatewayDisconnect(Number(gd.dataset.mt5GatewayDisconnect)).catch(err=>showToast(err?.message||'MT5 uzish xatosi'));return;}
     const revoke=e.target.closest?.('.active-session-revoke');
