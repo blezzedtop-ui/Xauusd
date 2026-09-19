@@ -155,6 +155,7 @@ class MTState(BaseModel):
     terminal_build: str = ""
     ea_version: str = ""
     symbols: list[dict[str, Any]] = Field(default_factory=list)
+    markets: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 class PairRequest(BaseModel):
     label: str = Field(default="MT5 Account", max_length=120)
@@ -333,6 +334,26 @@ async def register(body: RegisterRequest, session=Depends(core.db)):
     )
     session.add(a)
     session.flush()
+    if body.markets:
+        now_iso = _utc().isoformat()
+        core.MT5_BRIDGE_STATE.setdefault("markets", {})
+        for raw_key, raw_market in body.markets.items():
+            if not isinstance(raw_market, dict):
+                continue
+            canonical = _canonical(str(raw_key))
+            if not canonical:
+                continue
+            core.MT5_BRIDGE_STATE["markets"][canonical] = {
+                "connected": True,
+                "account": body.login or None,
+                "server": body.server or None,
+                "last_seen": now_iso,
+                "symbol": canonical,
+                "session_open": raw_market.get("session_open"),
+                "session_source": raw_market.get("session_source") or "MT5_SYMBOL_TRADE_SESSION",
+                "server_time": raw_market.get("server_time") or "",
+            }
+        core.MT5_BRIDGE_STATE.update({"connected": True, "account": body.login or None, "server": body.server or None, "login": body.login or None, "last_seen": now_iso})
     for s in body.symbols:
         canonical = _canonical(str(s.get("canonical_symbol") or s.get("symbol") or ""))
         broker_symbol = str(s.get("broker_symbol") or s.get("symbol") or "")
@@ -388,6 +409,14 @@ async def state(body: MTState, authorization: str | None = Header(default=None),
 async def poll(authorization: str | None = Header(default=None), session=Depends(core.db)):
     token = authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else authorization
     a = _auth_account(token, session)
+    market_gate = core.market_gate_status("XAU/USD")
+    if not market_gate.get("open"):
+        pending = list(session.scalars(select(MTOrder).where(MTOrder.account_id == a.id, MTOrder.status == "PENDING")))
+        for row in pending:
+            row.status = "CANCELLED_MARKET_CLOSED"
+        if pending:
+            session.commit()
+        return {"orders": [], "reason": market_gate.get("reason"), "market_gate": market_gate}
     if not a.auto_trade_enabled or not a.trade_allowed:
         return {"orders": [], "reason": "autotrade_disabled_or_trading_not_allowed"}
     _sync_core_queue(session)

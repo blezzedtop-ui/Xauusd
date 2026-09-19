@@ -40,6 +40,15 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, rela
 
 load_dotenv()
 
+# Production admin credentials must come from the environment. Never ship defaults
+# or credentials in source control / distribution archives.
+ADMIN_LOGIN = os.getenv("ADMIN_LOGIN", "").strip()
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+if not ADMIN_LOGIN or not ADMIN_PASSWORD:
+    raise RuntimeError("ADMIN_LOGIN and ADMIN_PASSWORD are required environment variables.")
+if len(ADMIN_PASSWORD) < 12:
+    raise RuntimeError("ADMIN_PASSWORD must be at least 12 characters long.")
+
 APP_TITLE = os.getenv("APP_TITLE", "Trading SaaS Analytics Platform")
 MARKET_PROVIDER = os.getenv("MARKET_PROVIDER", "auto").lower()
 # Shared market-data router: a preferred provider is only the first attempt.
@@ -172,13 +181,23 @@ REQUIRE_EMAIL_DELIVERY = os.getenv("REQUIRE_EMAIL_DELIVERY", "false").lower() ==
 SMTP_USE_STARTTLS = os.getenv("SMTP_USE_STARTTLS", "true").lower() == "true"
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "false").lower() == "true"
 AI_CACHE_TTL = int(os.getenv("AI_CACHE_TTL", "86400"))
-# Live AI results can be cached for the candle; provider-failure fallbacks use a short
-# cache so a recovered provider can be used without waiting for a new candle.
-AI_FAILURE_CACHE_TTL = max(5, int(os.getenv("AI_FAILURE_CACHE_TTL", "20")))
-AI_PROVIDER_COOLDOWN_SECONDS = int(os.getenv("AI_PROVIDER_COOLDOWN_SECONDS", "120"))
+# Token-saving policy: one AI validation decision per closed-candle event.
+# A failed validation is cached for the same candle so a 15-second AutoTrade worker
+# cannot keep retrying providers and burning tokens on the same unchanged setup.
+AI_FAILURE_CACHE_TTL = max(30, int(os.getenv("AI_FAILURE_CACHE_TTL", "300")))
+AI_VALIDATION_ONCE_PER_CANDLE = os.getenv("AI_VALIDATION_ONCE_PER_CANDLE", "true").strip().lower() == "true"
+AI_PREVALIDATION_MIN_CONFIDENCE = max(0, min(int(os.getenv("AI_PREVALIDATION_MIN_CONFIDENCE", "70")), 100))
+AI_PREVALIDATION_MIN_RR = max(0.0, float(os.getenv("AI_PREVALIDATION_MIN_RR", "1.50")))
+AI_MAX_CONSENSUS_EVENTS_PER_CYCLE = max(1, int(os.getenv("AI_MAX_CONSENSUS_EVENTS_PER_CYCLE", "6")))
+# Transient provider cooldowns are deliberately short.  A previous failed request
+# must not effectively disable the whole free-first network for minutes.
+AI_PROVIDER_COOLDOWN_SECONDS = max(5, min(int(os.getenv("AI_PROVIDER_COOLDOWN_SECONDS", "15")), 60))
 AI_PROVIDER_COOLDOWN_UNTIL: dict[str, float] = {}
-
+# Billing/auth/model failures are not transient rate limits.  Do not hammer these
+# endpoints again and again; a fresh deploy or the admin reset endpoint can re-enable them.
+AI_PROVIDER_HARD_BLOCKED: dict[str, dict[str, Any]] = {}
 AI_PROVIDER_STATUS: dict[str, dict[str, Any]] = {}
+AI_RECOVERY_PROVIDERS = ["groq", "groq_2", "gemini", "mistral", "cloudflare", "huggingface", "openrouter", "cerebras"]
 # Runtime AI controls. OFF providers are never called by the router.
 AI_PROVIDER_ENABLED: dict[str, bool] = {
     "groq": True, "groq_2": True, "deepseek": True, "gemini": True,
@@ -188,6 +207,18 @@ AI_PROVIDER_ENABLED: dict[str, bool] = {
 }
 AI_AUTO_MODE = True
 AI_SIGNAL_CONFIRM_ONLY = os.getenv("AI_SIGNAL_CONFIRM_ONLY", "true").lower() == "true"
+
+# Market Gate: close automated signal/AI/AutoTrade activity during broker-closed
+# sessions and the configured daily technical-maintenance window.
+MARKET_GATE_ENABLED = os.getenv("MARKET_GATE_ENABLED", "true").strip().lower() == "true"
+MARKET_GATE_USE_MT5_SESSION = os.getenv("MARKET_GATE_USE_MT5_SESSION", "true").strip().lower() == "true"
+MARKET_GATE_MT5_STATE_MAX_AGE = max(5, int(os.getenv("MARKET_GATE_MT5_STATE_MAX_AGE", "20")))
+MARKET_GATE_TZ = os.getenv("MARKET_GATE_TZ", "Asia/Tashkent").strip() or "Asia/Tashkent"
+MARKET_GATE_DAILY_BREAK_ENABLED = os.getenv("MARKET_GATE_DAILY_BREAK_ENABLED", "true").strip().lower() == "true"
+MARKET_GATE_DAILY_BREAK_START = os.getenv("MARKET_GATE_DAILY_BREAK_START", "02:00").strip() or "02:00"
+MARKET_GATE_DAILY_BREAK_END = os.getenv("MARKET_GATE_DAILY_BREAK_END", "03:00").strip() or "03:00"
+MARKET_GATE_FALLBACK_WEEKEND_ENABLED = os.getenv("MARKET_GATE_FALLBACK_WEEKEND_ENABLED", "true").strip().lower() == "true"
+
 
 # AI Q&A is a user-facing conversational layer. It reuses the existing AI fallback
 # network and current market/calendar context, while keeping a small per-user
@@ -528,6 +559,95 @@ def _extract_json_object(raw: str) -> dict[str, Any]:
     return value
 
 
+
+def _parse_hhmm(value: str, default: tuple[int, int]) -> tuple[int, int]:
+    try:
+        hh, mm = str(value).strip().split(":", 1)
+        h, m = int(hh), int(mm)
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            return h, m
+    except Exception:
+        pass
+    return default
+
+
+def _time_in_window(local_dt: datetime, start: str, end: str) -> bool:
+    sh, sm = _parse_hhmm(start, (2, 0))
+    eh, em = _parse_hhmm(end, (3, 0))
+    current = local_dt.hour * 60 + local_dt.minute
+    start_m = sh * 60 + sm
+    end_m = eh * 60 + em
+    if start_m == end_m:
+        return False
+    if start_m < end_m:
+        return start_m <= current < end_m
+    return current >= start_m or current < end_m
+
+
+def market_gate_status(symbol: str = "XAU/USD") -> dict[str, Any]:
+    """Return the single market gate used by AI validation, new signals and AutoTrade."""
+    now_utc = datetime.now(timezone.utc)
+    try:
+        local = now_utc.astimezone(ZoneInfo(MARKET_GATE_TZ))
+    except Exception:
+        local = now_utc
+    result = {
+        "enabled": MARKET_GATE_ENABLED,
+        "open": True,
+        "status": "OPEN",
+        "reason": "MARKET_OPEN",
+        "symbol": str(symbol or "XAU/USD"),
+        "checked_at_utc": now_utc.isoformat(),
+        "local_time": local.strftime("%Y-%m-%d %H:%M:%S"),
+        "timezone": MARKET_GATE_TZ,
+        "source": "fallback_clock",
+        "ai_enabled": True,
+        "new_signals_enabled": True,
+        "autotrade_enabled": True,
+    }
+    if not MARKET_GATE_ENABLED:
+        result["reason"] = "MARKET_GATE_DISABLED"
+        return result
+    if MARKET_GATE_DAILY_BREAK_ENABLED and _time_in_window(local, MARKET_GATE_DAILY_BREAK_START, MARKET_GATE_DAILY_BREAK_END):
+        return {**result,
+            "open": False, "status": "MAINTENANCE", "reason": "DAILY_TECHNICAL_BREAK",
+            "source": "configured_maintenance_window",
+            "maintenance_window": f"{MARKET_GATE_DAILY_BREAK_START}–{MARKET_GATE_DAILY_BREAK_END} {MARKET_GATE_TZ}",
+            "ai_enabled": False, "new_signals_enabled": False, "autotrade_enabled": False}
+    try:
+        mt5_state = _mt5_market_state(symbol)
+    except Exception:
+        mt5_state = {}
+    if MARKET_GATE_USE_MT5_SESSION and isinstance(mt5_state, dict):
+        last_seen = mt5_state.get("last_seen")
+        try:
+            age = (now_utc - datetime.fromisoformat(str(last_seen).replace("Z", "+00:00"))).total_seconds() if last_seen else None
+        except Exception:
+            age = None
+        has_flag = "session_open" in mt5_state and mt5_state.get("session_open") is not None
+        if bool(mt5_state.get("connected")) and has_flag and age is not None and age <= MARKET_GATE_MT5_STATE_MAX_AGE:
+            session_open = bool(mt5_state.get("session_open"))
+            return {**result,
+                "open": session_open,
+                "status": "OPEN" if session_open else "CLOSED",
+                "reason": "MT5_SYMBOL_SESSION_OPEN" if session_open else "MT5_SYMBOL_SESSION_CLOSED",
+                "source": str(mt5_state.get("session_source") or "MT5_SYMBOL_TRADE_SESSION"),
+                "session_open": session_open,
+                "mt5_server_time": mt5_state.get("server_time"),
+                "mt5_state_age_seconds": round(max(0.0, float(age)), 1),
+                "ai_enabled": session_open, "new_signals_enabled": session_open, "autotrade_enabled": session_open}
+    if MARKET_GATE_FALLBACK_WEEKEND_ENABLED and local.weekday() >= 5:
+        return {**result,
+            "open": False, "status": "CLOSED", "reason": "WEEKEND_FALLBACK",
+            "source": "fallback_weekend_clock",
+            "ai_enabled": False, "new_signals_enabled": False, "autotrade_enabled": False}
+    return result
+
+
+def market_gate_block_reason(symbol: str = "XAU/USD") -> str | None:
+    gate = market_gate_status(symbol)
+    return None if gate.get("open") else str(gate.get("reason") or "MARKET_CLOSED")
+
 def _dedupe_provider_order(values: list[str]) -> list[str]:
     out: list[str] = []
     for value in values:
@@ -545,6 +665,10 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
     configured provider on rate-limit, auth, model, network, timeout, or invalid-JSON
     failures. The final caller may then use its own deterministic fallback.
     """
+    gate = market_gate_status("XAU/USD")
+    if not gate.get("open"):
+        raise RuntimeError(f"MARKET_GATE:{gate.get('reason', 'MARKET_CLOSED')}")
+
     configured = {
         "groq": bool(GROQ_API_KEY),
         "groq_2": bool(GROQ_API_KEY_2),
@@ -574,6 +698,14 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
     errors: list[str] = []
     now_mono = asyncio.get_running_loop().time()
 
+    def is_hard_blocked(provider: str) -> bool:
+        block = AI_PROVIDER_HARD_BLOCKED.get(provider) or {}
+        return bool(block)
+
+    def cooldown_remaining(provider: str, now: float | None = None) -> int:
+        now = now if now is not None else asyncio.get_running_loop().time()
+        return max(0, int(AI_PROVIDER_COOLDOWN_UNTIL.get(provider, 0.0) - now))
+
     def route_score(provider: str) -> float:
         prof = AI_PROVIDER_PROFILE.get(provider, {"quality": 70, "speed": 70, "capacity": 60, "cost": 60})
         base = (prof["quality"] * 0.40 + prof["speed"] * 0.20 + prof["capacity"] * 0.25 + prof["cost"] * 0.15)
@@ -590,17 +722,30 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
         return round(base, 2)
 
     order = sorted(candidates, key=route_score, reverse=True) if AI_ROUTER_MODE == "score" else candidates
+    attempted: set[str] = set()
 
     for provider in order:
-        cooldown_until = AI_PROVIDER_COOLDOWN_UNTIL.get(provider, 0.0)
-        if cooldown_until > now_mono:
-            remaining = max(1, int(cooldown_until - now_mono))
+        attempted.add(provider)
+        if is_hard_blocked(provider):
+            block = AI_PROVIDER_HARD_BLOCKED.get(provider) or {}
+            reason = str(block.get("reason") or "provider temporarily blocked")
+            AI_PROVIDER_STATUS[provider] = {
+                "status": block.get("status", "BLOCKED"),
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "error": reason,
+                "http_status": block.get("http_status"),
+            }
+            errors.append(f"{provider}: {reason[:180]}")
+            continue
+        remaining = cooldown_remaining(provider, now_mono)
+        if remaining > 0:
             AI_PROVIDER_STATUS[provider] = {
                 "status": "LIMITED",
                 "checked_at": datetime.now(timezone.utc).isoformat(),
                 "error": f"provider cooldown ({remaining}s remaining)",
+                "cooldown_seconds_remaining": remaining,
             }
-            errors.append(f"{provider}: cooldown")
+            errors.append(f"{provider}: cooldown ({remaining}s)")
             continue
 
         try:
@@ -619,18 +764,99 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
         except Exception as exc:
             msg, http_status = _provider_error_details(exc)
             low = msg.lower()
-            invalid_json = "non-json" in low or "json" in low and "provider returned" in low
+            invalid_json = "non-json" in low or ("json" in low and "provider returned" in low)
+            billing_block = (
+                http_status == 402
+                or "payment required" in low
+                or "insufficient balance" in low
+                or "credit balance is too low" in low
+                or "depleted your monthly included credits" in low
+                or "purchase pre-paid credits" in low
+            )
+            auth_block = (
+                http_status in (401, 403)
+                or "invalid api key" in low
+                or "authentication" in low
+                or "unauthorized" in low
+            )
+            model_block = (
+                http_status == 404
+                or "model / endpoint" in low
+                or "model not found" in low
+            )
             limited = http_status == 429 or "rate limit" in low or "rate_limit" in low or "quota" in low or "too many requests" in low
-            if limited or invalid_json:
+            transient = limited or http_status in (408, 425, 500, 502, 503, 504) or "timeout" in low or "network" in low or "connection" in low
+            if billing_block:
+                AI_PROVIDER_HARD_BLOCKED[provider] = {"status": "BILLING", "reason": msg[:360], "http_status": http_status}
+                AI_PROVIDER_COOLDOWN_UNTIL.pop(provider, None)
+                status_value = "BILLING"
+            elif auth_block or model_block:
+                AI_PROVIDER_HARD_BLOCKED[provider] = {"status": "BLOCKED", "reason": msg[:360], "http_status": http_status}
+                AI_PROVIDER_COOLDOWN_UNTIL.pop(provider, None)
+                status_value = "BLOCKED"
+            elif transient or invalid_json:
+                # Invalid JSON is recoverable, but only with a very short cooldown.
                 AI_PROVIDER_COOLDOWN_UNTIL[provider] = now_mono + AI_PROVIDER_COOLDOWN_SECONDS
+                status_value = "LIMITED"
+            else:
+                # Unknown 4xx/5xx-style provider failures get a short retry window
+                # instead of poisoning the provider for the entire session.
+                AI_PROVIDER_COOLDOWN_UNTIL[provider] = now_mono + AI_PROVIDER_COOLDOWN_SECONDS
+                status_value = "LIMITED"
             AI_PROVIDER_STATUS[provider] = {
-                "status": "LIMITED" if limited else "OFFLINE",
+                "status": status_value,
                 "checked_at": datetime.now(timezone.utc).isoformat(),
                 "error": msg[:360],
                 "http_status": http_status,
+                "cooldown_seconds_remaining": cooldown_remaining(provider, now_mono),
             }
             errors.append(f"{provider}: {msg[:180]}")
             continue
+
+    # Recovery path: if every configured provider was skipped only because of a short
+    # cooldown, make one real request against the healthiest free-first recovery target
+    # instead of immediately returning AI unavailable.  This tests Groq/Gemini with the
+    # ACTUAL validation prompt and clears their cooldown on success.
+    recovery_candidates = [
+        p for p in AI_RECOVERY_PROVIDERS
+        if p in candidates and p not in attempted and not is_hard_blocked(p)
+    ]
+    if not recovery_candidates:
+        # Most calls will have already attempted every provider.  Pick the first configured
+        # free-first provider that is only cooldown-blocked and bypass that cooldown once.
+        recovery_candidates = [
+            p for p in AI_RECOVERY_PROVIDERS
+            if p in candidates and not is_hard_blocked(p) and cooldown_remaining(p, now_mono) > 0
+        ]
+    for provider in recovery_candidates[:1]:
+        try:
+            text, used = await _provider_call(provider, prompt)
+            _extract_json_object(text)
+            AI_PROVIDER_COOLDOWN_UNTIL.pop(used, None)
+            AI_PROVIDER_STATUS[used] = {
+                "status": "ONLINE",
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "last_success_at": datetime.now(timezone.utc).isoformat(),
+                "error": "Recovered by real-request probe; cooldown cleared.",
+            }
+            return text, used
+        except Exception as exc:
+            msg, http_status = _provider_error_details(exc)
+            low = msg.lower()
+            billing_block = http_status == 402 or "payment required" in low or "insufficient balance" in low or "credit balance is too low" in low or "depleted your monthly included credits" in low
+            if billing_block:
+                AI_PROVIDER_HARD_BLOCKED[provider] = {"status": "BILLING", "reason": msg[:360], "http_status": http_status}
+                AI_PROVIDER_COOLDOWN_UNTIL.pop(provider, None)
+            else:
+                AI_PROVIDER_COOLDOWN_UNTIL[provider] = asyncio.get_running_loop().time() + AI_PROVIDER_COOLDOWN_SECONDS
+            AI_PROVIDER_STATUS[provider] = {
+                "status": "BILLING" if billing_block else "LIMITED",
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "error": msg[:360],
+                "http_status": http_status,
+                "cooldown_seconds_remaining": cooldown_remaining(provider),
+            }
+            errors.append(f"{provider}: recovery test failed: {msg[:160]}")
 
     raise RuntimeError("All configured AI providers failed: " + " | ".join(errors))
 
@@ -738,15 +964,11 @@ MARKET_SNAPSHOT_LOCKS_GUARD = asyncio.Lock()
 MARKET_SNAPSHOT_TTL = max(0.5, float(os.getenv("MARKET_SNAPSHOT_TTL", "2.0")))
 NODE_QUOTE_TIMEOUT = float(os.getenv("NODE_QUOTE_TIMEOUT", "2.5"))
 MARKET_TIMEZONE = os.getenv("MARKET_TIMEZONE", "UTC").strip() or "UTC"
-# SECRET_KEY is automatically generated when Railway does not provide one.
-# A manually configured Railway SECRET_KEY always takes precedence.
-# The generated key is unique for each running instance/process and is never sent to the frontend.
-_configured_secret_key = os.getenv("SECRET_KEY", "").strip()
-if _configured_secret_key:
-    SECRET_KEY = _configured_secret_key
-else:
-    SECRET_KEY = secrets.token_urlsafe(64)
-    print("[SignalX security] SECRET_KEY not set; generated a unique runtime key automatically.")
+# Authentication secrets are mandatory. Do not generate them per-process:
+# session tokens must remain verifiable across Railway restarts and multiple workers.
+SECRET_KEY = os.getenv("SECRET_KEY", "").strip()
+if not SECRET_KEY:
+    raise RuntimeError("SECRET_KEY is required. Set a stable random value in Railway Environment Variables before starting SignalX.")
 SESSION_HOURS = int(os.getenv("SESSION_HOURS", "168"))
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./trading_saas.db").strip()
 
@@ -951,8 +1173,8 @@ def ensure_schema() -> None:
 
 def ensure_admin_user() -> None:
     """Create/update the site owner's admin account from environment defaults."""
-    admin_login = os.getenv("ADMIN_LOGIN", "Shohruh").strip() or "Shohruh"
-    admin_password = os.getenv("ADMIN_PASSWORD", "Shox1337")
+    admin_login = ADMIN_LOGIN
+    admin_password = ADMIN_PASSWORD
     with SessionLocal() as s:
         current = s.scalar(select(User).where(User.username == admin_login))
         if current is None:
@@ -2531,7 +2753,8 @@ def session_state(name: str, zone: str, now_utc: datetime) -> dict[str, Any]:
 
 async def market_sessions() -> dict[str, Any]:
     now = datetime.now(timezone.utc)
-    return {"now_utc": now.isoformat(), "sessions": [session_state("Sydney", "Australia/Sydney", now), session_state("Tokyo", "Asia/Tokyo", now), session_state("London", "Europe/London", now), session_state("New York", "America/New_York", now)]}
+    gate = market_gate_status("XAU/USD")
+    return {"now_utc": now.isoformat(), "utc_time": now.strftime("%Y-%m-%d %H:%M:%S UTC"), "market_gate": gate, "sessions": [session_state("Sydney", "Australia/Sydney", now), session_state("Tokyo", "Asia/Tokyo", now), session_state("London", "Europe/London", now), session_state("New York", "America/New_York", now)]}
 
 
 async def _calendar_forexfactory(days: int = 7) -> dict[str, Any]:
@@ -3200,6 +3423,9 @@ async def ai_smart_analysis(analysis_context: dict[str, Any]) -> dict[str, Any]:
     """
     symbol = str(analysis_context.get("symbol", "XAU/USD"))
     timeframe = str(analysis_context.get("timeframe", "5min"))
+    market_gate = market_gate_status(symbol)
+    if not market_gate.get("open"):
+        return {"mode":"market_closed","summary":"AI System SLEEP: market is closed.","bias":analysis_context.get("bias","NEUTRAL"),"confidence":0,"advice":"No AI request sent while the market gate is closed.","market_gate":market_gate}
     candle_time = analysis_context.get("candle_time") or analysis_context.get("last_candle_time")
     cache_key = f"{symbol}|{timeframe}|{candle_time}"
     now = datetime.now(timezone.utc).timestamp()
@@ -3286,6 +3512,12 @@ async def ai_validate_module_signal(source: str, symbol: str, interval: str, can
     It never fetches market data itself: only the supplied TradingView-derived
     OHLC/quantitative context is evaluated. One request is cached per closed candle.
     """
+    gate = market_gate_status(symbol)
+    if not gate.get("open"):
+        return {"mode":"market_closed","signal":"WAIT","confidence":0,"agreement":0,"validation":False,
+                "risk_flags":[str(gate.get("reason") or "MARKET_CLOSED")],
+                "reasoning":f"Market Gate: AI validation disabled ({gate.get("reason")}).","market_gate":gate}
+
     key=f"module|{source}|{clean_symbol(symbol)}|{validate_interval(interval)}"
     async with AI_SIGNAL_LOCKS_GUARD:
         lock=AI_SIGNAL_LOCKS.setdefault(key, asyncio.Lock())
@@ -3293,9 +3525,11 @@ async def ai_validate_module_signal(source: str, symbol: str, interval: str, can
         now=datetime.now(timezone.utc).timestamp()
         cached=AI_SIGNAL_CACHE.get(key)
         if cached and cached[1] == str(candle_time):
-            cached_ttl = AI_FAILURE_CACHE_TTL if cached[2].get("_failure_cache") else AI_CACHE_TTL
-            if now-cached[0] < cached_ttl:
-                cached_result = dict(cached[2])
+            # Once-per-closed-candle policy: return the existing result even after a
+            # provider failure. This prevents the 24/7 worker from retrying the same
+            # unchanged candidate every few seconds.
+            cached_result = dict(cached[2])
+            if AI_VALIDATION_ONCE_PER_CANDLE or (now-cached[0] < (AI_FAILURE_CACHE_TTL if cached_result.get("_failure_cache") else AI_CACHE_TTL)):
                 cached_result.pop("_failure_cache", None)
                 return cached_result
         base_signal=str(deterministic.get("signal", "WAIT")).upper()
@@ -3425,12 +3659,18 @@ def _smart_module_gate(item: dict[str, Any], ai: dict[str, Any], candles: list[d
     # Real AI providers are a hard validation layer; deterministic fallback is not
     # falsely presented as live AI. In fallback mode, deterministic quality remains the gate.
     live_ai = mode not in {"fallback","rule_based"}
-    if live_ai:
+    if mode == "live" or (mode not in {"fallback","rule_based","unavailable","deferred","skipped"}):
+        live_ai = True
         ai_ok = ai_signal == direction and ai_conf >= 65 and ai_agree >= 55
         add("AI Direction", ai_signal==direction, f"AI={ai_signal}")
         add("AI Confidence", ai_conf>=65, f"AI confidence={ai_conf}%")
         add("AI Agreement", ai_agree>=55, f"AI agreement={ai_agree}%")
+    elif mode in {"skipped","unavailable","deferred"}:
+        live_ai = False
+        ai_ok = False
+        add("AI Availability", False, f"AI mode={mode}; AutoTrade blocked")
     else:
+        live_ai = False
         ai_ok = True
         add("AI Availability", True, f"AI mode={mode}; deterministic fallback retained")
 
@@ -4231,6 +4471,9 @@ async def get_pivots(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> di
 
 
 async def build_msai_strategy(symbol: str, selected: str) -> dict[str, Any]:
+    market_gate = market_gate_status(symbol)
+    if not market_gate.get("open"):
+        return {"symbol":clean_symbol(symbol),"selected":selected,"signal":"WAIT","state":"MARKET_CLOSED","mode":"market_closed","ai_validation":{"mode":"market_closed","validation":False,"reason":market_gate.get("reason")},"market_gate":market_gate,"timeframes":{},"errors":{}}
     """SIGNALX MSAI Strategy v1.0: Malaysian SNR + Price Action + MTF + AI validation.
 
     The deterministic layer follows the uploaded Malaysian SNR manual's vocabulary:
@@ -4449,7 +4692,7 @@ async def get_msai_strategy(symbol: str, interval: str = Query("5min")) -> dict[
 
 
 
-async def build_algo_smc_strategy(symbol: str, selected: str, prefetched: dict[str, tuple[list[dict[str, Any]], str, Any]] | None = None) -> dict[str, Any]:
+async def build_algo_smc_strategy(symbol: str, selected: str, prefetched: dict[str, tuple[list[dict[str, Any]], str, Any]] | None = None, validate_ai: bool = True) -> dict[str, Any]:
     """Algo/SMC strategy based on the uploaded 232-page Algo/SMC book.
 
     Deterministic layer follows the source concepts: liquidity hierarchy, daily/weekly/HTF
@@ -4521,26 +4764,31 @@ async def build_algo_smc_strategy(symbol: str, selected: str, prefetched: dict[s
         "validation": False, "risk_flags": [],
         "reasoning": "Deterministic setup is not ready for AI validation."
     }
-    if deterministic_ready:
+    if deterministic_ready and validate_ai:
         try:
             ai = await ai_validate_module_signal("Algo/SMC", key, selected, candle_time, base)
         except Exception as exc:
             ai = {"mode": "unavailable", "signal": "WAIT", "confidence": 0, "agreement": 0, "validation": False, "risk_flags": ["AI validation exception"], "reasoning": str(exc)[:300]}
+    elif deterministic_ready and not validate_ai:
+        ai = {"mode": "deferred", "signal": base.get("raw_direction") or base.get("signal") or "WAIT", "confidence": 0, "agreement": 0, "validation": False, "risk_flags": [], "reasoning": "AI validation deferred to the centralized per-candle AutoTrade gate."}
 
-    ai_passed = bool(ai.get("validation") and ai.get("signal") == base.get("raw_direction") and int(ai.get("confidence", 0)) >= 85 and int(ai.get("agreement", 0)) >= 70)
+    ai_passed = bool(validate_ai and ai.get("validation") and ai.get("signal") == base.get("raw_direction") and int(ai.get("confidence", 0)) >= 85 and int(ai.get("agreement", 0)) >= 70)
     if deterministic_ready and ai_passed:
         base["signal"] = base.get("raw_direction")
         base["state"] = "AI_CONFIRMED"
         base["setup"] = "ALGO_SMC_AI_CONFIRMED"
     else:
-        if deterministic_ready:
+        if deterministic_ready and validate_ai:
             base["state"] = "WAIT_AI_VALIDATION"
-        base["signal"] = "WAIT"
-        base["entry"] = None
-        base["stop_loss"] = None
-        base["take_profit"] = []
-        if "AI validation" not in str(base.get("reason", "")):
-            base["reason"] = (base.get("reason", "") + " · AI validation required").strip(" ·")
+            base["signal"] = "WAIT"
+            base["entry"] = None
+            base["stop_loss"] = None
+            base["take_profit"] = []
+            if "AI validation" not in str(base.get("reason", "")):
+                base["reason"] = (base.get("reason", "") + " · AI validation required").strip(" ·")
+        elif deterministic_ready and not validate_ai:
+            base["state"] = "READY_FOR_AI"
+            base["signal"] = base.get("raw_direction") or base.get("signal") or "WAIT"
 
     base["ai"] = ai
     base["ai_gate"] = {"required": True, "passed": ai_passed, "minimum_confidence": 85, "minimum_agreement": 70, "strict": True}
@@ -4568,6 +4816,9 @@ async def get_algo_smc(symbol: str, interval: str = Query("5min")) -> dict[str, 
 
 
 async def build_smc_strategy(symbol: str, selected: str) -> dict[str, Any]:
+    market_gate = market_gate_status(symbol)
+    if not market_gate.get("open"):
+        return {"symbol":clean_symbol(symbol),"selected":selected,"signal":"WAIT","state":"MARKET_CLOSED","mode":"market_closed","ai_validation":{"mode":"market_closed","validation":False,"reason":market_gate.get("reason")},"market_gate":market_gate,"timeframes":{},"errors":{}}
     """SIGNALX SMC strategy derived from the uploaded 33-page SMC manual.
 
     Deterministic layer: structure (BOS/CHoCH), liquidity (EQH/EQL/sweeps),
@@ -5228,7 +5479,7 @@ async def get_ict_signals(symbol: str) -> dict[str, Any]:
 
 
 
-async def build_fibonacci_strategy(symbol: str, selected: str = "5min") -> dict[str, Any]:
+async def build_fibonacci_strategy(symbol: str, selected: str = "5min", validate_ai: bool = True) -> dict[str, Any]:
     """Eight-book Fibonacci/Fibo Musang strategy + strict AI validation."""
     key = clean_symbol(symbol)
     selected = validate_interval(selected)
@@ -5251,8 +5502,11 @@ async def build_fibonacci_strategy(symbol: str, selected: str = "5min") -> dict[
 
     deterministic = analyze_fibonacci(selected_data, higher)
     candle_time = selected_data[-2].get("time") if len(selected_data) > 1 else selected_data[-1].get("time")
-    ai = await ai_validate_module_signal("Fibonacci", key, selected, candle_time, deterministic)
-    live_ai = str(ai.get("mode") or "") not in {"fallback", "rule_based", "unavailable"}
+    if validate_ai:
+        ai = await ai_validate_module_signal("Fibonacci", key, selected, candle_time, deterministic)
+    else:
+        ai = {"mode":"deferred","signal":deterministic.get("signal","WAIT"),"confidence":0,"agreement":0,"validation":False,"risk_flags":[],"reasoning":"AI validation deferred to centralized per-candle AutoTrade gate."}
+    live_ai = validate_ai and str(ai.get("mode") or "") not in {"fallback", "rule_based", "unavailable", "deferred"}
     ai_passed = bool(live_ai and ai.get("validation") and
                      str(ai.get("signal")).upper() == str(deterministic.get("signal")).upper() and
                      int(ai.get("confidence", 0)) >= 85 and int(ai.get("agreement", 0)) >= 70)
@@ -5298,7 +5552,7 @@ async def build_fibonacci_strategy(symbol: str, selected: str = "5min") -> dict[
     return {"ok": True, "symbol": key, "selected": selected, "strategy": final, "generated_at": final["generated_at"]}
 
 
-async def build_trend_channel_strategy(symbol: str, selected: str = "5min") -> dict[str, Any]:
+async def build_trend_channel_strategy(symbol: str, selected: str = "5min", validate_ai: bool = True) -> dict[str, Any]:
     """Six-book Trend Channel Engine + strict AI validator."""
     key = clean_symbol(symbol)
     selected = validate_interval(selected)
@@ -5324,17 +5578,22 @@ async def build_trend_channel_strategy(symbol: str, selected: str = "5min") -> d
         "reason": fibonacci_context.get("reason", ""),
     }
     candle_time = selected_data[-2].get("time") if len(selected_data) > 1 else (selected_data[-1].get("time") if selected_data else None)
-    ai = await ai_validate_module_signal("Trend Channel Engine", key, selected, candle_time, deterministic)
-    live_ai = str(ai.get("mode") or "") not in {"fallback", "rule_based", "unavailable"}
+    if validate_ai:
+        ai = await ai_validate_module_signal("Trend Channel Engine", key, selected, candle_time, deterministic)
+    else:
+        ai = {"mode":"deferred","signal":deterministic.get("signal","WAIT"),"confidence":0,"agreement":0,"validation":False,"risk_flags":[],"reasoning":"AI validation deferred to centralized per-candle AutoTrade gate."}
+    live_ai = validate_ai and str(ai.get("mode") or "") not in {"fallback", "rule_based", "unavailable", "deferred"}
     ai_passed = bool(live_ai and ai.get("validation") and str(ai.get("signal")).upper() == str(deterministic.get("signal")).upper()
                      and int(ai.get("confidence",0)) >= 85 and int(ai.get("agreement",0)) >= 70)
     deterministic["ai_validation"] = ai
     deterministic["ai_gate"] = {"required": True, "passed": ai_passed, "minimum_confidence": 85, "minimum_agreement": 70, "live_ai_required": True}
-    if deterministic.get("signal") in {"BUY","SELL"} and not ai_passed:
+    if deterministic.get("signal") in {"BUY","SELL"} and validate_ai and not ai_passed:
         deterministic["signal"] = "WAIT"
         deterministic["entry"] = None; deterministic["stop_loss"] = None; deterministic["take_profit"] = []
         deterministic["state"] = "WAIT_AI_VALIDATION"
         deterministic["reason"] = (str(deterministic.get("reason") or "") + "; AI validation required").strip("; ")
+    elif deterministic.get("signal") in {"BUY","SELL"} and not validate_ai:
+        deterministic["state"] = "READY_FOR_AI"
     deterministic["strategy_engine"] = "SIGNALX — TREND CHANNEL ENGINE"
     deterministic["strategy_version"] = "V1.0"
     deterministic["strategy_source"] = "Six supplied trend/channel/PSAR books + strict AI validation"
@@ -5346,7 +5605,8 @@ async def build_trend_channel_strategy(symbol: str, selected: str = "5min") -> d
 
 
 async def build_book_fusion_strategy(symbol: str, selected: str = "5min",
-                                    prefetched: dict[str, tuple[list[dict[str, Any]], str, Any]] | None = None) -> dict[str, Any]:
+                                    prefetched: dict[str, tuple[list[dict[str, Any]], str, Any]] | None = None,
+                                    validate_ai: bool = True) -> dict[str, Any]:
     """Independent all-book fusion: deterministic multi-engine consensus + one AI validator.
 
     When the live signal pipeline already has canonical candles, they can be supplied via
@@ -5466,13 +5726,18 @@ async def build_book_fusion_strategy(symbol: str, selected: str = "5min",
                    ],
                    "strategy_engine":"SIGNALX — YANGI STRATEGIYA","strategy_version":"V1.0"}
     candle_time=selected_data[-2].get("time") if len(selected_data)>1 else selected_data[-1].get("time")
-    ai=await ai_validate_module_signal("Yangi Strategiya",key,selected,candle_time,deterministic)
-    live_ai=str(ai.get("mode") or "") not in {"fallback","rule_based","unavailable"}
-    ai_passed=bool(live_ai and ai.get("validation") and str(ai.get("signal")).upper()==str(deterministic.get("signal")).upper() and int(ai.get("confidence",0))>=85 and int(ai.get("agreement",0))>=70)
-    final=deterministic.copy(); final["ai_validation"]=ai; final["ai_gate"]={"required":True,"passed":ai_passed,"minimum_confidence":85,"minimum_agreement":70,"live_ai_required":True}
-    if final.get("signal") in {"BUY","SELL"} and not ai_passed:
+    if validate_ai:
+        ai=await ai_validate_module_signal("Yangi Strategiya",key,selected,candle_time,deterministic)
+    else:
+        ai={"mode":"deferred","signal":deterministic.get("signal","WAIT"),"confidence":0,"agreement":0,"validation":False,"risk_flags":[],"reasoning":"AI validation deferred to centralized per-candle AutoTrade gate."}
+    live_ai=validate_ai and str(ai.get("mode") or "") not in {"fallback","rule_based","unavailable","deferred"}
+    ai_passed=bool(validate_ai and live_ai and ai.get("validation") and str(ai.get("signal")).upper()==str(deterministic.get("signal")).upper() and int(ai.get("confidence",0))>=85 and int(ai.get("agreement",0))>=70)
+    final=deterministic.copy(); final["ai_validation"]=ai; final["ai_gate"]={"required":True,"passed":ai_passed,"minimum_confidence":85,"minimum_agreement":70,"live_ai_required":True,"deferred":not validate_ai}
+    if final.get("signal") in {"BUY","SELL"} and validate_ai and not ai_passed:
         final["signal"]="WAIT"; final["entry"]=None; final["stop_loss"]=None; final["take_profit"]=[]; final["state"]="WAIT_AI_VALIDATION"; final["reason"] += "; AI validation required"
-    else: final["state"]="AI_CONFIRMED" if final.get("signal") in {"BUY","SELL"} else "WAIT"
+    elif final.get("signal") in {"BUY","SELL"} and not validate_ai:
+        final["state"]="READY_FOR_AI"
+    else: final["state"]="AI_CONFIRMED" if final.get("signal") in {"BUY","SELL"} and validate_ai else "WAIT"
     final["current_price"]=round(price,5); final["candle_time"]=candle_time; final["errors"]=errors; final["generated_at"]=datetime.now(timezone.utc).isoformat()
     return {"ok":True,"symbol":key,"selected":selected,"strategy":final,"generated_at":final["generated_at"]}
 
@@ -6081,7 +6346,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
                            risk_reward: float | None = None) -> dict[str, Any] | None:
     """Put one eligible signal into the in-memory MT5 queue exactly once.
 
-    The queue key is symbol/source/timeframe/live-candle/direction. Retired modules are
+    The queue key is symbol/source/timeframe/closed-candle/direction. Retired modules are
     explicitly excluded. All values are copied from the freshly validated signal.
     """
     if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
@@ -6169,6 +6434,10 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     if requested != "XAU/USD":
         raise HTTPException(status_code=404, detail="Only XAU/USD is supported")
     symbols = ["XAU/USD"]
+    market_gate = market_gate_status(requested)
+    if not market_gate.get("open"):
+        return {"enabled": True, "count": 0, "queued": 0, "symbols": symbols, "mode": "market_closed",
+                "market_gate": market_gate, "forward_mode": "MARKET CLOSED → no new signals, no AI validation, no AutoTrade"}
     if not AUTO_ENTRY_ENABLED:
         return {"enabled": False, "count": 0, "queued": 0, "symbols": symbols,
                 "excluded_sources": ["Signals", "Signal Engine", "Signal Lab", "AlgoTrade", "Book + OpenAI", "M1 / 1min / 1m"],
@@ -6218,7 +6487,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             try:
                 if tf not in live_by_tf or len(live_by_tf[tf][0]) < 60:
                     continue
-                algo_result = await build_algo_smc_strategy(key, tf, prefetched=live_by_tf)
+                algo_result = await build_algo_smc_strategy(key, tf, prefetched=live_by_tf, validate_ai=False)
                 algo_item = dict(algo_result.get("strategy") or {})
                 if algo_item.get("signal") in {"BUY", "SELL"} and algo_item.get("ai_gate", {}).get("passed"):
                     candidates.append({"source":"Algo/SMC","interval":tf,"item":algo_item,"response":algo_result})
@@ -6282,7 +6551,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         for tf in intervals:
             try:
                 raw_prefetched={k:v for k,v in live_by_tf.items() if v and v[0]}
-                fusion_result=await build_book_fusion_strategy(key,tf,prefetched=raw_prefetched)
+                fusion_result=await build_book_fusion_strategy(key,tf,prefetched=raw_prefetched,validate_ai=False)
                 fusion_item=dict(fusion_result.get("strategy") or {})
                 if fusion_item.get("signal") in {"BUY","SELL"}:
                     candidates.append({"source":"Yangi Strategiya","interval":tf,"item":fusion_item,"response":fusion_result})
@@ -6371,6 +6640,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             "Trend Channel Engine": 1.20,
             "Fibonacci": 1.30,
             "Yangi Strategiya": 1.70,
+            "Patterns": 1.10,
         }
         families: dict[str, dict[str, Any]] = {}
         aliases = {}
@@ -6441,10 +6711,66 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         candidates, live_by_tf = await load_symbol_candidates(key)
         print(f"[SIGNAL FLOW] candidates={len(candidates)} market={key}")
 
-        # Persist AND queue every confirmed module signal independently.
-        # M1 remains excluded; Removed modules are excluded by the common queue guard.
-        # Each module gets its own History row and its own AutoTrade queue key.
-        # This intentionally does NOT collapse module signals into a single consensus order.
+        # Persist and queue module signals independently, but use ONE AI validation
+        # decision per closed-candle/timeframe event. Deterministic engines run 24/7;
+        # AI is only invoked when a real candidate consensus exists. Weak/isolated
+        # candidates are recorded to History without spending AI tokens.
+        closed_candle_by_tf = {}
+        candidate_groups = {}
+        for c in candidates:
+            tf = str(c.get("interval") or "").strip().lower()
+            item = c.get("item") or {}
+            direction = str(item.get("signal") or item.get("direction") or "WAIT").upper()
+            if tf not in {"5min", "15min", "30min", "1h", "4h", "1day"} or direction not in {"BUY", "SELL"}:
+                continue
+            candles = live_by_tf.get(tf, ([], "error", None))[0]
+            if len(candles) < 40:
+                continue
+            closed_candle = candles[-2] if len(candles) > 1 else candles[-1]
+            closed_time = _normalize_history_candle_time(closed_candle.get("time"))
+            closed_candle_by_tf[tf] = closed_time
+            candidate_groups.setdefault((tf, closed_time), []).append(c)
+
+        async def _validate_group(tf: str, candle_time: str, group: list[dict[str, Any]]):
+            # Require at least two independent deterministic strategy families before
+            # spending an AI request. This is the main token-saving gate.
+            consensus = _build_consensus(group, tf, candle_time)
+            if not consensus:
+                return None, None
+            try:
+                best_item = dict(consensus)
+                # A deterministic quality + RR precheck avoids AI calls on weak setups.
+                det_conf = float(best_item.get("confidence") or 0)
+                rr_candidates = []
+                for c in group:
+                    it = c.get("item") or {}
+                    if str(it.get("signal") or "").upper() == str(consensus.get("signal") or "").upper():
+                        try:
+                            rr = float(it.get("risk_reward") or 0)
+                        except Exception:
+                            rr = 0.0
+                        if rr > 0: rr_candidates.append(rr)
+                best_rr = max(rr_candidates, default=float(consensus.get("risk_reward") or 0))
+                if det_conf < AI_PREVALIDATION_MIN_CONFIDENCE or best_rr < AI_PREVALIDATION_MIN_RR:
+                    return consensus, {"mode":"skipped","signal":consensus.get("signal","WAIT"),"confidence":0,"agreement":0,"validation":False,
+                                      "risk_flags":["Deterministic pre-validation did not meet AI trigger threshold"],
+                                      "reasoning":f"AI skipped: deterministic confidence={det_conf:.0f}, RR={best_rr:.2f}."}
+                ai = await ai_validate_module_signal("AI Consensus", "XAU/USD", tf, candle_time, best_item)
+                return consensus, ai
+            except Exception as exc:
+                return consensus, {"mode":"unavailable","signal":"WAIT","confidence":0,"agreement":0,"validation":False,
+                                   "risk_flags":["AI validation exception"],"reasoning":str(exc)[:280]}
+
+        validation_results = {}
+        groups_seen = 0
+        for (tf, candle_time), group in sorted(candidate_groups.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+            if groups_seen >= AI_MAX_CONSENSUS_EVENTS_PER_CYCLE:
+                break
+            consensus, ai = await _validate_group(tf, candle_time, group)
+            validation_results[(tf, candle_time)] = (consensus, ai)
+            if ai and ai.get("mode") not in {"skipped"}:
+                groups_seen += 1
+
         for c in candidates:
             tf = str(c.get("interval") or "").strip().lower()
             item = dict(c.get("item") or {})
@@ -6454,19 +6780,25 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             candles = live_by_tf.get(tf, ([], "error", None))[0]
             if len(candles) < 40:
                 continue
-            candle_time = _normalize_history_candle_time(candles[-1].get("time"))
+            closed_candle = candles[-2] if len(candles) > 1 else candles[-1]
+            candle_time = _normalize_history_candle_time(closed_candle.get("time"))
             source = _normalize_history_source(c.get("source") or HISTORY_DEFAULT_SOURCE)
             original_direction = direction
             original_item = dict(item)
+            group_key = (tf, candle_time)
+            consensus, consensus_ai = validation_results.get(group_key, (None, None))
 
-            # Every AutoTrade-capable module now gets its own AI validation on the
-            # same live candle. AI is used as a quality layer, while History keeps
-            # the original module signal even when AI rejects AutoTrade.
-            try:
-                ai = await ai_validate_module_signal(source, key, tf, candle_time, original_item)
-            except Exception as exc:
-                ai = {"mode":"fallback","signal":original_direction,"confidence":0,"agreement":0,
-                      "risk_flags":["AI validation exception"],"reasoning":str(exc)[:240]}
+            # Reuse ONE AI decision for every module inside this timeframe/candle.
+            # Only the deterministic consensus candidate triggers an AI request.
+            if consensus_ai is not None and consensus is not None:
+                ai = dict(consensus_ai)
+                consensus_direction = str(consensus.get("signal") or "WAIT").upper()
+                if original_direction != consensus_direction:
+                    ai = {**ai, "signal": "WAIT", "validation": False,
+                          "reasoning": f"Opposite to deterministic consensus {consensus_direction}; AI result reserved for consensus side."}
+            else:
+                ai = {"mode":"skipped","signal":"WAIT","confidence":0,"agreement":0,"validation":False,
+                      "risk_flags":["No consensus / AI trigger"],"reasoning":"AI skipped because this module/candle did not meet the deterministic AI trigger gate."}
             smart = _smart_module_gate(original_item, ai, candles, original_direction)
             item["ai_validation"] = ai
             item["ai_assisted"] = True
@@ -6475,7 +6807,10 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
 
             # Hard pipeline: Signal -> AI/Market Quality -> Geometry -> Target -> Risk -> AutoTrade.
             # AI/market quality failure is History-only; it never deletes the module signal.
-            if not smart.get("ok"):
+            # A skipped AI check is a deliberate token-saving outcome, not a failed signal.
+            # Keep it in History and continue through geometry/target/risk, but NEVER let
+            # it reach AutoTrade without a live AI consensus decision.
+            if not smart.get("ok") and str(ai.get("mode") or "") != "skipped":
                 item.update({"signal":original_direction,"auto_trade_eligible":False,
                              "execution_state":"AI_VALIDATION_FAILED",
                              "execution_reason":smart.get("reason") or "AI_VALIDATION_FAILED",
@@ -6559,17 +6894,18 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 direction_history = "WAIT"
             else:
                 item.update({"entry":entry,"stop_loss":sl,"take_profit":tp,"live_levels_verified":True,
-                             "levels_repaired_from_live_chart":repaired,"auto_trade_eligible":bool(gate.get("ok") and autotrade_rr_ok),
-                             "execution_state":"READY","execution_reason":"ALL_GATES_PASSED" if autotrade_rr_ok else "HISTORY_ONLY_RR_BELOW_1.50",
-                             "risk_reward":gate.get("r_multiple"),"auto_trade_rr_ok":autotrade_rr_ok})
+                             "levels_repaired_from_live_chart":repaired,"auto_trade_eligible":bool(smart.get("ok") and gate.get("ok") and autotrade_rr_ok),
+                             "execution_state":"READY" if smart.get("ok") else "HISTORY_ONLY_AI_NOT_TRIGGERED",
+                             "execution_reason":"ALL_GATES_PASSED" if (smart.get("ok") and autotrade_rr_ok) else ("AI_NOT_TRIGGERED" if not smart.get("ok") else "HISTORY_ONLY_RR_BELOW_1.50"),
+                             "risk_reward":gate.get("r_multiple"),"auto_trade_rr_ok":autotrade_rr_ok,"ai_token_saved":str(ai.get("mode") or "") == "skipped"})
                 direction_history = direction
 
             payload = {"source":source,"module_signal":item,"symbol":key,"interval":tf,"candle_time":candle_time,
                        "live_generated":True,"execution_gate":{
                            "state":gate.get("state"),"reason":gate.get("reason"),"geometry_checked":True,
                            "target_checked":True,"risk_checked":not target_reached,
-                           "auto_trade":bool(gate.get("ok") and autotrade_rr_ok),
-                           "risk_reward":gate.get("r_multiple"),"autotrade_rr_min":1.50,
+                           "auto_trade":bool(smart.get("ok") and gate.get("ok") and autotrade_rr_ok),
+                           "risk_reward":gate.get("r_multiple"),"autotrade_rr_min":1.50,"ai_required_for_autotrade":True,
                            "risk":gate.get("risk"),"max_risk":gate.get("max_risk"),
                            "levels_repaired":repaired},"auto_trade":{"queued":False}}
             recent = session.scalars(select(SignalHistory).where(
@@ -6590,7 +6926,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 session.add(history_row)
                 created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction_history,
                                         "confidence":conf,"module_history":True,
-                                        "auto_trade_eligible":bool(gate.get("ok") and autotrade_rr_ok),
+                                        "auto_trade_eligible":bool(smart.get("ok") and gate.get("ok") and autotrade_rr_ok),
                                         "execution_state":gate.get("state"),"risk_reward":gate.get("r_multiple"),
                                         "auto_trade_rr_ok":autotrade_rr_ok})
                 print(f"[SIGNAL HISTORY] MODULE RECORDED source={source} market={key} tf={tf} dir={direction_history} state={gate.get('state')}")
@@ -6629,7 +6965,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         "module_autotrade_queued": module_signal_count,
         "history_count": len(rows),
         "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
-        "forward_mode": "EVERY CONFIRMED ACTIVE MODULE SIGNAL EXCEPT M1; MT5 requires RR >= 1.50",
+        "forward_mode": "DETERMINISTIC 24/7; ONE AI CONSENSUS VALIDATION PER CLOSED CANDLE/TIMEFRAME; MT5 requires RR >= 1.50",
+        "ai_token_policy": {"once_per_closed_candle": AI_VALIDATION_ONCE_PER_CANDLE, "prevalidation_min_confidence": AI_PREVALIDATION_MIN_CONFIDENCE, "prevalidation_min_rr": AI_PREVALIDATION_MIN_RR, "max_consensus_events_per_cycle": AI_MAX_CONSENSUS_EVENTS_PER_CYCLE},
         "excluded_sources": ["Signals", "Signal Engine", "Signal Lab", "AlgoTrade", "Book + OpenAI", "M1 / 1min / 1m"],
         "active_sources": ["Technical Analysis", "Classic Trade", "Auto Trend Line", "ICT Signals", "AI Smart Analysis", "MSAI/SNR", "SMC", "Algo/SMC", "Patterns", "Trend Channel Engine", "Fibonacci", "Yangi Strategiya"],
         "items": created_history,
@@ -6649,7 +6986,8 @@ async def _autotrade_worker() -> None:
     while True:
         session = SessionLocal()
         try:
-            if MT5_AUTO_TRADING and AUTO_ENTRY_ENABLED:
+            market_gate = market_gate_status("XAU/USD")
+            if MT5_AUTO_TRADING and AUTO_ENTRY_ENABLED and market_gate.get("open"):
                 result = await auto_record_signals(
                     symbol="XAU/USD", interval="5min",
                     authorization=f"Bearer {AUTOTRADE_INTERNAL_TOKEN}", session=session
@@ -6657,10 +6995,13 @@ async def _autotrade_worker() -> None:
                 queued_count = int(result.get("queued") or 0)
                 bridge_user_id = int(result.get("user_id") or 0)
                 if not bridge_user_id:
-                    admin_user = session.scalar(select(User).where(User.username == os.getenv("ADMIN_LOGIN", "Shohruh")))
+                    admin_user = session.scalar(select(User).where(User.username == ADMIN_LOGIN))
                     bridge_user_id = int(admin_user.id) if admin_user else 0
                 history_forwarded = _forward_recent_history_to_mt5(session, bridge_user_id) if bridge_user_id else []
                 print(f"[AUTO TRADE WORKER] symbols={result.get('symbols')} queued={queued_count} history_forwarded={len(history_forwarded)} queue_total={len(MT5_ORDER_QUEUE)}")
+            elif MT5_AUTO_TRADING and AUTO_ENTRY_ENABLED:
+                MT5_ORDER_QUEUE[:] = [item for item in MT5_ORDER_QUEUE if item.get("claimed")]
+                print(f"[AUTO TRADE WORKER] MARKET GATE CLOSED reason={market_gate.get('reason')} source={market_gate.get('source')}")
         except Exception as exc:
             print(f"[AUTO TRADE WORKER] error={exc}")
         finally:
@@ -6776,6 +7117,9 @@ async def ai_signals_live(symbol: str, interval: str = DEFAULT_INTERVAL, authori
     """
     require_admin(authorization, session)
     key=clean_symbol(symbol); interval=validate_interval(interval)
+    market_gate = market_gate_status(key)
+    if not market_gate.get("open"):
+        return {"symbol":key,"interval":interval,"signal":{"signal":"WAIT","confidence":0,"reason":"MARKET_CLOSED","mode":"market_closed","market_gate":market_gate},"ai_validation":{"mode":"market_closed","signal":"WAIT","validation":False,"reasoning":f"Market Gate: {market_gate.get('reason')}"},"mode":"market_closed","source":"SignalX Market Gate","generated_at":datetime.now(timezone.utc).isoformat()}
     candles_data, mode, warning = await get_candles(key, interval, 260)
     if len(candles_data) < 40:
         raise MarketDataError(f"{interval} uchun real signal hisoblashga candle yetarli emas")
@@ -6824,6 +7168,9 @@ class MT5LotBody(BaseModel):
 
 class MT5StateBody(BaseModel):
     connected: bool = False
+    session_open: bool | None = None
+    session_source: str = ""
+    server_time: str = ""
     symbol: str = ""
     login: str = ""
     server: str = ""
@@ -7355,9 +7702,53 @@ async def get_market_providers() -> dict[str, Any]:
     return {"ok": True, "preferred": MARKET_PROVIDER or "auto", "order": MARKET_FALLBACK_ORDER, "providers": rows}
 
 
+@app.post("/api/v1/ai/providers/reset")
+async def ai_providers_reset(provider: str | None = None, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    require_admin(authorization, session)
+    targets = [provider.strip().lower()] if provider else list(AI_PROVIDER_ENABLED)
+    for p in targets:
+        if p not in AI_PROVIDER_ENABLED:
+            raise HTTPException(status_code=404, detail=f"Unknown AI provider: {p}")
+        AI_PROVIDER_COOLDOWN_UNTIL.pop(p, None)
+        AI_PROVIDER_HARD_BLOCKED.pop(p, None)
+        AI_PROVIDER_STATUS[p] = {
+            "status": "READY",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "error": "Runtime cooldown/block reset by admin.",
+        }
+    return {"ok": True, "reset": targets}
+
+
+@app.post("/api/v1/ai/providers/test")
+async def ai_provider_test(provider: str, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    require_admin(authorization, session)
+    p = provider.strip().lower()
+    if p not in AI_PROVIDER_ENABLED:
+        raise HTTPException(status_code=404, detail=f"Unknown AI provider: {p}")
+    if p not in AI_FALLBACK_ORDER:
+        raise HTTPException(status_code=400, detail="Provider router konfiguratsiyasida mavjud emas")
+    AI_PROVIDER_COOLDOWN_UNTIL.pop(p, None)
+    AI_PROVIDER_HARD_BLOCKED.pop(p, None)
+    try:
+        probe_prompt = '{"probe":"ok","reply":"ok"}'
+        text, used = await _provider_call(p, probe_prompt)
+        _extract_json_object(text)
+        AI_PROVIDER_STATUS[used] = {
+            "status": "ONLINE",
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "last_success_at": datetime.now(timezone.utc).isoformat(),
+            "error": "Real provider request succeeded.",
+        }
+        return {"ok": True, "provider": used, "status": "ONLINE", "message": "Real provider request succeeded."}
+    except Exception as exc:
+        msg, http_status = _provider_error_details(exc)
+        return {"ok": False, "provider": p, "status": "FAILED", "http_status": http_status, "error": msg}
+
+
 @app.get("/api/v1/ai/providers")
 async def ai_providers_status(authorization: str | None = Header(default=None), session: Session = Depends(db)):
     require_admin(authorization, session)
+    market_gate = market_gate_status("XAU/USD")
     # Only configured providers are exposed to the dashboard. Missing-key
     # providers are intentionally hidden instead of showing "OFFLINE".
     configured={
@@ -7388,12 +7779,18 @@ async def ai_providers_status(authorization: str | None = Header(default=None), 
         if AI_PROVIDER_COOLDOWN_UNTIL.get(p,0.0)>now_mono: base -= 35
         return round(base,1)
     configured_ids=[p for p in AI_FALLBACK_ORDER if p in configured and configured[p]]
-    for p in sorted(configured_ids, key=display_score, reverse=True):
+    for p in configured_ids:
         st=AI_PROVIDER_STATUS.get(p) or {}
-        status=st.get("status") or "READY"
-        error=(st.get("error") or "").strip()
+        hard=AI_PROVIDER_HARD_BLOCKED.get(p) or {}
+        status=hard.get("status") or st.get("status") or "READY"
+        error=(hard.get("reason") or st.get("error") or "").strip()
+        cooldown_remaining_now=max(0, int(AI_PROVIDER_COOLDOWN_UNTIL.get(p,0.0)-now_mono))
         if status == "ONLINE":
             reason="AI so‘rovi muvaffaqiyatli bajarildi."
+        elif status == "BILLING":
+            reason=error or "Billing/credit mavjud emas — router qayta-qayta so‘rov yubormaydi."
+        elif status == "BLOCKED":
+            reason=error or "Provider vaqtincha bloklangan; admin reset yoki yangi deploy kerak."
         elif status == "LIMITED":
             reason=error or "Rate limit/quota vaqtincha cheklangan."
         elif status == "OFFLINE":
@@ -7401,8 +7798,9 @@ async def ai_providers_status(authorization: str | None = Header(default=None), 
         else:
             reason="Hali real AI so‘rovi bilan tekshirilmagan."
         prof=AI_PROVIDER_PROFILE.get(p,{"quality":70,"speed":70,"capacity":60,"cost":60})
-        providers.append({"id":p,"configured":True,"enabled":AI_PROVIDER_ENABLED.get(p,True),"status":("OFF" if not AI_PROVIDER_ENABLED.get(p,True) else status),"model":models[p],"reason":("Qo‘lda o‘chirilgan — router bu AI'ni chaqirmaydi." if not AI_PROVIDER_ENABLED.get(p,True) else reason),"error":error,"http_status":st.get("http_status"),"checked_at":st.get("checked_at"),"score":display_score(p),"quality":prof["quality"],"speed":prof["speed"],"capacity":prof["capacity"],"cost":prof["cost"]})
+        providers.append({"id":p,"configured":True,"enabled":AI_PROVIDER_ENABLED.get(p,True),"status":("OFF" if not AI_PROVIDER_ENABLED.get(p,True) else status),"model":models[p],"reason":("Qo‘lda o‘chirilgan — router bu AI'ni chaqirmaydi." if not AI_PROVIDER_ENABLED.get(p,True) else reason),"error":error,"http_status":hard.get("http_status", st.get("http_status")),"checked_at":st.get("checked_at"),"cooldown_seconds_remaining":cooldown_remaining_now,"score":display_score(p),"quality":prof["quality"],"speed":prof["speed"],"capacity":prof["capacity"],"cost":prof["cost"],"hard_blocked":bool(hard)})
     return {
+        "market_gate": market_gate,
         "order":[x["id"] for x in providers],
         "router": AI_ROUTER_MODE,
         "preferred": None if AI_PROVIDER in {"auto", ""} else AI_PROVIDER,
@@ -7475,6 +7873,10 @@ async def mt5_poll(token: str = Query(...), market: str = Query(...), client_id:
     client = re.sub(r"[^A-Za-z0-9._:-]+", "_", str(client_id or "").strip())[:100]
     if not client:
         client = "legacy"
+    gate = market_gate_status(requested_market)
+    if not gate.get("open"):
+        MT5_ORDER_QUEUE[:] = [item for item in MT5_ORDER_QUEUE if item.get("claimed")]
+        return {"ok": True, "market": requested_market, "orders": [], "client_id": client, "reason": gate.get("reason"), "market_gate": gate}
     # Expire dead-client leases so a crashed terminal cannot permanently hold an order.
     for item in MT5_ORDER_QUEUE:
         if item.get("claimed") and float(item.get("claim_expires", 0) or 0) <= now:
@@ -7530,6 +7932,9 @@ async def mt5_state(body: MT5StateBody, token: str = Query(...)) -> dict[str, An
                 "last_error": raw_market.get("error") or body.error or "",
                 "symbol": key,
                 "candles": raw_market.get("candles") or {},
+                "session_open": raw_market.get("session_open"),
+                "session_source": raw_market.get("session_source") or "",
+                "server_time": raw_market.get("server_time") or "",
             }
             MT5_BRIDGE_STATE.setdefault("markets", {})[key] = snapshot
             saved.append(key)
@@ -7537,7 +7942,7 @@ async def mt5_state(body: MT5StateBody, token: str = Query(...)) -> dict[str, An
         MT5_BRIDGE_STATE.update({"connected": bool(body.connected), "login": body.login or None, "server": body.server or None, "last_seen": now_iso, "last_error": body.error or "", "symbol": saved[0] if saved else body.symbol or None})
         return {"ok": True, "symbols": saved}
     key = _mt5_market_key(body.symbol or MT5_BRIDGE_STATE.get("symbol") or DEFAULT_SYMBOL)
-    snapshot = {"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": now_iso, "last_error": body.error or "", "symbol": key, "candles": body.candles or {}}
+    snapshot = {"connected": body.connected, "account": body.login or None, "server": body.server or None, "balance": body.balance, "equity": body.equity, "free_margin": body.free_margin, "margin": body.margin, "positions": body.positions, "last_seen": now_iso, "last_error": body.error or "", "symbol": key, "candles": body.candles or {}, "session_open": body.session_open, "session_source": body.session_source, "server_time": body.server_time}
     MT5_BRIDGE_STATE.update(snapshot)
     MT5_BRIDGE_STATE.setdefault("markets", {})[key] = snapshot
     return {"ok": True, "symbol": key}

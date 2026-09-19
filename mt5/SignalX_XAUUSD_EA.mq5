@@ -84,6 +84,49 @@ double NormalizePrice(string symbol,double price)
    return NormalizeDouble(price,digits);
 }
 
+
+
+bool SymbolSessionOpenNow(string symbol, string &source)
+{
+   source="MT5_SYMBOL_TRADE_SESSION";
+   if(symbol=="") return false;
+   datetime now=TimeTradeServer();
+   if(now<=0) now=TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(now,dt);
+   int current_min=dt.hour*60+dt.min;
+   ENUM_DAY_OF_WEEK dow=(ENUM_DAY_OF_WEEK)dt.day_of_week;
+   bool found=false;
+   for(uint i=0;i<20;i++)
+   {
+      datetime from=0,to=0;
+      ResetLastError();
+      if(!SymbolInfoSessionTrade(symbol,dow,i,from,to)) break;
+      found=true;
+      int from_min=TimeHour(from)*60+TimeMinute(from);
+      int to_min=TimeHour(to)*60+TimeMinute(to);
+      bool open=false;
+      if(from_min<=to_min)
+         open=(current_min>=from_min && current_min<to_min);
+      else
+         open=(current_min>=from_min || current_min<to_min);
+      if(open) return true;
+   }
+   return false;
+}
+
+string SessionStateJson(string symbol)
+{
+   string source="MT5_SYMBOL_TRADE_SESSION";
+   bool open=SymbolSessionOpenNow(symbol,source);
+   datetime now=TimeTradeServer();
+   if(now<=0) now=TimeCurrent();
+   string out=",\"session_open\":"+(open?"true":"false");
+   out+=",\"session_source\":\""+JsonEscape(source)+"\"";
+   out+=",\"server_time\":\""+JsonEscape(TimeToString(now,TIME_DATE|TIME_SECONDS))+"\"";
+   return out;
+}
+
 bool IsUsableSymbol(string symbol)
 {
    if(StringLen(symbol)==0) return false;
@@ -263,6 +306,7 @@ void AppendMarketState(string &body,string symbol,bool &firstMarket)
 
    body += "\""+JsonEscape(symbol)+"\":{";
    body += "\"connected\":true";
+   body += SessionStateJson(symbol);
    body += ",\"account\":\""+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN))+"\"";
    body += ",\"server\":\""+JsonEscape(AccountInfoString(ACCOUNT_SERVER))+"\"";
    body += ",\"balance\":"+DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE),2);
@@ -384,6 +428,12 @@ void OnDeinit(const int reason)
 
 bool PollMarket(string requestedMarket,string expectedSymbol)
 {
+   string sessionSource="";
+   if(!SymbolSessionOpenNow(expectedSymbol,sessionSource))
+   {
+      Print("[MT5 BRIDGE] POLL SKIPPED market=",requestedMarket," reason=MARKET_CLOSED source=",sessionSource);
+      return true;
+   }
    string out;
    string encoded=requestedMarket;
    StringReplace(encoded,"/","%2F");

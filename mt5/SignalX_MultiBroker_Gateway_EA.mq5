@@ -76,6 +76,134 @@ string AccountType(){
    return "contest";
 }
 
+bool SymbolSessionOpenNow(string symbol, string &source)
+{
+   source="MT5_SYMBOL_TRADE_SESSION";
+   if(symbol=="") return false;
+   datetime now=TimeTradeServer();
+   if(now<=0) now=TimeCurrent();
+   MqlDateTime dt;
+   TimeToStruct(now,dt);
+   int current_min=dt.hour*60+dt.min;
+   ENUM_DAY_OF_WEEK dow=(ENUM_DAY_OF_WEEK)dt.day_of_week;
+   bool found=false;
+   for(uint i=0;i<20;i++)
+   {
+      datetime from=0,to=0;
+      ResetLastError();
+      if(!SymbolInfoSessionTrade(symbol,dow,i,from,to)) break;
+      found=true;
+      int from_min=TimeHour(from)*60+TimeMinute(from);
+      int to_min=TimeHour(to)*60+TimeMinute(to);
+      bool open=false;
+      if(from_min<=to_min)
+         open=(current_min>=from_min && current_min<to_min);
+      else
+         open=(current_min>=from_min || current_min<to_min);
+      if(open) return true;
+   }
+   return false;
+}
+
+string SessionStateJson(string symbol)
+{
+   string source="MT5_SYMBOL_TRADE_SESSION";
+   bool open=SymbolSessionOpenNow(symbol,source);
+   datetime now=TimeTradeServer();
+   if(now<=0) now=TimeCurrent();
+   string out=",\"session_open\":"+(open?"true":"false");
+   out+=",\"session_source\":\""+JsonEscape(source)+"\"";
+   out+=",\"server_time\":\""+JsonEscape(TimeToString(now,TIME_DATE|TIME_SECONDS))+"\"";
+   return out;
+}
+
+bool IsUsableSymbol(string symbol)
+{
+   if(StringLen(symbol)==0) return false;
+   if(SymbolInfoDouble(symbol,SYMBOL_BID)>0) return true;
+   if(!SymbolSelect(symbol,true)) return false;
+   return (SymbolInfoDouble(symbol,SYMBOL_BID)>0);
+}
+
+bool IsExactAllowedSymbol(string symbol)
+{
+   return (symbol=="XAUUSDm");
+}
+
+bool IsBlockedSource(string source)
+{
+   string x=source;
+   StringToLower(x);
+   StringReplace(x,"+"," ");
+   StringReplace(x,"-"," ");
+   StringReplace(x,"_"," ");
+   while(StringFind(x,"  ")>=0) StringReplace(x,"  "," ");
+   if(StringFind(x,"book")>=0 && StringFind(x,"openai")>=0) return true;
+   if(StringFind(x,"signal lab")>=0) return true;
+   if(StringFind(x,"algotrade")>=0) return true;
+   if(x=="signals" || StringFind(x,"signals")>=0) return true;
+   return false;
+}
+
+string OrderGuardKey(string order_id)
+{
+   return "SignalX.guard."+IntegerToString((long)AccountInfoInteger(ACCOUNT_LOGIN))+"."+order_id;
+}
+
+bool GuardAllows(string order_id)
+{
+   if(order_id=="") return false;
+   string key=OrderGuardKey(order_id);
+   if(!GlobalVariableCheck(key)) return true;
+   double last=GlobalVariableGet(key);
+   return (TimeCurrent()-((datetime)last)) >= DuplicateCooldownSeconds;
+}
+
+void MarkOrderGuard(string order_id)
+{
+   if(order_id!="") GlobalVariableSet(OrderGuardKey(order_id),(double)TimeCurrent());
+}
+
+bool ValidSignalLevels(string symbol,string dir,double sl,double tp)
+{
+   if(!IsExactAllowedSymbol(symbol) || !IsUsableSymbol(symbol)) return false;
+   if(sl<=0 || tp<=0 || !MathIsValidNumber(sl) || !MathIsValidNumber(tp)) return false;
+   sl=NormalizePrice(symbol,sl);
+   tp=NormalizePrice(symbol,tp);
+   MqlTick tick;
+   if(!SymbolInfoTick(symbol,tick)) return false;
+   double point=SymbolInfoDouble(symbol,SYMBOL_POINT);
+   double tick_size=SymbolInfoDouble(symbol,SYMBOL_TRADE_TICK_SIZE);
+   if(tick_size<=0) tick_size=point;
+   int stops=(int)SymbolInfoInteger(symbol,SYMBOL_TRADE_STOPS_LEVEL);
+   int freeze=(int)SymbolInfoInteger(symbol,SYMBOL_TRADE_FREEZE_LEVEL);
+   double minDist=MathMax(stops,freeze)*point;
+   if(minDist<tick_size) minDist=tick_size;
+   if(dir=="BUY") return (sl <= tick.bid-minDist && tp >= tick.ask+minDist);
+   if(dir=="SELL") return (sl >= tick.ask+minDist && tp <= tick.bid-minDist);
+   return false;
+}
+
+double NormalizeVolume(string symbol,double requested)
+{
+   double minv=SymbolInfoDouble(symbol,SYMBOL_VOLUME_MIN);
+   double maxv=SymbolInfoDouble(symbol,SYMBOL_VOLUME_MAX);
+   double step=SymbolInfoDouble(symbol,SYMBOL_VOLUME_STEP);
+   if(minv<=0 || maxv<=0 || step<=0) return 0.0;
+   double v=requested>0 ? requested : DefaultLot;
+   v=MathMax(minv,MathMin(maxv,v));
+   v=MathFloor((v+1e-12)/step)*step;
+   int digits=(int)MathMax(0,MathCeil(-MathLog10(step)));
+   return NormalizeDouble(v,digits);
+}
+
+string ExecSymbol(string market)
+{
+   string wanted=XAUTradeSymbol;
+   if(!IsExactAllowedSymbol(wanted) || !IsUsableSymbol(wanted)) return "";
+   return wanted;
+}
+
 string SymbolsJson(){
    string out="[";
    string canonicals[3]={"XAU/USD","EUR/USD","GBP/USD"};
@@ -97,6 +225,26 @@ string SymbolsJson(){
       out+=",\"trade_mode\":\""+IntegerToString((int)mode)+"\"}";
    }
    out+="]";
+   return out;
+}
+
+string MarketsSessionJson()
+{
+   string canonicals[3]={"XAU/USD","EUR/USD","GBP/USD"};
+   string out="{";
+   bool first=true;
+   for(int i=0;i<3;i++)
+   {
+      string broker=FindBrokerSymbol(canonicals[i]);
+      if(broker=="") continue;
+      if(!first) out+=",";
+      first=false;
+      out+="\""+JsonEscape(canonicals[i])+"\":{";
+      out+="\"connected\":true";
+      out+=SessionStateJson(broker);
+      out+="}";
+   }
+   out+="}";
    return out;
 }
 
@@ -200,7 +348,8 @@ bool SendState(){
    body+=",\"margin\":"+DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN),2);
    body+=",\"trade_allowed\":"+(AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)?"true":"false");
    body+=",\"terminal_build\":\""+IntegerToString((int)TerminalInfoInteger(TERMINAL_BUILD))+"\",\"ea_version\":\"1.0\"";
-   body+=",\"symbols\":"+SymbolsJson()+"}";
+   body+=",\"symbols\":"+SymbolsJson();
+   body+=",\"markets\":"+MarketsSessionJson()+"}";
    string response;
    return Http("POST","/api/v1/mt5/gateway/state",body,response);
 }
@@ -260,6 +409,13 @@ bool ParseAndExecute(string json){
 
 void Poll(){
    if(!g_registered) return;
+   string sessionSource="";
+   string sessionSymbol=FindBrokerSymbol("XAU/USD");
+   if(sessionSymbol=="" || !SymbolSessionOpenNow(sessionSymbol,sessionSource))
+   {
+      Print("[SIGNALX GATEWAY] POLL SKIPPED reason=MARKET_CLOSED source=",sessionSource," symbol=",sessionSymbol);
+      return;
+   }
    string response;
    if(Http("GET","/api/v1/mt5/gateway/poll","",response)) ParseAndExecute(response);
 }
