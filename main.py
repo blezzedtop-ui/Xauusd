@@ -27,7 +27,12 @@ from fastapi.responses import JSONResponse
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi import WebSocket, WebSocketDisconnect
-from book_openai_engine import book_signal, _atr as _atr_local
+from pattern_engine import detect_patterns
+from msai_strategy import analyze_msai, summarize_mtf, direction_from_candles, aggregate_weekly
+from smc_strategy import analyze_smc, summarize_smc_mtf
+from algo_smc_strategy import analyze_algo_smc
+from trend_channel_strategy import analyze_trend_channel
+from fibonacci_strategy import analyze_fibonacci
 from pydantic import BaseModel, Field
 from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, create_engine, select, func
 from sqlalchemy.exc import IntegrityError
@@ -432,16 +437,6 @@ async def ai_json_completion(prompt: str) -> tuple[str, str]:
             continue
     raise RuntimeError("All configured AI providers failed: " + " | ".join(errors))
 
-# Book/OpenAI second-opinion cache: one OpenAI call per newly closed/current candle.
-BOOK_OPENAI_CACHE_TTL = int(os.getenv("BOOK_OPENAI_CACHE_TTL", "86400"))
-BOOK_OPENAI_COOLDOWN = int(os.getenv("BOOK_OPENAI_COOLDOWN", "45"))
-BOOK_OPENAI_CACHE: dict[str, tuple[float, int | None, dict[str, Any]]] = {}
-BOOK_OPENAI_LOCKS: dict[str, asyncio.Lock] = {}
-# Global OpenAI circuit breaker: prevents every endpoint/worker call from immediately
-# retrying after a 429. It resets automatically after the cooldown.
-OPENAI_GLOBAL_RATE_LIMIT_UNTIL = 0.0
-OPENAI_GLOBAL_RATE_LIMIT_SECONDS = int(os.getenv("OPENAI_GLOBAL_RATE_LIMIT_SECONDS", "300"))
-BOOK_OPENAI_LOCKS_GUARD = asyncio.Lock()
 CANDLE_LIMIT = max(50, min(int(os.getenv("CANDLE_LIMIT", "220")), 500))
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "12"))
 NODE_MARKET_URL = os.getenv("NODE_MARKET_URL", "http://127.0.0.1:3001").strip().rstrip("/")
@@ -501,6 +496,16 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
         entry, sl, tps = _history_row_levels_for_autotrade(row, payload)
         if entry is None or sl is None or not tps:
             continue
+        # Only History records explicitly marked AutoTrade-eligible can be forwarded.
+        # RR >= 1.50 is a hard MT5 requirement; lower-RR signals remain History-only.
+        gate_payload = payload.get("execution_gate") if isinstance(payload.get("execution_gate"), dict) else {}
+        auto_flag = bool(gate_payload.get("auto_trade", payload.get("auto_trade_eligible", False)))
+        try:
+            rr_value = float(gate_payload.get("risk_reward") or payload.get("risk_reward") or row.risk_reward or 0)
+        except Exception:
+            rr_value = 0.0
+        if not auto_flag or rr_value < 1.50:
+            continue
         try:
             confidence = float(row.signal_score or payload.get("confidence_at_entry") or payload.get("confidence") or 0)
             existing_queue_ids = {str(q.get("id")) for q in MT5_ORDER_QUEUE}
@@ -508,6 +513,7 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
                 symbol=row.symbol, source=source, interval=row.interval, direction=row.direction,
                 entry=float(entry), sl=float(sl), tp=tps, volume=MT5_LOT_SIZE,
                 confidence=confidence, candle_time=str(row.candle_time or row.created_at.isoformat()),
+                risk_reward=rr_value,
             )
         except Exception as exc:
             print(f"[HISTORY AUTOTRADE BRIDGE] error signal_id={row.signal_uid} source={source}: {type(exc).__name__}: {exc}")
@@ -910,11 +916,23 @@ MARKET_HISTORY_CACHE_TTL = int(os.getenv("MARKET_HISTORY_CACHE_TTL", "5"))
 LIVE_PRICE_CACHE: dict[str, tuple[float, float, str]] = {}
 ADVANCED_SIGNAL_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 MTF_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+MSAI_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+MSAI_CACHE_TTL = float(os.getenv("MSAI_CACHE_TTL", "10"))
+MSAI_AI_CACHE: dict[str, tuple[float, str | None, dict[str, Any]]] = {}
+MSAI_AI_LOCKS: dict[str, asyncio.Lock] = {}
+MSAI_AI_LOCKS_GUARD = asyncio.Lock()
+SMC_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+SMC_CACHE_TTL = float(os.getenv("SMC_CACHE_TTL", "10"))
+SMC_AI_CACHE: dict[str, tuple[float, str | None, dict[str, Any]]] = {}
+SMC_AI_LOCKS: dict[str, asyncio.Lock] = {}
+SMC_AI_LOCKS_GUARD = asyncio.Lock()
+ALGO_SMC_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+ALGO_SMC_CACHE_TTL = float(os.getenv("ALGO_SMC_CACHE_TTL", "10"))
 ADVANCED_CACHE_TTL = float(os.getenv("ADVANCED_CACHE_TTL", "5"))
 MTF_CACHE_TTL = float(os.getenv("MTF_CACHE_TTL", "10"))
 LIVE_PRICE_CACHE_TTL = float(os.getenv("LIVE_PRICE_CACHE_TTL", "1.5"))
 AUTO_ENTRY_ENABLED = os.getenv("AUTO_ENTRY_ENABLED", "true").lower() == "true"
-AUTO_ENTRY_THRESHOLD = 0.0  # disabled: AUTO TRADE forwards every eligible non-Book/OpenAI signal
+AUTO_ENTRY_THRESHOLD = 0.0  # disabled: AUTO TRADE forwards every eligible active-module signal
 AUTO_ENTRY_DUPLICATE_MINUTES = int(os.getenv("AUTO_ENTRY_DUPLICATE_MINUTES", "5"))
 AUTO_ENTRY_MIN_ZONE = 0.0  # disabled: zone-quality filter removed from AUTO TRADE
 AUTO_ENTRY_MIN_AI_AGREEMENT = 0.0  # disabled: AI-agreement filter removed from AUTO TRADE
@@ -1310,15 +1328,19 @@ def _normalize_history_candle_time(value: Any) -> str:
     except Exception:
         return raw
 
+LEGACY_EXCLUDED_SIGNAL_SOURCES = {"Signal Lab", "AlgoTrade", "Book + OpenAI", "SNR", "Adaptive Institutional SNR V2", "Strong-zone SNR"}
+
 def _normalize_history_source(value: str | None) -> str:
     raw = str(value or "Signals").strip()
     aliases = {
-        "signal lab":"Signal Lab", "signals":"Signals", "technical analysis":"Technical Analysis",
+        "signals":"Signals", "signal engine":"Signal Engine", "technical analysis":"Technical Analysis",
         "ai smart analysis":"AI Smart Analysis", "ai fallback network":"AI Fallback Network",
         "auto trend line":"Auto Trend Line", "trend line":"Trend Line", "ict signals":"ICT Signals",
-        "multi timeframe":"Multi-Timeframe", "multi-timeframe":"Multi-Timeframe", "classic trade":"Classic Trade",
-        "algotrade":"AlgoTrade", "consensus":"Consensus", "snr":"SNR",
-        "economic calendar":"Economic Calendar", "market sessions":"Market Sessions"
+        "ict":"ICT Signals", "multi timeframe":"Multi-Timeframe", "multi-timeframe":"Multi-Timeframe", "classic trade":"Classic Trade",
+        "consensus":"Consensus", "smc":"SMC", "algo/smc":"Algo/SMC", "msai strategy":"MSAI/SNR", "msai/snr":"MSAI/SNR",
+        "trend channel engine":"Trend Channel Engine", "trend channel":"Trend Channel Engine",
+        "fibonacci":"Fibonacci", "new strategy":"Yangi Strategiya", "yangi strategiya":"Yangi Strategiya",
+        "economic calendar":"Economic Calendar", "market sessions":"Market Sessions", "patterns":"Patterns", "pattern":"Patterns"
     }
     return aliases.get(raw.lower(), raw)[:40]
 
@@ -2353,7 +2375,7 @@ def _strategy_profile(interval: str) -> dict[str, Any]:
 
 def _strategy_chain(interval: str) -> list[str]:
     return [
-        "Live OHLC", "Market Regime", "Technical", "SNR", "Trend Line",
+        "Live OHLC", "Market Regime", "Technical", "Pattern Detector", "Breakout", "Trend Line",
         "Fibonacci", "Liquidity", "Order Block", "FVG", "BOS/CHOCH",
         "ICT", "MTF Context", "AI Validation", "Final Signal", "MT5 AutoTrade"
     ]
@@ -2432,7 +2454,6 @@ def _ema(values: list[float], period: int) -> float:
 
 def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dict[str, Any]:
     closes = [float(c["close"]) for c in candles]
-    # Base the Classic decision on the last COMPLETED candle; the newest candle may still be forming.
     cur = candles[-2]; prev = candles[-3]
     price = closes[-1]
     r = rsi(candles); a = atr(candles)
@@ -2444,7 +2465,6 @@ def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dic
     rng = max(float(cur["high"])-float(cur["low"]), 1e-9)
     bullish_candle = float(cur["close"]) > float(cur["open"]) and body/rng >= 0.45
     bearish_candle = float(cur["close"]) < float(cur["open"]) and body/rng >= 0.45
-    prev_body = abs(float(prev["close"])-float(prev["open"]))
     bullish_engulf = bullish_candle and float(prev["close"]) < float(prev["open"]) and float(cur["open"]) <= float(prev["close"]) and float(cur["close"]) >= float(prev["open"])
     bearish_engulf = bearish_candle and float(prev["close"]) > float(prev["open"]) and float(cur["open"]) >= float(prev["close"]) and float(cur["close"]) <= float(prev["open"])
     pattern = "BULLISH ENGULFING" if bullish_engulf else "BEARISH ENGULFING" if bearish_engulf else "BULLISH CANDLE" if bullish_candle else "BEARISH CANDLE" if bearish_candle else "NEUTRAL CANDLE"
@@ -2454,30 +2474,18 @@ def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dic
     elif trend == "BEARISH": score -= 2; reasons.append("EMA20 < EMA50 / price below EMA20")
     if price >= levels["pivot"]: score += 1; reasons.append("price above Pivot")
     else: score -= 1; reasons.append("price below Pivot")
-    if r >= 55 and r < 70: score += 1; reasons.append("RSI bullish zone")
-    elif r <= 45 and r > 30: score -= 1; reasons.append("RSI bearish zone")
+    if 55 <= r < 70: score += 1; reasons.append("RSI bullish zone")
+    elif 30 < r <= 45: score -= 1; reasons.append("RSI bearish zone")
     if macd_state == "BULLISH": score += 1; reasons.append("MACD bullish")
     else: score -= 1; reasons.append("MACD bearish")
     if bullish_engulf: score += 2; reasons.append("bullish engulfing")
     elif bearish_engulf: score -= 2; reasons.append("bearish engulfing")
-    # Classic S/R context: reward rejection near a level, but avoid chasing extended moves.
-    near_r1 = abs(price-levels["r1"]) <= max(a*0.35, 0.5)
-    near_s1 = abs(price-levels["s1"]) <= max(a*0.35, 0.5)
-    if near_s1 and bullish_candle: score += 2; reasons.append("support rejection")
-    if near_r1 and bearish_candle: score -= 2; reasons.append("resistance rejection")
-    zone=_snr_zone_analysis(candles)
-    near_strong_support=zone["support"]["strength"]>=82 and zone["support"]["distance_pct"]<=0.75
-    near_strong_resistance=zone["resistance"]["strength"]>=82 and zone["resistance"]["distance_pct"]<=0.75
-    if near_strong_support and bullish_candle: score += 2; reasons.append("strong support zone")
-    if near_strong_resistance and bearish_candle: score -= 2; reasons.append("strong resistance zone")
+    # Classic Trade is intentionally SNR-free. It uses only trend, pivot, momentum and candle structure.
     direction = "BUY" if score >= 4 else "SELL" if score <= -4 else "WAIT"
-    # Classic entries are only permitted from a strong zone, never in the middle of a range.
-    if direction=="BUY" and not near_strong_support: direction="WAIT"; reasons.append("no strong entry zone")
-    if direction=="SELL" and not near_strong_resistance: direction="WAIT"; reasons.append("no strong entry zone")
     regime=_adaptive_regime(candles)
     if direction=="BUY" and regime["regime"]=="TRENDING_DOWN": direction="WAIT"; reasons.append("adaptive regime conflict")
     if direction=="SELL" and regime["regime"]=="TRENDING_UP": direction="WAIT"; reasons.append("adaptive regime conflict")
-    confidence = min(97, 50 + abs(score)*7 + (5 if (near_strong_support or near_strong_resistance) else 0))
+    confidence = min(97, 50 + abs(score)*7 + (5 if trend in {"BULLISH","BEARISH"} else 0))
     strategy_quality=int(max(0,min(100,confidence + (8 if abs(score)>=6 else 0) + (5 if regime["trend_strength"]>=65 else 0))))
     entry = round(price, 2)
     if direction == "BUY":
@@ -2491,8 +2499,8 @@ def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dic
             "trend":trend,"rsi":round(r,2),"rsi_state":"OVERBOUGHT" if r>=70 else "OVERSOLD" if r<=30 else "NEUTRAL",
             "ema20":round(ema20,2),"ema50":round(ema50,2),"macd":round(macd_line,5),"macd_state":macd_state,
             "pattern":pattern,"pivot":levels["pivot"],"support":[levels["s1"],levels["s2"],levels["s3"]],"resistance":[levels["r1"],levels["r2"],levels["r3"]],
-            "reason":"; ".join(reasons),"method":"Classic · Adaptive Trend/Pivot/SNR/Momentum/Candlestick",
-            "market_regime":regime,"strategy_engine":"Adaptive Classic Strategy","strategy_quality":strategy_quality,"decision_state":"CONFIRMED" if direction in {"BUY","SELL"} else "WAIT"}
+            "reason":"; ".join(reasons),"method":"Classic · Adaptive Trend/Pivot/Momentum/Candlestick",
+            "market_regime":regime,"strategy_engine":"Adaptive Classic Strategy (SNR-free)","strategy_quality":strategy_quality,"decision_state":"CONFIRMED" if direction in {"BUY","SELL"} else "WAIT"}
 
 async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict[str, Any], str | None]:
     """Classic Pivot levels based on the previous completed candle of the selected timeframe.
@@ -2637,20 +2645,47 @@ async def ai_validate_module_signal(source: str, symbol: str, interval: str, can
         if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY,
                 CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, DEEPSEEK_API_KEY, OPENAI_API_KEY, HF_TOKEN)) and now >= OPENAI_GLOBAL_RATE_LIMIT_UNTIL:
             try:
-                prompt=("You are the validation layer of a quantitative XAU/USD trading system. "
-                    "Evaluate ONLY the supplied deterministic analysis. Do not invent prices or external news. "
-                    "Return JSON only: signal (BUY/SELL/WAIT), confidence (0-100 integer), agreement (0-100 integer), "
-                    "risk_flags (array of short strings), reasoning (short string). "
-                    "Be conservative: if evidence conflicts or the setup is weak, return WAIT. "
-                    "This is analysis, not a guarantee.\n\n"+json.dumps(context,ensure_ascii=False,default=str))
+                if source.strip().lower() == "fibonacci":
+                    prompt=("You are the STRICT AI validation layer for SignalX's Fibonacci strategy. "
+                        "Use only the supplied deterministic Fibonacci/Fibo Musang analysis. The source concepts include standard retracement levels "
+                        "(23.6, 38.2, 50, 61.8, 78.6), extensions/projections, Fibonacci price clusters/FibZones, relevant swing selection, "
+                        "Fibo Musang CBR/Initial Break/Dominant Candle/nearest SNR break, 261/423 cycle references, 50% Pin Bar/price-action confirmation, "
+                        "Fibonacci + trendline/SR confluence, higher-timeframe filtering, and a volatility/data-quality guard. "
+                        "Return JSON only with: signal (BUY/SELL/WAIT), confidence (0-100 integer), agreement (0-100 integer), "
+                        "validation (true/false), risk_flags (array of short strings), reasoning (short string). "
+                        "Do not invent market data, news, levels, or Fibonacci anchors. Do not add unrelated indicators or strategies. "
+                        "validation=true only when the deterministic signal is BUY/SELL, the Fibonacci evidence is coherent, geometry and RR are valid, "
+                        "and there is no major conflict. If evidence is incomplete/conflicting, return WAIT and validation=false.\n\n"+json.dumps(context,ensure_ascii=False,default=str))
+                elif source.strip().lower() == "algo/smc":
+                    prompt=("You are the STRICT AI validation layer for SignalX's Algo/SMC strategy, derived only from the supplied trading-book concepts. "
+                        "Evaluate ONLY the supplied deterministic analysis. Do not invent prices, liquidity, news, or structure. "
+                        "The book concepts include liquidity-first analysis, daily/weekly/HTF cycles, accumulation-manipulation-distribution (AMD), "
+                        "money transfer, strong/weak highs and lows, premium/discount, fake market-structure breaks, algo candles, FVG/inefficiency, "
+                        "order block/breaker/rejection block, top-down analysis, and one-minute/Ping-Pong timing. "
+                        "Return JSON only with: signal (BUY/SELL/WAIT), confidence (0-100 integer), agreement (0-100 integer), "
+                        "validation (true/false), risk_flags (array of short strings), reasoning (short string). "
+                        "Be strict: validation=true only when the deterministic setup is coherent, the direction agrees with the supplied HTF storyline, "
+                        "and there is no obvious fake-break/roadblock risk. If evidence conflicts or the setup is incomplete, return WAIT and validation=false. "
+                        "This is analysis, not a guarantee.\n\n"+json.dumps(context,ensure_ascii=False,default=str))
+                else:
+                    prompt=("You are the validation layer of a quantitative XAU/USD trading system. "
+                        "Evaluate ONLY the supplied deterministic analysis. Do not invent prices or external news. "
+                        "Return JSON only: signal (BUY/SELL/WAIT), confidence (0-100 integer), agreement (0-100 integer), "
+                        "risk_flags (array of short strings), reasoning (short string). "
+                        "Be conservative: if evidence conflicts or the setup is weak, return WAIT. "
+                        "This is analysis, not a guarantee.\n\n"+json.dumps(context,ensure_ascii=False,default=str))
                 text, ai_provider = await ai_json_completion(prompt)
                 parsed=json.loads(text)
                 sig=str(parsed.get("signal","WAIT")).upper()
+                conf=max(0,min(100,int(parsed.get("confidence",0))))
+                agreement=max(0,min(100,int(parsed.get("agreement",0))))
+                risk_flags=parsed.get("risk_flags",[]) if isinstance(parsed.get("risk_flags",[]),list) else []
+                validation=bool(parsed.get("validation", sig==base_signal and conf>=85 and agreement>=70))
+                if source.strip().lower() == "algo/smc":
+                    validation=bool(validation and sig==base_signal and conf>=85 and agreement>=70)
                 result={"mode":ai_provider,"signal":sig if sig in {"BUY","SELL","WAIT"} else "WAIT",
-                        "confidence":max(0,min(100,int(parsed.get("confidence",0)))),
-                        "agreement":max(0,min(100,int(parsed.get("agreement",0)))),
-                        "risk_flags":parsed.get("risk_flags",[]) if isinstance(parsed.get("risk_flags",[]),list) else [],
-                        "reasoning":str(parsed.get("reasoning","AI validation."))}
+                        "confidence":conf,"agreement":agreement,"validation":validation,
+                        "risk_flags":risk_flags,"reasoning":str(parsed.get("reasoning","AI validation."))}
             except Exception as exc:
                 msg=str(exc)
                 if "429" in msg or "rate limit" in msg.lower():
@@ -3012,30 +3047,6 @@ def _fibonacci_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
                   f"{'CANDLE CONFIRMED' if confirmation != 'WAIT' else 'WAIT CONFIRMATION'}"
     }
 
-def _snr(candles: list[dict[str, Any]]) -> dict[str, Any]:
-    """Strong-zone SNR levels. Prefer repeatedly tested swing clusters over one-off extremes."""
-    z=_snr_zone_analysis(candles)
-    return {
-        "support": z["support"]["mid"],
-        "resistance": z["resistance"]["mid"],
-        "support_zone": z["support"],
-        "resistance_zone": z["resistance"],
-        "signal": z["signal"],
-        "confidence": z["confidence"],
-        "position": z["position"],
-    }
-
-
-def _snr_malaysia(candles: list[dict[str, Any]]) -> dict[str, Any]:
-    # Session SNR using Kuala Lumpur daytime (08:00–17:00 local) of recent candles.
-    highs=[]; lows=[]
-    for c in candles[-240:]:
-        dt=datetime.fromtimestamp(c["time"], timezone.utc).astimezone(ZoneInfo("Asia/Kuala_Lumpur"))
-        if dt.weekday()<5 and 8 <= dt.hour < 17:
-            highs.append(float(c["high"])); lows.append(float(c["low"]))
-    if not highs:
-        return {"support":None,"resistance":None,"session":"Malaysia 08:00–17:00"}
-    return {"support":round(min(lows),4),"resistance":round(max(highs),4),"session":"Malaysia 08:00–17:00"}
 
 
 def _trendline_point_value(p1: tuple[int,float], p2: tuple[int,float], idx: int) -> float:
@@ -3230,58 +3241,16 @@ def _trendline_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
             "reason":f"{('Support' if mode=='UP' else 'Resistance' if mode=='DOWN' else 'Neutral')} trend line · {touches} touch · power {power}% · structure {direction} · {breakout} · retest {retest}."}
 
 
-def _snr_zone_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
-    current=float(candles[-1]["close"]); highs,lows=_swing_points(candles,2,2); avtr=max(atr(candles), current*0.0004)
-    high_vals=[float(v) for _,v in highs[-24:]] or [float(candles[-1]["high"])]
-    low_vals=[float(v) for _,v in lows[-24:]] or [float(candles[-1]["low"])]
-    width=max(avtr*0.28, current*0.00045)
-    def best_cluster(vals, side):
-        # Score each swing level by repeated touches, recency and separation from price.
-        candidates=[]
-        for level in vals:
-            lo,hi=level-width,level+width
-            touches=sum(1 for v in vals if lo<=v<=hi)
-            recency=sum(1 for c in candles[-60:] if lo<=float(c["low" if side=="support" else "high"])<=hi)
-            distance=abs(current-level)/max(current,1e-9)
-            candidates.append((touches*12+min(recency,10)*3-min(distance*1000,18),level,touches,recency))
-        return max(candidates,key=lambda x:x[0]) if candidates else (0,float(candles[-1]["close"]),0,0)
-    _,support,sret,srec=best_cluster(low_vals,"support")
-    _,resistance,rret,rrec=best_cluster(high_vals,"resistance")
-    def zone(level,side,retests,recency):
-        lo,hi=level-width,level+width
-        in_zone=lo<=current<=hi
-        dist=abs(current-level)/max(current,1e-9)*100
-        proximity=max(0,18-dist*160)
-        strength=min(99,round(48+retests*7+min(recency,10)*2.5+proximity+(10 if in_zone else 0)))
-        if side=="support": status="IN ZONE" if in_zone else "BROKEN" if current<lo else "ACTIVE"
-        else: status="IN ZONE" if in_zone else "BROKEN" if current>hi else "ACTIVE"
-        return {"mid":round(level,4),"low":round(lo,4),"high":round(hi,4),"retests":int(retests),"strength":int(strength),"distance_pct":round(dist,3),"status":status,"quality":"STRONG" if strength>=82 else "GOOD" if strength>=72 else "WEAK"}
-    sup,res=zone(support,"support",sret,srec),zone(resistance,"resistance",rret,rrec)
-    # A signal is allowed only at a strong zone or a clean breakout of a strong zone.
-    bullish_zone=sup["strength"]>=82 and (sup["status"]=="IN ZONE" or current>sup["high"])
-    bearish_zone=res["strength"]>=82 and (res["status"]=="IN ZONE" or current<res["low"])
-    if sup["status"]=="IN ZONE" and sup["strength"]>=82: signal="BUY"
-    elif res["status"]=="IN ZONE" and res["strength"]>=82: signal="SELL"
-    elif current>res["high"] and res["strength"]>=82: signal="BUY"
-    elif current<sup["low"] and sup["strength"]>=82: signal="SELL"
-    else: signal="WAIT"
-    confidence=max(sup["strength"],res["strength"]) if signal!="WAIT" else round((sup["strength"]+res["strength"])/2)
-    pos="ABOVE RESISTANCE" if current>res["high"] else "BELOW SUPPORT" if current<sup["low"] else "NEAR SUPPORT" if current<=sup["mid"] else "NEAR RESISTANCE" if current>=res["mid"] else "BETWEEN ZONES"
-    if signal=="BUY": entry=current; stop_loss=sup["low"]; take_profit=[res["mid"],res["high"]]
-    elif signal=="SELL": entry=current; stop_loss=res["high"]; take_profit=[sup["mid"],sup["low"]]
-    else: entry=current; stop_loss=None; take_profit=[]
-    strongest=max(sup,res,key=lambda z:z["strength"])
-    reason=f"{pos.lower()}; strongest zone {strongest['strength']}% ({strongest['quality']}); Support {sup['strength']}% · Resistance {res['strength']}%."
-    return {"support":sup,"resistance":res,"signal":signal,"confidence":confidence,"position":pos,
-            "entry":round(entry,4),"stop_loss":round(stop_loss,4) if stop_loss is not None else None,
-            "take_profit":[round(v,4) for v in take_profit],
-            "strongest_zone":strongest,"reason":reason,"method":"Strong-zone SNR · clustered swings + retests + proximity + volatility"}
 
 
 def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blocked: bool=False) -> dict[str, Any]:
+    """Legacy quantitative signal shell with NO legacy SNR source.
+
+    Active signal context here is limited to structure, liquidity, OB, FVG, trendline,
+    Fibonacci, momentum and regime. Malaysian SNR lives only inside MSAI Strategy.
+    """
     current=float(candles[-1]["close"])
     avtr=max(atr(candles), current*0.0004)
-    snr=_snr(candles); msnr=_snr_malaysia(candles)
     structure=_structure_state(candles)
     fvg=_detect_fvg(candles)
     ob=_detect_order_block(candles,avtr)
@@ -3290,80 +3259,53 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
     fibonacci=_fibonacci_analysis(candles)
     liq=_detect_liquidity(candles,highs,lows)
     closes=[float(c["close"]) for c in candles]
-    fast=closes[-50:]
-    global_window=closes[-200:] if len(closes)>=200 else closes
-    trend_slope=_linear_slope(fast)
-    global_slope=_linear_slope(global_window)
+    trend_slope=_linear_slope(closes[-50:])
+    global_slope=_linear_slope(closes[-200:] if len(closes)>=200 else closes)
     trend="BULLISH" if trend_slope>0 else "BEARISH" if trend_slope<0 else "NEUTRAL"
     global_trend="BULLISH" if global_slope>0 else "BEARISH" if global_slope<0 else "NEUTRAL"
-    r=rsi(candles); 
-    ict_bias=0
-    reasons=[]
-    # ICT-style confluence (liquidity + displacement/order block + FVG + structure).
-    if liq["type"]=="SELL_SIDE_SWEEP": ict_bias+=2; reasons.append("sell-side liquidity sweep")
-    elif liq["type"]=="BUY_SIDE_SWEEP": ict_bias-=2; reasons.append("buy-side liquidity sweep")
-    if ob["type"]=="BULLISH": ict_bias+=1; reasons.append("bullish order block")
-    elif ob["type"]=="BEARISH": ict_bias-=1; reasons.append("bearish order block")
-    if fvg["type"]=="BULLISH": ict_bias+=1; reasons.append("bullish FVG")
-    elif fvg["type"]=="BEARISH": ict_bias-=1; reasons.append("bearish FVG")
-    if structure["bos"]=="BULLISH": ict_bias+=2; reasons.append("BOS bullish")
-    elif structure["bos"]=="BEARISH": ict_bias-=2; reasons.append("BOS bearish")
-    if structure["choch"]=="BULLISH": ict_bias+=2; reasons.append("CHOCH bullish")
-    elif structure["choch"]=="BEARISH": ict_bias-=2; reasons.append("CHOCH bearish")
-    if structure["internal_structure"]=="BULLISH": ict_bias+=1
-    elif structure["internal_structure"]=="BEARISH": ict_bias-=1
-    score=ict_bias
-    if trend=="BULLISH": score+=2
-    elif trend=="BEARISH": score-=2
-    if global_trend=="BULLISH": score+=2
-    elif global_trend=="BEARISH": score-=2
-    if snr["resistance"]>current and current>snr["support"]:
-        reasons.append("SNR range context")
-    if msnr["resistance"] and msnr["support"] and msnr["support"]<current<msnr["resistance"]:
-        reasons.append("Malaysia SNR range context")
+    r=rsi(candles)
+    score=0; reasons=[]
+    if liq["type"]=="SELL_SIDE_SWEEP": score+=2; reasons.append("sell-side liquidity sweep")
+    elif liq["type"]=="BUY_SIDE_SWEEP": score-=2; reasons.append("buy-side liquidity sweep")
+    if ob["type"]=="BULLISH": score+=1; reasons.append("bullish order block")
+    elif ob["type"]=="BEARISH": score-=1; reasons.append("bearish order block")
+    if fvg["type"]=="BULLISH": score+=1; reasons.append("bullish FVG")
+    elif fvg["type"]=="BEARISH": score-=1; reasons.append("bearish FVG")
+    if structure["bos"]=="BULLISH": score+=2; reasons.append("BOS bullish")
+    elif structure["bos"]=="BEARISH": score-=2; reasons.append("BOS bearish")
+    if structure["choch"]=="BULLISH": score+=2; reasons.append("CHOCH bullish")
+    elif structure["choch"]=="BEARISH": score-=2; reasons.append("CHOCH bearish")
+    if structure["internal_structure"]=="BULLISH": score+=1
+    elif structure["internal_structure"]=="BEARISH": score-=1
+    if trend=="BULLISH": score+=2; reasons.append("local trend bullish")
+    elif trend=="BEARISH": score-=2; reasons.append("local trend bearish")
+    if global_trend=="BULLISH": score+=2; reasons.append("global trend bullish")
+    elif global_trend=="BEARISH": score-=2; reasons.append("global trend bearish")
     if r>=55: score+=1
     elif r<=45: score-=1
-    # Explicit SNR breakout bonus/penalty.
-    if current>snr["resistance"]: score+=2; reasons.append("SNR resistance breakout")
-    elif current<snr["support"]: score-=2; reasons.append("SNR support breakdown")
-    if msnr["resistance"] and current>msnr["resistance"]: score+=1; reasons.append("Malaysia SNR resistance break")
-    elif msnr["support"] and current<msnr["support"]: score-=1; reasons.append("Malaysia SNR support break")
-    if trendline.get("trend")=="BULLISH": score+=2; reasons.append("bullish support trend line")
-    elif trendline.get("trend")=="BEARISH": score-=2; reasons.append("bearish resistance trend line")
+    if trendline.get("trend")=="BULLISH": score+=2; reasons.append("bullish trend line")
+    elif trendline.get("trend")=="BEARISH": score-=2; reasons.append("bearish trend line")
     if trendline.get("signal")=="BUY": score+=1; reasons.append("trend line buy confirmation")
     elif trendline.get("signal")=="SELL": score-=1; reasons.append("trend line sell confirmation")
-
-    zone_gate=_snr_zone_analysis(candles)
-    strong_buy_zone=zone_gate["support"]["strength"]>=82 and (zone_gate["support"]["status"]=="IN ZONE" or zone_gate["support"]["distance_pct"]<=0.9)
-    strong_sell_zone=zone_gate["resistance"]["strength"]>=82 and (zone_gate["resistance"]["status"]=="IN ZONE" or zone_gate["resistance"]["distance_pct"]<=0.9)
-    confidence=min(99,max(35,50+abs(score)*5 + (8 if (strong_buy_zone or strong_sell_zone) else 0)))
-    direction="BUY" if score>=8 else "SELL" if score<=-8 else "WAIT"
-    if direction=="BUY" and not strong_buy_zone: direction="WAIT"; reasons.append("WAIT: no strong support entry zone")
-    if direction=="SELL" and not strong_sell_zone: direction="WAIT"; reasons.append("WAIT: no strong resistance entry zone")
-    if direction=="BUY" and r < 55: direction="WAIT"; reasons.append("WAIT: RSI not supportive for BUY")
-    if direction=="SELL" and r > 45: direction="WAIT"; reasons.append("WAIT: RSI not supportive for SELL")
-    if direction=="BUY" and trend!="BULLISH": direction="WAIT"; reasons.append("WAIT: local trend not bullish")
-    if direction=="SELL" and trend!="BEARISH": direction="WAIT"; reasons.append("WAIT: local trend not bearish")
-    if direction=="BUY" and global_trend!="BULLISH": direction="WAIT"; reasons.append("WAIT: global trend not bullish")
-    if direction=="SELL" and global_trend!="BEARISH": direction="WAIT"; reasons.append("WAIT: global trend not bearish")
-    if direction=="BUY" and trendline.get("trend")=="BEARISH": direction="WAIT"; reasons.append("WAIT: trend line bearish filter")
-    if direction=="SELL" and trendline.get("trend")=="BULLISH": direction="WAIT"; reasons.append("WAIT: trend line bullish filter")
-    if direction=="BUY" and fibonacci.get("direction")=="BEARISH": direction="WAIT"; reasons.append("WAIT: Fibonacci bearish structure")
-    if direction=="SELL" and fibonacci.get("direction")=="BULLISH": direction="WAIT"; reasons.append("WAIT: Fibonacci bullish structure")
-    if trendline.get("trend_power",0) >= 80 and trendline.get("signal") not in {"BUY","SELL"} and direction in {"BUY","SELL"}:
-        if direction=="BUY" and trendline.get("trend")!="BULLISH": direction="WAIT"
-        if direction=="SELL" and trendline.get("trend")!="BEARISH": direction="WAIT"
-    if news_blocked: direction="WAIT"
+    direction="BUY" if score>=7 else "SELL" if score<=-7 else "WAIT"
+    if direction=="BUY" and trend!="BULLISH": direction="WAIT"; reasons.append("WAIT: local trend conflict")
+    if direction=="SELL" and trend!="BEARISH": direction="WAIT"; reasons.append("WAIT: local trend conflict")
+    if direction=="BUY" and global_trend!="BULLISH": direction="WAIT"; reasons.append("WAIT: global trend conflict")
+    if direction=="SELL" and global_trend!="BEARISH": direction="WAIT"; reasons.append("WAIT: global trend conflict")
+    if direction=="BUY" and trendline.get("trend")=="BEARISH": direction="WAIT"; reasons.append("WAIT: trend line conflict")
+    if direction=="SELL" and trendline.get("trend")=="BULLISH": direction="WAIT"; reasons.append("WAIT: trend line conflict")
+    if direction=="BUY" and fibonacci.get("direction")=="BEARISH": direction="WAIT"; reasons.append("WAIT: Fibonacci conflict")
+    if direction=="SELL" and fibonacci.get("direction")=="BULLISH": direction="WAIT"; reasons.append("WAIT: Fibonacci conflict")
+    if news_blocked: direction="WAIT"; reasons.append("WAIT: news blackout")
     entry=current
     swing_low=structure["swing_low"]; swing_high=structure["swing_high"]
     if direction=="BUY":
         sl=min(swing_low, current-avtr*1.2); risk=max(entry-sl,avtr*0.6); tp=[entry+risk*1.5,entry+risk*2.5]
     elif direction=="SELL":
         sl=max(swing_high, current+avtr*1.2); risk=max(sl-entry,avtr*0.6); tp=[entry-risk*1.5,entry-risk*2.5]
-    else:
-        sl=None; tp=[]
-    rr = (abs((tp[0]-entry)/(entry-sl)) if direction=="BUY" and sl is not None and tp else abs((entry-tp[0])/(sl-entry)) if direction=="SELL" and sl is not None and tp else 0.0)
-    confirmations = sum([
+    else: sl=None; tp=[]
+    rr=(abs((tp[0]-entry)/(entry-sl)) if direction=="BUY" and sl is not None else abs((entry-tp[0])/(sl-entry)) if direction=="SELL" and sl is not None else 0.0)
+    confirmations=sum([
         1 if (direction=="BUY" and liq["type"]=="SELL_SIDE_SWEEP") or (direction=="SELL" and liq["type"]=="BUY_SIDE_SWEEP") else 0,
         1 if (direction=="BUY" and ob["type"]=="BULLISH") or (direction=="SELL" and ob["type"]=="BEARISH") else 0,
         1 if (direction=="BUY" and fvg["type"]=="BULLISH") or (direction=="SELL" and fvg["type"]=="BEARISH") else 0,
@@ -3373,25 +3315,21 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
         1 if (direction=="BUY" and trendline.get("trend")=="BULLISH") or (direction=="SELL" and trendline.get("trend")=="BEARISH") else 0,
         1 if (direction=="BUY" and trendline.get("signal")=="BUY") or (direction=="SELL" and trendline.get("signal")=="SELL") else 0,
     ]) if direction!="WAIT" else 0
-    setup="ULTRA_CONFLUENCE" if direction!="WAIT" and confirmations>=5 and rr>=1.5 else ("ICT+SNR+CONFLUENCE" if direction!="WAIT" else ("NEWS_BLACKOUT" if news_blocked else "WAIT_CONFLUENCE"))
-    quality="A+" if direction!="WAIT" and confidence>=90 and max(zone_gate["support"]["strength"],zone_gate["resistance"]["strength"])>=88 and confirmations>=5 and rr>=1.5 else "A" if direction!="WAIT" else "WAIT"
-    result = {
+    confidence=min(99,max(35,50+abs(score)*5+confirmations*3))
+    setup="ULTRA_CONFLUENCE" if direction!="WAIT" and confirmations>=5 and rr>=1.5 else ("CONFLUENCE" if direction!="WAIT" else "WAIT_CONFLUENCE")
+    quality="A+" if direction!="WAIT" and confidence>=90 and confirmations>=5 and rr>=1.5 else "A" if direction!="WAIT" else "WAIT"
+    result={
         "interval":interval,"signal":direction,"entry":round(entry,4),"stop_loss":round(sl,4) if sl is not None else None,
         "take_profit":[round(x,4) for x in tp],"confidence":confidence,"score":score,"setup":setup,
-        "components":{"ICT":ict_bias,"SNR":snr,"Strong SNR Zone":zone_gate,"SNR Malaysia":msnr,"Order Block":ob,"FVG":fvg,"Liquidity":liq,
-                       "Trend Line":trendline,"Fibonacci":fibonacci,"Trend":trend,"Global Trend Line":global_trend,"BOS":structure["bos"],"CHOCH":structure["choch"],"Internal Structure":structure["internal_structure"]},
-        "trendline":trendline,
-        "fibonacci":fibonacci,
-        "zone_quality":max(zone_gate["support"]["strength"],zone_gate["resistance"]["strength"]),
-        "entry_zone":zone_gate["strongest_zone"],
-        "risk_reward":round(rr,2),
-        "confirmations":confirmations,
-        "quality_grade":quality,
-        "reason":("; ".join(dict.fromkeys(reasons)) or "No strong confluence") + ("; news blackout active" if news_blocked else ""),
+        "components":{"ICT":structure["internal_structure"],"Order Block":ob,"FVG":fvg,"Liquidity":liq,
+                       "Trend Line":trendline,"Fibonacci":fibonacci,"Trend":trend,"Global Trend Line":global_trend,
+                       "BOS":structure["bos"],"CHOCH":structure["choch"],"Internal Structure":structure["internal_structure"]},
+        "trendline":trendline,"fibonacci":fibonacci,"risk_reward":round(rr,2),"confirmations":confirmations,"quality_grade":quality,
+        "reason":"; ".join(dict.fromkeys(reasons)) or "No strong confluence",
         "rsi":round(r,2),"atr":round(avtr,4),"current_price":round(current,4),
         "evaluated_at":datetime.now(timezone.utc).isoformat()
     }
-    return _enhance_strategy_result(result, candles, interval)
+    return result
 
 
 async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[str, Any]:
@@ -3403,7 +3341,7 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
             analysis_candles=candles_data
             item=build_advanced_signal(analysis_candles,tf,news_blocked=news_blocked)
             candle_time=analysis_candles[-1].get("time")
-            ai=await ai_validate_module_signal("Signal Lab",symbol,tf,candle_time,item)
+            ai=await ai_validate_module_signal("Signal Engine",symbol,tf,candle_time,item)
             item=merge_ai_validation(item,ai)
             # Shared AI validation assists every strategy component, but never gates AutoTrade.
             for _component in (item.get("components") or {}).values():
@@ -3426,105 +3364,6 @@ async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[
     return {"symbol":clean_symbol(symbol),"timeframes":{tf:data for tf,data in pairs},
             "generated_at":datetime.now(timezone.utc).isoformat()}
 
-
-
-
-async def book_openai_second_opinion(symbol: str, interval: str) -> dict[str, Any]:
-    """Book-pattern result + OpenAI second opinion using the same live candle feed.
-
-    OpenAI is intentionally called even when Book currently says WAIT, so the UI
-    can show the independent second opinion. To prevent 429 bursts, the result is
-    cached per symbol/timeframe/candle and concurrent requests are coalesced.
-    """
-    symbol = clean_symbol(symbol)
-    interval = validate_interval(interval)
-    candles_data, mode, warning = await get_candles(symbol, interval, 220)
-    if len(candles_data) < 40:
-        raise MarketDataError(f"{interval} uchun kitob pattern analizi uchun yetarli candle mavjud emas")
-
-    book = book_signal(candles_data)
-    last_candle_time = candles_data[-1].get("time")
-    cache_key = f"{symbol}|{interval}"
-
-    async with BOOK_OPENAI_LOCKS_GUARD:
-        lock = BOOK_OPENAI_LOCKS.setdefault(cache_key, asyncio.Lock())
-
-    async with lock:
-        now = datetime.now(timezone.utc).timestamp()
-        cached = BOOK_OPENAI_CACHE.get(cache_key)
-        if cached:
-            cached_at, cached_candle_time, cached_ai = cached
-            # Reuse the exact same AI result while the current candle is unchanged.
-            if cached_candle_time == last_candle_time and now - cached_at < BOOK_OPENAI_CACHE_TTL:
-                ai = dict(cached_ai)
-            else:
-                ai = None
-        else:
-            ai = None
-
-        context = {
-            "symbol": symbol,
-            "timeframe": interval,
-            "current_price": candles_data[-1]["close"],
-            "book_signal": book["signal"],
-            "book_reason": book["reason"],
-            "book_patterns": book["patterns"],
-            "recent_candles": candles_data[-80:],
-            "rule": "Validate ONLY the supplied SIMPLE TRADING Book pattern result and supplied OHLC candles. You may return BUY, SELL or WAIT. Do not invent ICT, FVG, order blocks, liquidity, RSI, MACD, or other strategies.",
-        }
-
-        if ai is None:
-            ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI unavailable.", "mode": "fallback"}
-            if any((GROQ_API_KEY, GEMINI_API_KEY, OPENROUTER_API_KEY, MISTRAL_API_KEY, CEREBRAS_API_KEY, CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN, DEEPSEEK_API_KEY, OPENAI_API_KEY)):
-                try:
-                    prompt = (
-                        "You are the second-opinion validator for XAU/USD. "
-                        "Use ONLY the supplied SIMPLE TRADING Book pattern result and recent OHLC candles. "
-                        "Even if the Book signal is WAIT, still evaluate the supplied Book patterns and candles and return your own second opinion as BUY, SELL, or WAIT. "
-                        "Do not add ICT, FVG, order blocks, liquidity, RSI, MACD, or any other strategy. "
-                        "Return JSON only with keys signal (BUY/SELL/WAIT), confidence (0-100 integer), reason (short). "
-                        "Do not invent price data.\n\n" +
-                        json.dumps(context, ensure_ascii=False, default=str)
-                    )
-                    text, ai_provider = await ai_json_completion(prompt)
-                    if text:
-                        try:
-                            parsed = json.loads(text)
-                            sig = str(parsed.get("signal", "WAIT")).upper()
-                            ai = {
-                                "signal": sig if sig in {"BUY", "SELL", "WAIT"} else "WAIT",
-                                "confidence": max(0, min(100, int(parsed.get("confidence", 0)))),
-                                "reason": str(parsed.get("reason", "OpenAI second opinion.")),
-                                "mode": ai_provider,
-                            }
-                        except Exception:
-                            ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI returned an invalid structured result.", "mode": ai_provider}
-                except Exception as exc:
-                    msg = str(exc)
-                    if "429" in msg or "rate limit" in msg.lower():
-                        ai = {"signal": "WAIT", "confidence": 0, "reason": "OpenAI rate limit (429). Natija shu candle uchun cache qilindi; shu candle davomida yangi so‘rov yuborilmaydi va keyingi candle'da qayta tekshiriladi.", "mode": "rate_limited"}
-                    else:
-                        ai = {"signal": "WAIT", "confidence": 0, "reason": f"OpenAI unavailable: {msg}", "mode": "fallback"}
-            BOOK_OPENAI_CACHE[cache_key] = (now, last_candle_time, dict(ai))
-
-    final_signal = book["signal"] if book["signal"] in {"BUY", "SELL"} and ai["signal"] == book["signal"] else "WAIT"
-    price = float(candles_data[-1]["close"])
-    atr_value = max(_atr_local(candles_data), price * 0.0002)
-    if final_signal == "BUY":
-        entry, sl, tp = price, price - 1.2 * atr_value, [price + 2.0 * atr_value, price + 3.0 * atr_value]
-    elif final_signal == "SELL":
-        entry, sl, tp = price, price + 1.2 * atr_value, [price - 2.0 * atr_value, price - 3.0 * atr_value]
-    else:
-        entry, sl, tp = None, None, []
-    return {
-        "ok": True, "symbol": symbol, "interval": interval, "mode": mode, "warning": warning,
-        "current_price": round(price, 4), "book": book, "openai": ai,
-        "signal": final_signal, "entry": round(entry, 4) if entry is not None else None,
-        "stop_loss": round(sl, 4) if sl is not None else None,
-        "take_profit": [round(x, 4) for x in tp],
-        "candle": candles_data[-1], "candles": candles_data,
-        "generated_at": datetime.now(timezone.utc).isoformat(),
-    }
 
 
 
@@ -3577,7 +3416,7 @@ async def build_full_analysis(symbol: str, interval: str) -> dict[str, Any]:
         "support": [levels["s1"], levels["s2"], levels["s3"]],
         "resistance": [levels["r1"], levels["r2"], levels["r3"]],
         "market_regime": _adaptive_regime(candles_data),
-        "strategy_layers": ["MTF context","Structure","Liquidity","SNR","Trendline","Momentum","Volatility","Scenario validation"],
+        "strategy_layers": ["MTF context","Structure","Liquidity","Trendline","Momentum","Volatility","Scenario validation"],
     }
     ai = {"mode":"confirmation-only","summary":"AI faqat Auto Trading signal tasdig‘ida chaqiriladi.","bias":"—","confidence":0,"advice":"Oddiy sahifa/grafik refresh AI request yubormaydi."}
     return {
@@ -3723,19 +3562,6 @@ async def candles_endpoint(symbol: str, interval: str = Query(DEFAULT_INTERVAL),
         raise HTTPException(status_code=503, detail=f"TradingView candles unavailable: {exc}")
 
 
-@app.get("/api/v1/book-openai-analysis/{symbol:path}")
-async def get_book_openai_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    require_admin(authorization, session)
-    try:
-        return await book_openai_second_opinion(clean_symbol(symbol), validate_interval(interval))
-    except Exception as exc:
-        return {"ok": False, "symbol": clean_symbol(symbol), "interval": validate_interval(interval),
-                "signal": "WAIT", "entry": None, "stop_loss": None, "take_profit": [],
-                "book": {"signal": "WAIT", "patterns": [], "reason": str(exc)},
-                "openai": {"signal": "WAIT", "confidence": 0, "reason": str(exc), "mode": "fallback"},
-                "error": str(exc)}
-
-
 @app.get("/api/v1/quote/{symbol:path}")
 async def quote(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
     """Canonical quote from the same TradingView OANDA:XAUUSD chart series."""
@@ -3767,22 +3593,492 @@ async def get_pivots(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> di
                 "timeframes": {}, "errors": {selected: str(exc)},
                 "generated_at": datetime.now(timezone.utc).isoformat()}
 
-@app.get("/api/v1/snr/{symbol:path}")
-async def get_snr(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
-    symbol=clean_symbol(symbol); interval=validate_interval(interval)
+
+async def build_msai_strategy(symbol: str, selected: str) -> dict[str, Any]:
+    """SIGNALX MSAI Strategy v1.0: Malaysian SNR + Price Action + MTF + AI validation.
+
+    The deterministic layer follows the uploaded Malaysian SNR manual's vocabulary:
+    HTF storyline, fresh SNR, wick touch/rejection, liquidity sweep/MISS, engulfing,
+    trendline/SNR confluence, QML/HNS, LTF breakout/retest and roadblock awareness.
+    AI is a confirmation gate, not a replacement for the deterministic price-action rules.
+    """
+    cache_key = f"{clean_symbol(symbol)}|{selected}"
+    now_mono = asyncio.get_running_loop().time()
+    cached = MSAI_CACHE.get(cache_key)
+    if cached and now_mono - cached[0] < MSAI_CACHE_TTL:
+        return cached[1]
+
+    key = clean_symbol(symbol)
+    # The book's storyline uses Weekly as the main direction and Daily/H4/H1 for
+    # confirmation/roadblocks. Weekly is synthesized from the available Daily series.
+    tf_list = ["1min", "5min", "15min", "30min", "1h", "4h", "1day"]
+    raw: dict[str, tuple[list[dict[str, Any]], str, Any]] = {}
+    errors: dict[str, str] = {}
+    for tf in tf_list:
+        try:
+            data = await get_candles(key, tf, 180 if tf != "1min" else 220)
+            raw[tf] = data
+        except Exception as exc:
+            errors[tf] = f"{type(exc).__name__}: {exc}"
+
+    selected_candles = raw.get(selected, ([], "error", None))[0]
+    if len(selected_candles) < 50:
+        raise MarketDataError(f"MSAI uchun {selected} timeframe candle yetarli emas")
+
+    mtf_rows: dict[str, dict[str, Any]] = {}
+    for tf, pack in raw.items():
+        candles = pack[0]
+        if len(candles) >= 20:
+            mtf_rows[tf] = {
+                "trend": direction_from_candles(candles),
+                "price": round(float(candles[-1]["close"]), 5),
+            }
+    daily = raw.get("1day", ([], "error", None))[0]
+    weekly = aggregate_weekly(daily)
+    if weekly:
+        mtf_rows["1week"] = {
+            "trend": direction_from_candles(weekly),
+            "price": round(float(weekly[-1]["close"]), 5),
+        }
+
+    summary_input = {k: v for k, v in mtf_rows.items() if k != "1week"}
+    summary = summarize_mtf(summary_input)
+    weekly_bias = mtf_rows.get("1week", {}).get("trend", "NEUTRAL")
+    daily_bias = mtf_rows.get("1day", {}).get("trend", "NEUTRAL")
+    h4_bias = mtf_rows.get("4h", {}).get("trend", "NEUTRAL")
+    h1_bias = mtf_rows.get("1h", {}).get("trend", "NEUTRAL")
+    # Book-faithful storyline gate: the higher timeframe has to point the same way
+    # as the setup, and a Daily counter-story is treated as a roadblock rather than ignored.
+    direction_bias = summary.get("direction_bias", "NEUTRAL")
+    storyline_alignment = bool(
+        direction_bias in {"BULLISH", "BEARISH"}
+        and weekly_bias in {"NEUTRAL", direction_bias}
+        and daily_bias in {"NEUTRAL", direction_bias}
+    )
+    summary["weekly_trend"] = weekly_bias
+    summary["daily_trend"] = daily_bias
+    summary["h4_trend"] = h4_bias
+    summary["h1_trend"] = h1_bias
+    summary["alignment"] = storyline_alignment
+    summary["direction_bias"] = direction_bias
+
+    # Use the selected timeframe as the local execution chart. The book's 2-TF rule
+    # is applied to the closest lower timeframe when one exists.
+    lower_map = {"1day":"1h", "4h":"30min", "1h":"15min", "30min":"5min", "15min":"5min", "5min":"1min", "1min":"1min"}
+    lower_tf = lower_map.get(selected, "5min")
+    local_mtf = {"direction_bias": direction_bias, "alignment": storyline_alignment}
+    base = analyze_msai(selected_candles, local_mtf, selected)
+    base["storyline"] = summary
+    base["mtf_timeframes"] = mtf_rows
+
+    lower_candles = raw.get(lower_tf, ([], "error", None))[0]
+    two_tf = {"timeframe": lower_tf, "valid": False, "engulfing": {}, "breakout": {}, "retest": False}
+    if len(lower_candles) >= 40 and base.get("raw_direction") in {"BUY", "SELL"}:
+        from msai_strategy import lower_timeframe_confirmation
+        two_tf = lower_timeframe_confirmation(lower_candles, base["raw_direction"])
+    base["two_tf_confirmation"] = two_tf
+
+    # If the book-style lower-timeframe confirmation is not available, keep the setup in WAIT.
+    if base.get("raw_direction") in {"BUY", "SELL"}:
+        base["checks"]["two_tf_confirmation"] = bool(two_tf.get("valid"))
+        if not two_tf.get("valid"):
+            base["signal"] = "WAIT"
+            base["state"] = "WAIT_2TF_CONFIRMATION"
+            base["setup"] = "WAIT_2TF_CONFIRMATION"
+            base["reason"] = (base.get("reason", "") + "; 2-TF confirmation missing").strip("; ")
+
+    # Hard risk/geometry gate. The book illustrates risk/reward examples; SignalX uses
+    # RR >= 1.5 as an implementation threshold, not as a claim that the book specifies 1.5.
+    if base.get("signal") in {"BUY", "SELL"} and float(base.get("risk_reward") or 0) < 1.5:
+        base["signal"] = "WAIT"
+        base["state"] = "WAIT_RR"
+        base["setup"] = "WAIT_RR"
+        base["reason"] = (base.get("reason", "") + "; RR below SignalX minimum 1.5").strip("; ")
+
+    # AI gate: one structured second-opinion call per symbol/timeframe/candle.
+    candle_time = selected_candles[-1].get("time")
+    ai_key = f"{key}|{selected}"
+    async with MSAI_AI_LOCKS_GUARD:
+        ai_lock = MSAI_AI_LOCKS.setdefault(ai_key, asyncio.Lock())
+    async with ai_lock:
+        ai_now = datetime.now(timezone.utc).timestamp()
+        cached_ai = MSAI_AI_CACHE.get(ai_key)
+        if cached_ai and cached_ai[1] == candle_time:
+            ai = dict(cached_ai[2])
+        else:
+            ai = {"signal":"WAIT", "confidence":0, "validation":False,
+                  "provider":None, "mode":"unavailable", "reason":"AI provider unavailable; no signal emitted."}
+            ai_context = {
+                "symbol": key,
+                "timeframe": selected,
+                "current_price": selected_candles[-1].get("close"),
+                "deterministic_signal": base.get("raw_direction", "WAIT"),
+                "deterministic_score": base.get("score", 0),
+                "deterministic_state": base.get("state"),
+                "checks": base.get("checks", {}),
+                "snr": base.get("snr", {}),
+                "rejection": base.get("rejection", {}),
+                "liquidity": base.get("liquidity", {}),
+                "engulfing": base.get("engulfing", {}),
+                "trendline": base.get("trendline", {}),
+                "qml_hns": base.get("qml_hns", {}),
+                "breakout": base.get("breakout", {}),
+                "two_tf_confirmation": two_tf,
+                "storyline": summary,
+                "rule": "Use only the supplied Malaysian SNR/Price Action framework. Validate, do not invent. No ICT/FVG/OB/RSI/MACD. Return WAIT when validation is incomplete or context conflicts.",
+            }
+            try:
+                prompt = (
+                    "You are the AI validation layer for SIGNALX — MSAI STRATEGY v1.0. "
+                    "The strategy is derived from the supplied Malaysian SNR trading manual. "
+                    "Return JSON only with keys: signal (BUY/SELL/WAIT), confidence (0-100), "
+                    "validation (true/false), reason (short), risk_flags (array), provider_note (short). "
+                    "Use ONLY the deterministic fields and price-action context supplied below. "
+                    "Do not invent market data and do not add ICT, FVG, Order Blocks, RSI, MACD or unrelated strategies. "
+                    "Hard rules: no valid wick rejection = WAIT; no MTF/storyline agreement = WAIT; no 2-TF confirmation = WAIT; "
+                    "false/conflicting breakout = WAIT. AI must confirm the deterministic direction, never override a hard WAIT.\n\n" +
+                    json.dumps(ai_context, ensure_ascii=False, default=str)
+                )
+                text, provider = await ai_json_completion(prompt)
+                parsed = json.loads(text)
+                sig = str(parsed.get("signal", "WAIT")).upper()
+                ai = {
+                    "signal": sig if sig in {"BUY", "SELL", "WAIT"} else "WAIT",
+                    "confidence": max(0, min(100, int(parsed.get("confidence", 0)))),
+                    "validation": bool(parsed.get("validation", False)),
+                    "provider": provider,
+                    "mode": "live_ai",
+                    "reason": str(parsed.get("reason", "AI validation returned no reason.")),
+                    "risk_flags": parsed.get("risk_flags") if isinstance(parsed.get("risk_flags"), list) else [],
+                    "provider_note": str(parsed.get("provider_note", "")),
+                }
+            except Exception as exc:
+                ai["reason"] = f"AI unavailable: {str(exc)}"
+            MSAI_AI_CACHE[ai_key] = (ai_now, candle_time, dict(ai))
+
+    deterministic_ready = bool(base.get("signal") in {"BUY", "SELL"})
+    ai_ready = bool(ai.get("validation") and ai.get("signal") == base.get("raw_direction") and int(ai.get("confidence", 0)) >= 65)
+    final_signal = base.get("raw_direction") if deterministic_ready and ai_ready else "WAIT"
+    if final_signal in {"BUY", "SELL"}:
+        base["signal"] = final_signal
+        base["state"] = "AI_CONFIRMED"
+        base["setup"] = "MSAI_AI_CONFIRMED"
+    else:
+        base["signal"] = "WAIT"
+        if deterministic_ready:
+            base["state"] = "WAIT_AI_VALIDATION"
+            base["setup"] = "WAIT_AI_VALIDATION"
+        if "NO VALIDATION" not in str(base.get("reason", "")):
+            base["reason"] = (base.get("reason", "") + "; AI validation not confirmed").strip("; ")
+        base["entry"] = None
+        base["stop_loss"] = None
+        base["take_profit"] = []
+
+    base["ai"] = ai
+    base["ai_gate"] = {"required": True, "passed": ai_ready}
+    base["strategy_engine"] = "SIGNALX — MSAI STRATEGY v1.0"
+    base["strategy_source"] = "Trading SNR the Malaysian Way + AI validation"
+    base["session_context"] = (await market_sessions()).get("sessions", [])
+    base["lower_timeframe"] = lower_tf
+    base["errors"] = errors
+    base["generated_at"] = datetime.now(timezone.utc).isoformat()
+    result = {
+        "ok": True,
+        "symbol": key,
+        "selected": selected,
+        "current_price": round(float(selected_candles[-1]["close"]), 5),
+        "candle_time": candle_time,
+        "strategy": base,
+        "generated_at": base["generated_at"],
+    }
+    MSAI_CACHE[cache_key] = (now_mono, result)
+    return result
+
+
+@app.get("/api/v1/msai-strategy/{symbol:path}")
+async def get_msai_strategy(symbol: str, interval: str = Query("5min")) -> dict[str, Any]:
+    selected = validate_interval(interval)
     try:
-        candles,mode,warning=await get_candles(symbol,interval,220)
-        if len(candles)<35: raise MarketDataError("SNR uchun candle yetarli emas")
-        candle_time=candles[-2].get("time") if len(candles)>1 else candles[-1].get("time")
-        snr=_snr_zone_analysis(candles)
-        regime=_adaptive_regime(candles)
-        ai_advisory = await _module_ai_advisory("SNR", symbol, interval, candle_time, snr)
-        snr["ai_validation"] = ai_advisory
-        snr["strategy_engine"]="Adaptive Institutional SNR"
-        snr["market_regime"]=regime
-        snr["strategy_quality"]=max(int(snr.get("confidence") or 0), int(max(snr.get("support",{}).get("strength",0), snr.get("resistance",{}).get("strength",0))))
-        return {"ok":True,"symbol":symbol,"interval":interval,"mode":mode,"warning":warning,"current_price":round(float(candles[-1]["close"]),4),"candle_time":candle_time,"snr":snr,"generated_at":datetime.now(timezone.utc).isoformat()}
-    except Exception as exc: raise HTTPException(status_code=503,detail="SNR unavailable: "+str(exc))
+        return await build_msai_strategy(clean_symbol(symbol), selected)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="MSAI Strategy unavailable: " + str(exc))
+
+
+
+async def build_algo_smc_strategy(symbol: str, selected: str, prefetched: dict[str, tuple[list[dict[str, Any]], str, Any]] | None = None) -> dict[str, Any]:
+    """Algo/SMC strategy based on the uploaded 232-page Algo/SMC book.
+
+    Deterministic layer follows the source concepts: liquidity hierarchy, daily/weekly/HTF
+    cycle, AMD, money transfer, strong/weak highs and lows, premium/discount, fake structure
+    breaks, algo candle, FVG/inefficiency and LTF confirmation. AI is a strict validator and
+    provider-unavailable means WAIT (no deterministic fallback is allowed for this module).
+    """
+    key = clean_symbol(symbol)
+    cache_key = f"{key}|{selected}"
+    now_mono = asyncio.get_running_loop().time()
+    cached = ALGO_SMC_CACHE.get(cache_key)
+    if prefetched is None and cached and now_mono - cached[0] < ALGO_SMC_CACHE_TTL:
+        return cached[1]
+
+    raw = prefetched or {}
+    errors: dict[str, str] = {}
+    async def get_tf(tf: str, limit: int):
+        if tf in raw and raw[tf][0]:
+            return raw[tf]
+        try:
+            return await get_candles(key, tf, limit)
+        except Exception as exc:
+            errors[tf] = f"{type(exc).__name__}: {exc}"
+            return ([], "error", None)
+
+    selected_data, _, _ = await get_tf(selected, 260)
+    daily_data, _, _ = await get_tf("1day", 260)
+    hourly_data, _, _ = await get_tf("1h", 260)
+    h4_data, _, _ = await get_tf("4h", 220)
+    m30_data, _, _ = await get_tf("30min", 220)
+    m15_data, _, _ = await get_tf("15min", 220)
+    m5_data, _, _ = await get_tf("5min", 220)
+
+    def tf_row(name: str, candles: list[dict[str, Any]]) -> dict[str, Any]:
+        if len(candles) < 40:
+            return {"label": name, "trend": "UNAVAILABLE", "bos": "NONE", "choch": "NONE", "available": False}
+        try:
+            from algo_smc_strategy import _structure as _algo_structure
+            st = _algo_structure(candles)
+            return {"label": name, "trend": st.get("trend", "NEUTRAL"), "bos": st.get("bos", "NONE"), "choch": st.get("choch", "NONE"), "available": True}
+        except Exception:
+            return {"label": name, "trend": "UNAVAILABLE", "bos": "NONE", "choch": "NONE", "available": False}
+
+    rows = [
+        tf_row("Daily", daily_data),
+        tf_row("H4", h4_data),
+        tf_row("H1", hourly_data),
+        tf_row("M30", m30_data),
+        tf_row("M15", m15_data),
+        tf_row("M5", m5_data),
+        tf_row(selected.upper(), selected_data) if selected not in {"1day","1h","4h","30min","15min","5min"} else None,
+    ]
+    rows = [r for r in rows if r]
+    bullish = sum(1 for r in rows if r.get("trend") == "BULLISH")
+    bearish = sum(1 for r in rows if r.get("trend") == "BEARISH")
+    weekly = __import__("algo_smc_strategy")._aggregate(daily_data, "week") if daily_data else []
+    weekly_trend = __import__("algo_smc_strategy")._direction_from_swings(weekly) if len(weekly) >= 5 else "NEUTRAL"
+    direction_bias = "BULLISH" if weekly_trend == "BULLISH" or bullish > bearish + 1 else "BEARISH" if weekly_trend == "BEARISH" or bearish > bullish + 1 else "NEUTRAL"
+    mtf = {"direction_bias": direction_bias, "alignment": direction_bias in {"BULLISH","BEARISH"}, "rows": rows, "bullish_count": bullish, "bearish_count": bearish, "weekly_trend": weekly_trend}
+
+    base = analyze_algo_smc(selected_data, daily_data, hourly_data, mtf, selected)
+    if not selected_data:
+        base["signal"] = "WAIT"
+    candle_time = selected_data[-1].get("time") if selected_data else None
+
+    ai = {"mode": "unavailable", "signal": "WAIT", "confidence": 0, "agreement": 0, "validation": False, "risk_flags": ["AI provider unavailable"], "reasoning": "Strict AI validation is required for Algo/SMC."}
+    if base.get("signal") in {"BUY", "SELL"} and base.get("state") == "READY_FOR_AI":
+        try:
+            ai = await ai_validate_module_signal("Algo/SMC", key, selected, candle_time, base)
+        except Exception as exc:
+            ai = {"mode": "unavailable", "signal": "WAIT", "confidence": 0, "agreement": 0, "validation": False, "risk_flags": ["AI validation exception"], "reasoning": str(exc)[:300]}
+
+    ai_passed = bool(ai.get("validation") and ai.get("signal") == base.get("raw_direction") and int(ai.get("confidence", 0)) >= 85 and int(ai.get("agreement", 0)) >= 70)
+    deterministic_ready = base.get("signal") in {"BUY", "SELL"} and base.get("state") == "READY_FOR_AI"
+    if deterministic_ready and ai_passed:
+        base["signal"] = base.get("raw_direction")
+        base["state"] = "AI_CONFIRMED"
+        base["setup"] = "ALGO_SMC_AI_CONFIRMED"
+    else:
+        if deterministic_ready:
+            base["state"] = "WAIT_AI_VALIDATION"
+        base["signal"] = "WAIT"
+        base["entry"] = None
+        base["stop_loss"] = None
+        base["take_profit"] = []
+        if "AI validation" not in str(base.get("reason", "")):
+            base["reason"] = (base.get("reason", "") + " · AI validation required").strip(" ·")
+
+    base["ai"] = ai
+    base["ai_gate"] = {"required": True, "passed": ai_passed, "minimum_confidence": 85, "minimum_agreement": 70, "strict": True}
+    base["mtf"] = mtf
+    base["errors"] = errors
+    base["session_context"] = (await market_sessions()).get("sessions", [])
+    base["strategy_engine"] = "SIGNALX — ALGO/SMC + AI"
+    base["strategy_version"] = "V1.0"
+    base["strategy_source"] = "232-page Algo concept / SMC book + strict AI validation"
+    base["candle_time"] = candle_time
+    base["generated_at"] = datetime.now(timezone.utc).isoformat()
+    result = {"ok": True, "symbol": key, "selected": selected, "current_price": base.get("current_price"), "candle_time": candle_time, "strategy": base, "generated_at": base["generated_at"]}
+    if prefetched is None:
+        ALGO_SMC_CACHE[cache_key] = (now_mono, result)
+    return result
+
+
+@app.get("/api/v1/algo-smc/{symbol:path}")
+async def get_algo_smc(symbol: str, interval: str = Query("5min")) -> dict[str, Any]:
+    selected = validate_interval(interval)
+    try:
+        return await build_algo_smc_strategy(clean_symbol(symbol), selected)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Algo/SMC unavailable: " + str(exc))
+
+
+async def build_smc_strategy(symbol: str, selected: str) -> dict[str, Any]:
+    """SIGNALX SMC strategy derived from the uploaded 33-page SMC manual.
+
+    Deterministic layer: structure (BOS/CHoCH), liquidity (EQH/EQL/sweeps),
+    POI (Order Block/FVG), IDM, MTF context and LTF entry modules. AI only validates.
+    """
+    cache_key = f"{clean_symbol(symbol)}|{selected}"
+    now_mono = asyncio.get_running_loop().time()
+    cached = SMC_CACHE.get(cache_key)
+    if cached and now_mono - cached[0] < SMC_CACHE_TTL:
+        return cached[1]
+
+    key = clean_symbol(symbol)
+    tf_list = ["1min", "5min", "15min", "30min", "1h", "4h", "1day"]
+    raw: dict[str, tuple[list[dict[str, Any]], str, Any]] = {}
+    errors: dict[str, str] = {}
+    for tf in tf_list:
+        try:
+            raw[tf] = await get_candles(key, tf, 220 if tf in {"1min", "5min"} else 180)
+        except Exception as exc:
+            errors[tf] = f"{type(exc).__name__}: {exc}"
+
+    selected_candles = raw.get(selected, ([], "error", None))[0]
+    if len(selected_candles) < 60:
+        raise MarketDataError(f"SMC uchun {selected} timeframe candle yetarli emas")
+
+    mtf_rows: dict[str, dict[str, Any]] = {}
+    for tf, pack in raw.items():
+        candles = pack[0]
+        if len(candles) >= 60:
+            local = analyze_smc(candles, {"direction_bias": "NEUTRAL", "alignment": False}, tf)
+            mtf_rows[tf] = {
+                "trend": local.get("structure", {}).get("trend", "NEUTRAL"),
+                "bos": local.get("structure", {}).get("bos"),
+                "choch": local.get("structure", {}).get("choch"),
+                "price": round(float(candles[-1]["close"]), 5),
+            }
+    daily = raw.get("1day", ([], "error", None))[0]
+    weekly = aggregate_weekly(daily)
+    if weekly and len(weekly) >= 8:
+        mtf_rows["1week"] = {"trend": direction_from_candles(weekly), "price": round(float(weekly[-1]["close"]), 5)}
+
+    smc_mtf = summarize_smc_mtf(mtf_rows)
+    direction_bias = smc_mtf.get("direction_bias", "NEUTRAL")
+    base = analyze_smc(selected_candles, {"direction_bias": direction_bias, "alignment": bool(smc_mtf.get("alignment"))}, selected)
+    base["mtf"] = smc_mtf
+    base["mtf_timeframes"] = mtf_rows
+    base["errors"] = errors
+
+    # Manual examples use HTF→LTF refinement such as M15→M1 and H1→M5.
+    lower_map = {"1day":"1h", "4h":"15min", "1h":"5min", "30min":"5min", "15min":"1min", "5min":"1min", "1min":"1min"}
+    lower_tf = lower_map.get(selected, "1min")
+    lower_candles = raw.get(lower_tf, ([], "error", None))[0]
+    ltf = {"timeframe": lower_tf, "signal": "WAIT", "valid": False, "modules": {}, "structure": {}}
+    raw_direction = base.get("raw_direction", "WAIT")
+    if len(lower_candles) >= 60 and raw_direction in {"BUY", "SELL"}:
+        lower = analyze_smc(lower_candles, {"direction_bias": "BULLISH" if raw_direction == "BUY" else "BEARISH", "alignment": True}, lower_tf)
+        ltf = {
+            "timeframe": lower_tf,
+            "signal": lower.get("signal", "WAIT"),
+            "valid": bool(lower.get("raw_direction") == raw_direction and (lower.get("checks", {}).get("structure_bos_choch") or lower.get("checks", {}).get("entry_module"))),
+            "modules": lower.get("entry_modules", {}),
+            "structure": lower.get("structure", {}),
+            "score": lower.get("score", 0),
+        }
+    base["ltf_confirmation"] = ltf
+
+    checks = dict(base.get("checks") or {})
+    checks["ltf_confirmation"] = bool(ltf.get("valid"))
+    checks["mtf_alignment"] = bool(smc_mtf.get("alignment")) and raw_direction == direction_bias
+    base["checks"] = checks
+
+    candle_time = selected_candles[-1].get("time")
+    ai_key = f"{key}|{selected}"
+    async with SMC_AI_LOCKS_GUARD:
+        ai_lock = SMC_AI_LOCKS.setdefault(ai_key, asyncio.Lock())
+    async with ai_lock:
+        ai_now = datetime.now(timezone.utc).timestamp()
+        cached_ai = SMC_AI_CACHE.get(ai_key)
+        if cached_ai and cached_ai[1] == candle_time:
+            ai = dict(cached_ai[2])
+        else:
+            ai = {"signal":"WAIT", "confidence":0, "validation":False, "provider":None, "mode":"unavailable", "reason":"AI provider unavailable; no signal emitted.", "risk_flags":[]}
+            ai_context = {
+                "symbol": key,
+                "timeframe": selected,
+                "current_price": selected_candles[-1].get("close"),
+                "deterministic_signal": raw_direction,
+                "deterministic_score": base.get("score", 0),
+                "state": base.get("state"),
+                "checks": checks,
+                "structure": base.get("structure", {}),
+                "liquidity": base.get("liquidity", {}),
+                "order_block": base.get("order_block", {}),
+                "fvg": base.get("fvg", {}),
+                "idm": base.get("idm", {}),
+                "entry_modules": base.get("entry_modules", {}),
+                "ltf_confirmation": ltf,
+                "mtf": smc_mtf,
+                "rule": "Use only the supplied Smart Money Concepts manual. Validate, do not invent. Focus on BOS/CHoCH, liquidity, IDM, OB, FVG, POI, MTF and LTF entry modules. Return WAIT when validation is incomplete or direction conflicts.",
+            }
+            try:
+                prompt = (
+                    "You are the AI validation layer for SIGNALX — SMC. The strategy is derived from the supplied Smart Money Concepts manual. "
+                    "Return JSON only with keys: signal (BUY/SELL/WAIT), confidence (0-100), validation (true/false), reason (short), risk_flags (array), provider_note (short). "
+                    "Use ONLY supplied deterministic data. Never invent price levels. Hard rules: no structure/entry module = WAIT; no MTF agreement = WAIT; no LTF confirmation = WAIT; RR below implementation minimum = WAIT; conflicting direction = WAIT. "
+                    "AI confirms/rejects and never overrides a hard WAIT.\n\n" + json.dumps(ai_context, ensure_ascii=False, default=str)
+                )
+                text, provider = await ai_json_completion(prompt)
+                parsed = json.loads(text)
+                sig = str(parsed.get("signal", "WAIT")).upper()
+                ai = {
+                    "signal": sig if sig in {"BUY","SELL","WAIT"} else "WAIT",
+                    "confidence": max(0, min(100, int(parsed.get("confidence", 0)))),
+                    "validation": bool(parsed.get("validation", False)),
+                    "provider": provider,
+                    "mode": "live_ai",
+                    "reason": str(parsed.get("reason", "AI validation returned no reason.")),
+                    "risk_flags": parsed.get("risk_flags") if isinstance(parsed.get("risk_flags"), list) else [],
+                    "provider_note": str(parsed.get("provider_note", "")),
+                }
+            except Exception as exc:
+                ai["reason"] = f"AI unavailable: {str(exc)}"
+            SMC_AI_CACHE[ai_key] = (ai_now, candle_time, dict(ai))
+
+    deterministic_ready = bool(raw_direction in {"BUY","SELL"} and checks.get("structure_bos_choch") and checks.get("entry_module") and checks.get("ltf_confirmation") and checks.get("mtf_alignment") and checks.get("rr_ok"))
+    ai_gate = bool(deterministic_ready and ai.get("validation") and ai.get("signal") == raw_direction and int(ai.get("confidence", 0)) >= 75)
+    base["signal"] = raw_direction if ai_gate else "WAIT"
+    base["ai"] = ai
+    base["ai_gate"] = {"passed": ai_gate, "threshold": 75}
+    if ai_gate:
+        base["state"] = "AI_CONFIRMED"
+        base["setup"] = "SMC_AI_CONFIRMED"
+        base["reason"] = (base.get("reason", "") + "; AI confirmed").strip("; ")
+    else:
+        base["state"] = "WAIT_AI_VALIDATION" if raw_direction in {"BUY","SELL"} else base.get("state", "WAIT")
+        base["setup"] = "WAIT_AI_VALIDATION"
+        base["entry"] = None
+        base["stop_loss"] = None
+        base["take_profit"] = []
+        base["reason"] = (base.get("reason", "") + "; NO VALIDATION, NO TRADE").strip("; ")
+
+    base["strategy_engine"] = "SIGNALX — SMC"
+    base["strategy_source"] = "Smart Money Concepts manual + AI validation"
+    base["source_scope"] = ["BOS/CHoCH", "Liquidity", "IDM", "Order Block", "FVG", "POI", "Session Liquidity", "MTF", "LTF Entry Modules", "Risk Management"]
+    base["lower_timeframe"] = lower_tf
+    base["current_price"] = round(float(selected_candles[-1]["close"]), 5)
+    base["candle_time"] = candle_time
+    base["generated_at"] = datetime.now(timezone.utc).isoformat()
+    SMC_CACHE[cache_key] = (now_mono, base)
+    return base
+
+
+@app.get("/api/v1/smc/{symbol:path}")
+async def get_smc(symbol: str, interval: str = Query("5min")) -> dict[str, Any]:
+    selected = validate_interval(interval)
+    try:
+        return await build_smc_strategy(clean_symbol(symbol), selected)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="SMC unavailable: " + str(exc))
 
 @app.get("/api/v1/classic-trade/{symbol:path}")
 async def get_classic_trade(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[str, Any]:
@@ -3829,11 +4125,13 @@ async def get_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> 
         technical = technical_analysis(candles_data, levels, setup)
         candle_time=candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")
         technical["ai_validation"] = await _module_ai_advisory("Technical Analysis", symbol, interval, candle_time, technical)
+        fib_context = analyze_fibonacci(candles_data, {interval: candles_data})
+        technical["fibonacci"] = fib_context
         return {
             "ok": True, "symbol": symbol, "interval": interval, "mode": "tradingview",
             "provider": "TradingView", "source": tv_symbol_for(symbol),
             "current_price": round(float(candles_data[-1]["close"]), 4),
-            "candles": candles_data, "candle_time": candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time"), "levels": levels, "technical": technical,
+            "candles": candles_data, "candle_time": candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time"), "levels": levels, "technical": technical, "fibonacci": technical.get("fibonacci"),
             "setup": setup, "direction": setup.get("signal", "WAIT"),
             "headline": f"{setup.get('signal','WAIT')} · {setup.get('setup','WAIT')}",
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -4270,19 +4568,391 @@ async def get_ict_signals(symbol: str) -> dict[str, Any]:
                 "ict":{"signal":"WAIT","confidence":0,"score":0,"reason":str(exc)}}
 
 
-@app.get("/api/v1/signals/advanced/{symbol:path}")
-async def advanced_signals(symbol: str, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    require_admin(authorization, session)
+
+
+async def build_fibonacci_strategy(symbol: str, selected: str = "5min") -> dict[str, Any]:
+    """Eight-book Fibonacci/Fibo Musang strategy + strict AI validation."""
     key = clean_symbol(symbol)
-    now = asyncio.get_running_loop().time()
-    cached = ADVANCED_SIGNAL_CACHE.get(key)
-    if cached and now - cached[0] < ADVANCED_CACHE_TTL:
-        return cached[1]
-    # Economic calendar blackout is kept separate from signal calculation here;
-    # the UI must always be able to obtain the latest market-derived signal.
-    result = await build_advanced_signals(key, news_blocked=False)
-    ADVANCED_SIGNAL_CACHE[key] = (now, result)
-    return result
+    selected = validate_interval(selected)
+    raw: dict[str, tuple[list[dict[str, Any]], str, Any]] = {}
+    errors: dict[str, str] = {}
+
+    async def load(tf: str, limit: int = 280):
+        try:
+            raw[tf] = await get_candles(key, tf, limit)
+        except Exception as exc:
+            raw[tf] = ([], "error", None)
+            errors[tf] = f"{type(exc).__name__}: {exc}"
+
+    await asyncio.gather(*(load(tf) for tf in {selected, "1day", "4h", "1h"}))
+    selected_data = raw.get(selected, ([], "error", None))[0]
+    higher = {tf: raw.get(tf, ([], "error", None))[0] for tf in ("1day", "4h", "1h")}
+    if len(selected_data) < 60:
+        return {"ok": False, "symbol": key, "selected": selected, "error": "Fibonacci uchun real candle yetarli emas.",
+                "generated_at": datetime.now(timezone.utc).isoformat()}
+
+    deterministic = analyze_fibonacci(selected_data, higher)
+    candle_time = selected_data[-2].get("time") if len(selected_data) > 1 else selected_data[-1].get("time")
+    ai = await ai_validate_module_signal("Fibonacci", key, selected, candle_time, deterministic)
+    live_ai = str(ai.get("mode") or "") not in {"fallback", "rule_based", "unavailable"}
+    ai_passed = bool(live_ai and ai.get("validation") and
+                     str(ai.get("signal")).upper() == str(deterministic.get("signal")).upper() and
+                     int(ai.get("confidence", 0)) >= 85 and int(ai.get("agreement", 0)) >= 70)
+
+    final = dict(deterministic)
+    final["ai_validation"] = ai
+    final["ai_gate"] = {"required": True, "passed": ai_passed, "minimum_confidence": 85,
+                         "minimum_agreement": 70, "live_ai_required": True}
+    if final.get("signal") in {"BUY", "SELL"} and not ai_passed:
+        final["signal"] = "WAIT"
+        final["entry"] = None
+        final["stop_loss"] = None
+        final["take_profit"] = []
+        final["state"] = "WAIT_AI_VALIDATION"
+        final["reason"] = (str(final.get("reason") or "") + "; AI validation required").strip("; ")
+    else:
+        final["state"] = "AI_CONFIRMED" if final.get("signal") in {"BUY", "SELL"} else final.get("state", "WAIT")
+    final["strategy_engine"] = "SIGNALX — FIBONACCI"
+    final["strategy_version"] = "V1.0"
+    final["strategy_source"] = "8 Fibonacci/Fibo Musang books + deterministic confluence + strict AI validation"
+    final["book_coverage"] = [
+        "25 — Fibo Musang Final BOBI / Home Course",
+        "26 — Fibo Musang Elite: Fibo Setting & Cara Kerja Fibo",
+        "27 — Fibonacci for the Active Trader",
+        "28 — The Advanced Guide to Fibonacci Trading",
+        "29 — Fibonacci Trading: How to Master the Time and Price Advantage",
+        "30 — Fibonachchi Darajalari 2-qism",
+        "31 — Rahsia Fibo Musang 2011–2015",
+        "32 — The Most Powerful Setup of Fibo Musang / 6 Setups",
+    ]
+    final["book_routing"] = [
+        {"books": "25,26,31,32", "module": "Fibonacci / Patterns", "focus": "Fibo Musang, CBR, Initial Break, Dominant Candle, nearest S/R break, 261/423 cycle, reversal patterns"},
+        {"books": "27,28,30", "module": "Fibonacci / Technical Analysis", "focus": "retracement, extension, projection, 50% + Pin Bar, volatility filter, false-signal filter"},
+        {"books": "29", "module": "Fibonacci / MTF", "focus": "price clusters, symmetry, two-step pattern, time-price confluence, active swing selection"},
+        {"books": "27-32", "module": "Trend Line / Trend Channel", "focus": "Fibo + trendline, Fibo + S/R, Fibo cluster + channel boundary confluence"},
+        {"books": "27-32", "module": "Risk Engine", "focus": "swing-based invalidation, extension targets, RR gate, no-trade on extreme volatility / weak context"},
+        {"books": "25-32", "module": "AI Validation", "focus": "pattern does not invent signal; AI validates deterministic evidence"},
+    ]
+    final["current_price"] = round(float(selected_data[-1]["close"]), 5)
+    final["candle_time"] = candle_time
+    final["errors"] = errors
+    final["generated_at"] = datetime.now(timezone.utc).isoformat()
+    return {"ok": True, "symbol": key, "selected": selected, "strategy": final, "generated_at": final["generated_at"]}
+
+
+async def build_trend_channel_strategy(symbol: str, selected: str = "5min") -> dict[str, Any]:
+    """Six-book Trend Channel Engine + strict AI validator."""
+    key = clean_symbol(symbol)
+    selected = validate_interval(selected)
+    raw: dict[str, tuple[list[dict[str, Any]], str, Any]] = {}
+    errors: dict[str, str] = {}
+    async def load(tf: str, limit: int = 260):
+        try:
+            raw[tf] = await get_candles(key, tf, limit)
+        except Exception as exc:
+            errors[tf] = f"{type(exc).__name__}: {exc}"
+            raw[tf] = ([], "error", None)
+    await asyncio.gather(*(load(tf, 280 if tf in {"1day","4h"} else 260) for tf in {selected, "1h", "4h", "1day"}))
+    selected_data = raw.get(selected, ([],"error",None))[0]
+    higher = {tf: raw.get(tf,([],"error",None))[0] for tf in ("1day","4h","1h")}
+    deterministic = analyze_trend_channel(selected_data, higher)
+    fibonacci_context = analyze_fibonacci(selected_data, higher)
+    deterministic["fibonacci_context"] = {
+        "signal": fibonacci_context.get("signal", "WAIT"),
+        "score": fibonacci_context.get("score", 0),
+        "nearest_fibonacci": fibonacci_context.get("nearest_fibonacci"),
+        "fib_cluster": fibonacci_context.get("fib_cluster"),
+        "musang": fibonacci_context.get("musang"),
+        "reason": fibonacci_context.get("reason", ""),
+    }
+    candle_time = selected_data[-2].get("time") if len(selected_data) > 1 else (selected_data[-1].get("time") if selected_data else None)
+    ai = await ai_validate_module_signal("Trend Channel Engine", key, selected, candle_time, deterministic)
+    live_ai = str(ai.get("mode") or "") not in {"fallback", "rule_based", "unavailable"}
+    ai_passed = bool(live_ai and ai.get("validation") and str(ai.get("signal")).upper() == str(deterministic.get("signal")).upper()
+                     and int(ai.get("confidence",0)) >= 85 and int(ai.get("agreement",0)) >= 70)
+    deterministic["ai_validation"] = ai
+    deterministic["ai_gate"] = {"required": True, "passed": ai_passed, "minimum_confidence": 85, "minimum_agreement": 70, "live_ai_required": True}
+    if deterministic.get("signal") in {"BUY","SELL"} and not ai_passed:
+        deterministic["signal"] = "WAIT"
+        deterministic["entry"] = None; deterministic["stop_loss"] = None; deterministic["take_profit"] = []
+        deterministic["state"] = "WAIT_AI_VALIDATION"
+        deterministic["reason"] = (str(deterministic.get("reason") or "") + "; AI validation required").strip("; ")
+    deterministic["strategy_engine"] = "SIGNALX — TREND CHANNEL ENGINE"
+    deterministic["strategy_version"] = "V1.0"
+    deterministic["strategy_source"] = "Six supplied trend/channel/PSAR books + strict AI validation"
+    deterministic["errors"] = errors
+    deterministic["current_price"] = round(float(selected_data[-1]["close"]),5) if selected_data else None
+    deterministic["candle_time"] = candle_time
+    return {"ok": True, "symbol": key, "selected": selected, "strategy": deterministic,
+            "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+async def build_book_fusion_strategy(symbol: str, selected: str = "5min",
+                                    prefetched: dict[str, tuple[list[dict[str, Any]], str, Any]] | None = None) -> dict[str, Any]:
+    """Independent all-book fusion: deterministic multi-engine consensus + one AI validator.
+
+    When the live signal pipeline already has canonical candles, they can be supplied via
+    ``prefetched`` so the fusion engine uses exactly the same chart series without issuing
+    another batch of market-data requests.
+    """
+    key = clean_symbol(symbol); selected = validate_interval(selected)
+    order = list(dict.fromkeys([selected, "1day", "4h", "1h", "30min", "15min", "5min"]))
+    raw: dict[str, tuple[list[dict[str, Any]], str, Any]] = dict(prefetched or {})
+    errors: dict[str,str] = {}
+    missing=[tf for tf in order if tf not in raw]
+    async def load(tf: str):
+        try: raw[tf] = await get_candles(key, tf, 280)
+        except Exception as exc:
+            raw[tf] = ([],"error",None); errors[tf] = f"{type(exc).__name__}: {exc}"
+    if missing:
+        await asyncio.gather(*(load(tf) for tf in missing))
+    selected_data = raw.get(selected,([],"error",None))[0]
+    daily = raw.get("1day",([],"error",None))[0]
+    h4 = raw.get("4h",([],"error",None))[0]
+    h1 = raw.get("1h",([],"error",None))[0]
+    m30 = raw.get("30min",([],"error",None))[0]
+    m5 = raw.get("5min",([],"error",None))[0]
+    if len(selected_data) < 60:
+        return {"ok":False,"symbol":key,"selected":selected,"error":"Yangi Strategiya uchun real candle yetarli emas.","generated_at":datetime.now(timezone.utc).isoformat()}
+
+    weekly = aggregate_weekly(daily)
+    weekly_bias = direction_from_candles(weekly) if len(weekly) >= 5 else "NEUTRAL"
+    htf_rows=[]
+    for tf,c in (("1day",daily),("4h",h4),("1h",h1),("30min",m30),("5min",m5)):
+        if len(c)>=30: htf_rows.append({"timeframe":tf,"trend":direction_from_candles(c),"price":round(float(c[-1]["close"]),5)})
+    bulls=sum(1 for r in htf_rows if r["trend"]=="BULLISH"); bears=sum(1 for r in htf_rows if r["trend"]=="BEARISH")
+    htf_direction = "BULLISH" if bulls>bears else "BEARISH" if bears>bulls else weekly_bias if weekly_bias in {"BULLISH","BEARISH"} else "NEUTRAL"
+    mtf={"direction_bias":htf_direction,"alignment":htf_direction in {"BULLISH","BEARISH"},"rows":htf_rows,"bullish_count":bulls,"bearish_count":bears,"weekly_trend":weekly_bias}
+
+    msai_det = analyze_msai(selected_data, {"direction_bias":htf_direction,"alignment":htf_direction==("BULLISH" if direction_from_candles(selected_data)=="BULLISH" else "BEARISH") if direction_from_candles(selected_data) in {"BULLISH","BEARISH"} else False}, selected)
+    smc_det = analyze_smc(selected_data, mtf, selected)
+    algo_det = analyze_algo_smc(selected_data, daily, h1, mtf, selected)
+    channel_det = analyze_trend_channel(selected_data, {"1day":daily,"4h":h4,"1h":h1})
+    ict_det = build_ict_m30_m5(m30 if len(m30)>=40 else selected_data, m5 if len(m5)>=40 else selected_data)
+
+    fib_det = analyze_fibonacci(selected_data, {"1day":daily, "4h":h4, "1h":h1})
+    components = {
+        "ICT Core": ict_det,
+        "Algo/SMC": algo_det,
+        "SMC": smc_det,
+        "MSAI/SNR": msai_det,
+        "Trend Channel": channel_det,
+        "Fibonacci": fib_det,
+    }
+    weights={"ICT Core":22,"Algo/SMC":18,"SMC":14,"MSAI/SNR":13,"Trend Channel":13,"Fibonacci":20}
+    vote_buy=0.0; vote_sell=0.0
+    rows=[]
+    for name,item in components.items():
+        sig=str(item.get("signal") or item.get("raw_direction") or "WAIT").upper()
+        conf=float(item.get("confidence") or item.get("score") or 0)
+        weighted=round(weights[name]*(max(0,min(100,conf))/100),2)
+        if sig=="BUY": vote_buy += weighted
+        elif sig=="SELL": vote_sell += weighted
+        rows.append({"engine":name,"signal":sig,"confidence":round(conf,1),"weight":weights[name],"weighted_vote":weighted,
+                     "rr":round(float(item.get("risk_reward") or 0),2),"state":item.get("state")})
+    direction = "BUY" if vote_buy>vote_sell and vote_buy-vote_sell>=8 else "SELL" if vote_sell>vote_buy and vote_sell-vote_buy>=8 else "WAIT"
+    candidates=[(name,item) for name,item in components.items() if str(item.get("signal") or item.get("raw_direction") or "WAIT").upper()==direction]
+    best_name,best = max(candidates,key=lambda z:(float(z[1].get("risk_reward") or 0),float(z[1].get("confidence") or z[1].get("score") or 0)),default=(None,{}))
+
+    price=float(selected_data[-1]["close"])
+    if daily:
+        day20=daily[-20:]; day40=daily[-40:]; day60=daily[-60:]
+        liquidity={
+            "previous_daily_high": round(float(daily[-2]["high"]),5) if len(daily)>1 else None,
+            "previous_daily_low": round(float(daily[-2]["low"]),5) if len(daily)>1 else None,
+            "20d_high": round(max(float(c["high"]) for c in day20),5), "20d_low": round(min(float(c["low"]) for c in day20),5),
+            "40d_high": round(max(float(c["high"]) for c in day40),5), "40d_low": round(min(float(c["low"]) for c in day40),5),
+            "60d_high": round(max(float(c["high"]) for c in day60),5), "60d_low": round(min(float(c["low"]) for c in day60),5),
+            "daily_open": round(float(daily[-1]["open"]),5),
+        }
+        q_hi=max(float(c["high"]) for c in daily[-63:]) if len(daily)>=10 else price
+        q_lo=min(float(c["low"]) for c in daily[-63:]) if len(daily)>=10 else price
+        eq=(q_hi+q_lo)/2
+        pd="PREMIUM" if price>eq else "DISCOUNT" if price<eq else "EQUILIBRIUM"
+        macro={"quarter_context": "BULLISH" if price>eq and price>float(daily[-min(30,len(daily))]["close"]) else "BEARISH" if price<eq else "NEUTRAL",
+               "premium_discount":pd,"equilibrium":round(eq,5),"lookback":liquidity,
+               "external_feeds":{"COT":"NOT_CONNECTED","USDX":"NOT_CONNECTED","OPEN_INTEREST":"NOT_CONNECTED","INTEREST_RATES":"NOT_CONNECTED","SEASONALITY":"NOT_CONNECTED"}}
+    else:
+        macro={"quarter_context":"UNAVAILABLE","premium_discount":"UNAVAILABLE","lookback":{},"external_feeds":{}}
+
+    candidate_rr=float(best.get("risk_reward") or 0) if best_name else 0.0
+    mtf_match = direction in {"BUY","SELL"} and (htf_direction==("BULLISH" if direction=="BUY" else "BEARISH") or htf_direction=="NEUTRAL")
+    hard_checks={"consensus_direction":direction!="WAIT","mtf_alignment":mtf_match,"rr_ge_1_50":candidate_rr>=1.50,"best_engine":best_name or "NONE",
+                 "no_conflicting_majority":abs(vote_buy-vote_sell)>=8,"macro_context_available":bool(daily)}
+    deterministic_conf = int(round(min(100,max(vote_buy,vote_sell)))) if direction!="WAIT" else int(round(max(vote_buy,vote_sell)))
+    deterministic={"signal":direction if all([hard_checks["consensus_direction"],hard_checks["mtf_alignment"],hard_checks["rr_ge_1_50"]]) else "WAIT",
+                   "raw_direction":direction,"confidence":deterministic_conf,"score":deterministic_conf,"reason":" · ".join([f"{r['engine']}={r['signal']} {r['confidence']:.0f}%" for r in rows]),
+                   "components":rows,"vote_buy":round(vote_buy,2),"vote_sell":round(vote_sell,2),"mtf":mtf,"macro_context":macro,
+                   "selected_engine":best_name,"entry":best.get("entry") if best_name else None,"stop_loss":best.get("stop_loss") if best_name else None,
+                   "take_profit":best.get("take_profit",[]) if best_name else [],"risk_reward":candidate_rr,"hard_checks":hard_checks,
+                   "book_coverage":[
+                       "01 — Trading SNR the Malaysian Way", "02 — SMC Trading Book", "03 — Algo/SMC 232-page Book",
+                       "04 — Advanced ICT Institutional SMC Trading Book", "05 — ICT Killzones", "06 — ICT Trading Strategy",
+                       "07 — ICT Mentorship Core Content 2016", "08 — September 2016 ICT Study Notes", "09 — October 2016 ICT Study Notes",
+                       "10 — November 2016 ICT Study Notes", "11 — December 2016 ICT Study Notes", "12 — January 2017 Long Term Analysis",
+                       "13 — February 2017 Swing Trading", "14 — April 2017 ICT Daytrading Model", "15 — June 2017 ICT Community Trading Concepts",
+                       "16 — July 2017 ICT Megatrades", "17 — August 2017 ICT Top Down Analysis", "18 — ICT Order Block Final Guide",
+                       "19 — Trendline Savdo Strategiyasi", "20 — Trend chiziqlari", "21 — Trend savdo qilish strategiyasi",
+                       "22 — Trend kanallari", "23 — Parabolic SAR", "24 — M&W Trendline Trading Strategy",
+                       "25 — Fibo Musang Final BOBI / Home Course", "26 — Fibo Musang Elite", "27 — Fibonacci for the Active Trader",
+                       "28 — The Advanced Guide to Fibonacci Trading", "29 — Fibonacci Trading: Time and Price Advantage", "30 — Fibonachchi Darajalari 2-qism",
+                       "31 — Rahsia Fibo Musang 2011–2015", "32 — The Most Powerful Setup of Fibo Musang / 6 Setups"],
+                   "book_routing":[
+                       {"books":"01,08-18","module":"ICT","focus":"liquidity, HTF cycle, macro, killzones, PD arrays, OB/FVG, SMT, COT, OI, day/swing models"},
+                       {"books":"02","module":"SMC","focus":"BOS/CHoCH, liquidity, IDM, POI, OB/FVG, LTF confirmation"},
+                       {"books":"03","module":"Algo/SMC","focus":"AMD, money transfer, strong/weak H/L, fake BMS/FMS, HVI, breaker/rejection, 90M"},
+                       {"books":"01","module":"MSAI","focus":"Malaysian SNR, fresh/unfresh, wick/MISS, engulfing, QML/HNS, storyline"},
+                       {"books":"05-06,18","module":"ICT / Risk","focus":"liquidity sweep, MSS/CHoCH, FVG, OB variants, RR and validation"},
+                       {"books":"19-24","module":"Trend + Trend Channel","focus":"trendline, channel, trend strength, S/R confluence, MTF, MA, PSAR, reversal candles, risk"},
+                       {"books":"25-32","module":"Fibonacci","focus":"Fibo Musang CBR/Initial Break/Dominant Candle/261-423 + retracement/extension/projection + price clusters + time-price confluence + volatility filter + 50% Pin Bar"},
+                   ],
+                   "strategy_engine":"SIGNALX — YANGI STRATEGIYA","strategy_version":"V1.0"}
+    candle_time=selected_data[-2].get("time") if len(selected_data)>1 else selected_data[-1].get("time")
+    ai=await ai_validate_module_signal("Yangi Strategiya",key,selected,candle_time,deterministic)
+    live_ai=str(ai.get("mode") or "") not in {"fallback","rule_based","unavailable"}
+    ai_passed=bool(live_ai and ai.get("validation") and str(ai.get("signal")).upper()==str(deterministic.get("signal")).upper() and int(ai.get("confidence",0))>=85 and int(ai.get("agreement",0))>=70)
+    final=deterministic.copy(); final["ai_validation"]=ai; final["ai_gate"]={"required":True,"passed":ai_passed,"minimum_confidence":85,"minimum_agreement":70,"live_ai_required":True}
+    if final.get("signal") in {"BUY","SELL"} and not ai_passed:
+        final["signal"]="WAIT"; final["entry"]=None; final["stop_loss"]=None; final["take_profit"]=[]; final["state"]="WAIT_AI_VALIDATION"; final["reason"] += "; AI validation required"
+    else: final["state"]="AI_CONFIRMED" if final.get("signal") in {"BUY","SELL"} else "WAIT"
+    final["current_price"]=round(price,5); final["candle_time"]=candle_time; final["errors"]=errors; final["generated_at"]=datetime.now(timezone.utc).isoformat()
+    return {"ok":True,"symbol":key,"selected":selected,"strategy":final,"generated_at":final["generated_at"]}
+
+@app.get("/api/v1/trend-channel/{symbol:path}")
+async def get_trend_channel_strategy(symbol: str, interval: str = Query("5min")) -> dict[str, Any]:
+    try:
+        return await build_trend_channel_strategy(clean_symbol(symbol), validate_interval(interval))
+    except Exception as exc:
+        return {"ok":False,"symbol":clean_symbol(symbol),"error":str(exc),"generated_at":datetime.now(timezone.utc).isoformat()}
+
+@app.get("/api/v1/fibonacci/{symbol:path}")
+async def get_fibonacci_strategy(symbol: str, interval: str = Query("5min")) -> dict[str, Any]:
+    try:
+        return await build_fibonacci_strategy(clean_symbol(symbol), validate_interval(interval))
+    except Exception as exc:
+        return {"ok":False,"symbol":clean_symbol(symbol),"error":str(exc),"generated_at":datetime.now(timezone.utc).isoformat()}
+
+@app.get("/api/v1/new-strategy/{symbol:path}")
+async def get_new_strategy(symbol: str, interval: str = Query("5min")) -> dict[str, Any]:
+    try:
+        return await build_book_fusion_strategy(clean_symbol(symbol), validate_interval(interval))
+    except Exception as exc:
+        return {"ok":False,"symbol":clean_symbol(symbol),"error":str(exc),"generated_at":datetime.now(timezone.utc).isoformat()}
+
+def _pattern_score_band(score: float) -> str:
+    s=float(score or 0)
+    if s >= 93: return "VERY_STRONG"
+    if s >= 85: return "STRONG"
+    if s >= 75: return "NORMAL"
+    if s >= 60: return "WEAK"
+    return "WAIT"
+
+
+def _finalize_pattern_result(raw: dict[str, Any], candles_by_tf: dict[str, list[dict[str, Any]]], interval: str) -> dict[str, Any]:
+    """Turn a deterministic book-style pattern detection into a SignalX pattern candidate.
+
+    Pattern is the trigger. AI is a confirmation/filter. TP2 and RR are informational;
+    the hard execution gate later checks geometry, TP1 validity and independent risk.
+    """
+    out=dict(raw or {})
+    out["source"]="Patterns"
+    out["strategy_engine"]="SignalX Pattern AI Strategy"
+    out["strategy_version"]="P1"
+    best=out.get("best") if isinstance(out.get("best"),dict) else None
+    if not best or out.get("signal") not in {"BUY","SELL"}:
+        out.update({"signal":"WAIT","ai_validation":None,"smart_validation":None,
+                    "pattern_score_band":_pattern_score_band(out.get("confidence",0)),
+                    "auto_trade_ready":False})
+        return out
+    direction=str(out.get("signal")).upper()
+    # Final Pattern score requirements from the strategy spec.
+    raw_score=float(best.get("raw_score") or out.get("confidence") or 0)
+    mtf=best.get("mtf_alignment") if isinstance(best.get("mtf_alignment"),dict) else {}
+    aligned=mtf.get("state")=="ALIGNED"
+    breakout=best.get("breakout") if isinstance(best.get("breakout"),dict) else {}
+    hard_pattern_ok=bool(best.get("pattern_valid")) and bool(breakout.get("confirmed")) and raw_score>=85 and aligned
+    out["confidence"]=int(min(100,max(0,raw_score)))
+    out["pattern_score"]=int(min(100,max(0,raw_score)))
+    out["pattern_score_band"]=_pattern_score_band(raw_score)
+    out["mtf_alignment"]=mtf
+    out["breakout_confirmed"]=bool(breakout.get("confirmed"))
+    out["hard_pattern_ok"]=hard_pattern_ok
+    out["auto_trade_ready"]=False
+    if not hard_pattern_ok:
+        out["signal"]="WAIT"
+        out["reason"]=f"Pattern detected but final gate not passed: score={raw_score:.0f}, MTF={mtf.get('state','MIXED')}, breakout={'YES' if breakout.get('confirmed') else 'NO'}."
+        return out
+    try:
+        live_ai = out.get("ai_validation") or {}
+        ai_signal=str(live_ai.get("signal") or "WAIT").upper()
+        mode=str(live_ai.get("mode") or "fallback")
+        ai_conf=int(live_ai.get("confidence") or 0)
+        ai_agree=int(live_ai.get("agreement") or 0)
+        is_live=mode not in {"fallback","rule_based"}
+        if is_live:
+            ai_ok=(ai_signal==direction and ai_conf>=65 and ai_agree>=55)
+            combined=round(raw_score*0.70 + ai_conf*0.30)
+        else:
+            ai_ok=True
+            combined=round(raw_score)
+        out["ai_consensus"]="CONFIRMED" if ai_ok else "CONFLICT"
+        out["ai_score"]=ai_conf
+        out["agreement"]=ai_agree
+        out["final_score"]=int(min(100,max(0,combined)))
+        out["signal"]=direction if ai_ok else "WAIT"
+        out["auto_trade_ready"]=bool(ai_ok)
+        out["reason"]=f"{best.get('name')} confirmed by breakout + MTF alignment; AI {'confirmed' if ai_ok else 'rejected'} the setup."
+    except Exception:
+        out["signal"]="WAIT"
+        out["auto_trade_ready"]=False
+    return out
+
+
+async def build_pattern_signals(symbol: str, selected_interval: str = "5min", include_ai_for_selected: bool = True) -> dict[str, Any]:
+    """Book-pattern engine on canonical live candles, with optional AI validation for the selected TF."""
+    symbol=clean_symbol(symbol)
+    selected_interval=validate_interval(selected_interval)
+    order=["1min","5min","15min","30min","1h","4h","1day"]
+    live_by_tf: dict[str,list[dict[str,Any]]] = {}
+    async def load(tf: str):
+        try:
+            c,_,_=await get_candles(symbol,tf,260)
+            live_by_tf[tf]=c
+        except Exception:
+            live_by_tf[tf]=[]
+    await asyncio.gather(*(load(tf) for tf in order))
+    frames={}
+    for tf in order:
+        c=live_by_tf.get(tf) or []
+        if len(c)<45:
+            frames[tf]={"signal":"WAIT","interval":tf,"patterns":[],"reason":"Insufficient candles"}
+            continue
+        raw=detect_patterns(c,live_by_tf,tf)
+        raw["interval"]=tf
+        raw["candle_time"] = c[-2].get("time") if len(c)>1 else c[-1].get("time")
+        if include_ai_for_selected and tf==selected_interval and raw.get("signal") in {"BUY","SELL"}:
+            ai=await ai_validate_module_signal("Patterns",symbol,tf,raw["candle_time"],raw)
+            raw["ai_validation"]=ai
+        frames[tf]=_finalize_pattern_result(raw,live_by_tf,tf)
+    # If selected 5M had no signal, still preserve its AI status as null; the UI shows the raw detector state.
+    best_candidates=[x for x in frames.values() if x.get("signal") in {"BUY","SELL"}]
+    selected=frames.get(selected_interval) or {"signal":"WAIT"}
+    return {"ok":True,"symbol":symbol,"selected":selected_interval,"timeframes":frames,
+            "best":max(best_candidates,key=lambda x:float(x.get("final_score") or x.get("pattern_score") or x.get("confidence") or 0),default=None),
+            "generated_at":datetime.now(timezone.utc).isoformat(),
+            "strategy":"Pattern trigger + AI confirmation; MTF H4→H1→M30→M15→M5.",
+            "notes":["TP1 is primary target.","TP2 is optional/informational.","RR is informational only; it is not an AutoTrade gate.","M1 is history/analysis only and is never AutoTraded."]}
+
+
+@app.get("/api/v1/patterns/{symbol:path}")
+async def get_patterns(symbol: str, interval: str = Query("5min")) -> dict[str, Any]:
+    selected=validate_interval(interval)
+    try:
+        result=await build_pattern_signals(clean_symbol(symbol), selected_interval=selected, include_ai_for_selected=True)
+        return result
+    except Exception as exc:
+        return {"ok":False,"symbol":clean_symbol(symbol),"selected":selected,"timeframes":{},"error":str(exc),"generated_at":datetime.now(timezone.utc).isoformat()}
+
 
 
 def _target_candidates_from_item(item: dict[str, Any], direction: str) -> list[float]:
@@ -4450,12 +5120,11 @@ def _execution_gate(item: dict[str, Any], direction: str, candles: list[dict[str
         rr=(tp[0]-entry2)/risk
     else:
         rr=(entry2-tp[0])/risk
-    # RR is informational only. It must NEVER block AutoTrade.
-    # Risk protection is independent of RR: geometry, valid TP side, and adaptive
-    # maximum SL distance are the hard execution constraints.
+    # History may keep a valid signal even when its RR is below the AutoTrade minimum.
+    # The MT5 queue is stricter and requires RR >= 1.50 before placing the order.
     return {"ok":True,"state":"READY","reason":"ALL_GATES_PASSED",
             "entry":entry2,"sl":sl2,"tp":tp,"repaired":repaired,"r_multiple":rr,
-            "risk":risk,"max_risk":max_risk}
+            "risk":risk,"max_risk":max_risk,"autotrade_rr_ok":bool(rr>=1.50)}
 
 
 
@@ -4740,18 +5409,39 @@ def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[di
 
 def _autotrade_source_excluded(source: str) -> bool:
     normalized = re.sub(r"[\s_\-/]+", " ", str(source or "").strip().lower()).strip()
-    return normalized in {"book + openai", "book openai", "book/openai", "book-openai"} or ("book" in normalized and "openai" in normalized)
+    blocked = {
+        "book + openai", "book openai", "book/openai", "book-openai",
+        "signal lab", "algotrade",
+    }
+    return normalized in blocked or "book" in normalized and "openai" in normalized
 
 
 def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction: str,
                            entry: float, sl: float, tp: list[float], volume: float,
-                           confidence: float | None, candle_time: str) -> dict[str, Any] | None:
+                           confidence: float | None, candle_time: str,
+                           risk_reward: float | None = None) -> dict[str, Any] | None:
     """Put one eligible signal into the in-memory MT5 queue exactly once.
 
-    The queue key is symbol/source/timeframe/live-candle/direction. Book + OpenAI is
+    The queue key is symbol/source/timeframe/live-candle/direction. Retired modules are
     explicitly excluded. All values are copied from the freshly validated signal.
     """
     if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
+        return None
+    # AutoTrade hard filter: only setups with RR >= 1.50 may reach MT5.
+    # Calculate it from the final levels when the caller did not provide it, so no
+    # execution path can bypass the minimum by omitting the metadata.
+    try:
+        rr_eval = float(risk_reward) if risk_reward is not None else None
+        if rr_eval is None:
+            risk_abs = abs(float(entry) - float(sl))
+            first_tp = float(tp[0]) if tp else None
+            if risk_abs <= 0 or first_tp is None:
+                return None
+            rr_eval = ((first_tp - float(entry)) / risk_abs) if str(direction).upper() == "BUY" else ((float(entry) - first_tp) / risk_abs)
+        if rr_eval < 1.50:
+            print(f"[AUTO TRADE QUEUE] RR BLOCKED market={symbol} source={source} tf={interval} rr={rr_eval:.2f}")
+            return None
+    except Exception:
         return None
     # M1 is analysis/history-only. Never allow 1-minute signals into AutoTrade.
     if str(interval).strip().lower() in {"1min", "1m", "m1"}:
@@ -4792,6 +5482,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
         "volume": float(volume or MT5_LOT_SIZE),
         "source": source.strip(),
         "confidence": float(confidence or 0),
+        "risk_reward": float(rr_eval),
         "candle_time": str(candle_time),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "claimed": False,
@@ -4805,10 +5496,12 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
 
 @app.post("/api/v1/signals/auto-record")
 async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    """Forward every BUY/SELL signal source except Book + OpenAI into the MT5 queue.
+    """Forward all active SignalX strategy families into History and the MT5 queue.
 
-    Only XAU/USD is eligible for the MT5 AutoTrade queue.
-    Book + OpenAI is intentionally excluded from the MT5 queue.
+    Active sources include Signal Engine, Technical Analysis, Classic Trade, Auto Trend Line,
+    ICT Signals, AI Smart Analysis, MSAI/SNR, SMC, Algo/SMC, Patterns, Trend Channel Engine,
+    Fibonacci and Yangi Strategiya. Removed modules remain blocked. AutoTrade additionally
+    requires non-M1, valid geometry/risk, AI/market validation and RR >= 1.50.
     """
     require_admin(authorization, session)
     user = current_user(authorization, session)
@@ -4818,10 +5511,13 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         raise HTTPException(status_code=404, detail="Only XAU/USD is supported")
     symbols = ["XAU/USD"]
     if not AUTO_ENTRY_ENABLED:
-        return {"enabled": False, "count": 0, "queued": 0, "symbols": symbols, "excluded_sources": ["Book + OpenAI"], "mode": "disabled"}
+        return {"enabled": False, "count": 0, "queued": 0, "symbols": symbols,
+                "excluded_sources": ["Signal Lab", "AlgoTrade", "Book + OpenAI", "M1 / 1min / 1m"],
+                "active_sources": ["Signal Engine", "Technical Analysis", "Classic Trade", "Auto Trend Line", "ICT Signals", "AI Smart Analysis", "MSAI/SNR", "SMC", "Algo/SMC", "Patterns", "Trend Channel Engine", "Fibonacci", "Yangi Strategiya"],
+                "mode": "disabled"}
 
     now = datetime.now(timezone.utc)
-    excluded = {"book + openai", "book/openai", "book-openai", "book openai"}
+    excluded = {"book + openai", "book/openai", "book-openai", "book openai", "signal lab", "algotrade"}
     created_history = []
     queued = []
     module_signal_count = 0
@@ -4840,44 +5536,131 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 live_by_tf[tf]=([],"error",None)
         await asyncio.gather(*(load_tf(tf) for tf in intervals))
 
-        # Signal Lab + Signals are the master strategy output for every timeframe.
-        advanced=await build_advanced_signals(key, news_blocked=False)
+        # Patterns is a first-class strategy family: book pattern = trigger, AI = filter.
+        # Pattern detection itself is deterministic here; the common process_symbol()
+        # layer applies the per-module AI + geometry + target + risk gates before queueing.
         for tf in intervals:
-            item=(advanced.get("timeframes") or {}).get(tf) or {}
-            if item.get("signal") in {"BUY","SELL"}:
-                candidates.append({"source":"Signal Lab","interval":tf,"item":item,"response":advanced})
-                candidates.append({"source":"Signals","interval":tf,"item":item,"response":advanced})
+            pc=live_by_tf.get(tf,([],"error",None))[0]
+            if len(pc)>=45:
+                try:
+                    pattern_context={k:v[0] for k,v in live_by_tf.items() if v and v[0]}
+                    raw_pattern=detect_patterns(pc,pattern_context,tf)
+                    raw_pattern["interval"]=tf
+                    raw_pattern["candle_time"]=pc[-2].get("time") if len(pc)>1 else pc[-1].get("time")
+                    pattern_item=_finalize_pattern_result(raw_pattern,pattern_context,tf)
+                    if pattern_item.get("signal") in {"BUY","SELL"} and pattern_item.get("hard_pattern_ok"):
+                        candidates.append({"source":"Patterns","interval":tf,"item":pattern_item,"response":pattern_item})
+                except Exception as exc:
+                    print(f"[PATTERNS] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
 
-        # AlgoTrade is an additive strategy family.  It uses the same live candle
-        # pipeline but remains isolated from the existing modules.  When its full
-        # MTF gate is confirmed, its per-timeframe execution candidates are added
-        # to the same consensus/History/AutoTrade pipeline. M1 is intentionally
-        # absent from AlgoTrade and is also blocked by _queue_autotrade_order().
-        try:
-            from algotrade_strategy import build_algotrade
-            algo = await build_algotrade(key)
-            for tf, item in (algo.get("execution_candidates") or {}).items():
-                if tf not in intervals:
+        # Algo/SMC book strategy: deterministic book-derived setup + strict AI validation.
+        # It is a first-class family and only emits BUY/SELL when the AI hard gate passes.
+        for tf in intervals:
+            try:
+                if tf not in live_by_tf or len(live_by_tf[tf][0]) < 60:
                     continue
-                if str(item.get("signal") or "WAIT").upper() not in {"BUY", "SELL"}:
-                    continue
-                candidates.append({
-                    "source": "AlgoTrade",
-                    "interval": tf,
-                    "item": item,
-                    "response": {
-                        "strategy": algo.get("strategy"),
-                        "version": algo.get("version"),
-                        "score": algo.get("score"),
-                        "checks": algo.get("checks"),
-                        "reason": algo.get("reason"),
-                        "candle_time": item.get("candle_time"),
-                    },
-                })
-        except Exception as exc:
-            print(f"[ALGOTRADE] candidate build error market={key}: {type(exc).__name__}: {exc}")
+                algo_result = await build_algo_smc_strategy(key, tf, prefetched=live_by_tf)
+                algo_item = dict(algo_result.get("strategy") or {})
+                if algo_item.get("signal") in {"BUY", "SELL"} and algo_item.get("ai_gate", {}).get("passed"):
+                    candidates.append({"source":"Algo/SMC","interval":tf,"item":algo_item,"response":algo_result})
+            except Exception as exc:
+                print(f"[ALGO/SMC] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
 
-        # All remaining modules are also evaluated on ALL seven timeframes.
+        # Signal Engine: shared deterministic quantitative engine. It remains a first-class
+        # source for History/AutoTrade, while legacy removed sources stay excluded below.
+        for tf in intervals:
+            pc=live_by_tf.get(tf,([],"error",None))[0]
+            if len(pc)>=40:
+                try:
+                    sig_item=build_advanced_signal(pc,tf,news_blocked=False)
+                    sig_item["candle_time"]=pc[-2].get("time") if len(pc)>1 else pc[-1].get("time")
+                    if sig_item.get("signal") in {"BUY","SELL"}:
+                        candidates.append({"source":"Signal Engine","interval":tf,"item":sig_item,"response":sig_item})
+                except Exception as exc:
+                    print(f"[SIGNAL ENGINE] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
+
+        # MSAI/SNR: deterministic Malaysian-SNR analysis is kept independent from ICT/SMC;
+        # the common process layer adds live AI validation before History/AutoTrade.
+        for tf in intervals:
+            pc=live_by_tf.get(tf,([],"error",None))[0]
+            if len(pc)>=60:
+                try:
+                    daily=live_by_tf.get("1day",([],"error",None))[0]
+                    weekly=aggregate_weekly(daily) if daily else []
+                    local_mtf={
+                        "direction_bias": direction_from_candles(weekly) if len(weekly)>=5 else "NEUTRAL",
+                        "alignment": True,
+                    }
+                    msai_item=analyze_msai(pc,local_mtf,tf)
+                    msai_item["interval"]=tf
+                    msai_item["candle_time"]=pc[-2].get("time") if len(pc)>1 else pc[-1].get("time")
+                    if msai_item.get("signal") in {"BUY","SELL"}:
+                        candidates.append({"source":"MSAI/SNR","interval":tf,"item":msai_item,"response":msai_item})
+                except Exception as exc:
+                    print(f"[MSAI] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
+
+        # SMC: deterministic BOS/CHoCH, liquidity, IDM, POI and LTF framework.
+        for tf in intervals:
+            pc=live_by_tf.get(tf,([],"error",None))[0]
+            if len(pc)>=60:
+                try:
+                    daily=live_by_tf.get("1day",([],"error",None))[0]
+                    weekly=aggregate_weekly(daily) if daily else []
+                    bias=direction_from_candles(weekly) if len(weekly)>=5 else "NEUTRAL"
+                    smc_mtf={"direction_bias":bias,"alignment":bias in {"BULLISH","BEARISH"}}
+                    smc_item=analyze_smc(pc,smc_mtf,tf)
+                    smc_item["interval"]=tf
+                    smc_item["candle_time"]=pc[-2].get("time") if len(pc)>1 else pc[-1].get("time")
+                    if smc_item.get("signal") in {"BUY","SELL"}:
+                        candidates.append({"source":"SMC","interval":tf,"item":smc_item,"response":smc_item})
+                except Exception as exc:
+                    print(f"[SMC] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
+
+        # Trend Channel Engine: use the same canonical candle set; final AI + execution gates
+        # are applied once by process_symbol() so History and AutoTrade stay synchronized.
+        for tf in intervals:
+            pc=live_by_tf.get(tf,([],"error",None))[0]
+            if len(pc)>=60:
+                try:
+                    higher={x:live_by_tf.get(x,([],"error",None))[0] for x in ("1day","4h","1h")}
+                    tc_item=analyze_trend_channel(pc,higher)
+                    tc_item["interval"]=tf
+                    tc_item["candle_time"]=pc[-2].get("time") if len(pc)>1 else pc[-1].get("time")
+                    if tc_item.get("signal") in {"BUY","SELL"}:
+                        candidates.append({"source":"Trend Channel Engine","interval":tf,"item":tc_item,"response":tc_item})
+                except Exception as exc:
+                    print(f"[TREND CHANNEL] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
+
+        # Yangi Strategiya: all-book fusion (32 supplied sources), using the same canonical
+        # candles already loaded. It is its own independent strategy family.
+        for tf in intervals:
+            try:
+                raw_prefetched={k:v for k,v in live_by_tf.items() if v and v[0]}
+                fusion_result=await build_book_fusion_strategy(key,tf,prefetched=raw_prefetched)
+                fusion_item=dict(fusion_result.get("strategy") or {})
+                if fusion_item.get("signal") in {"BUY","SELL"}:
+                    candidates.append({"source":"Yangi Strategiya","interval":tf,"item":fusion_item,"response":fusion_result})
+            except Exception as exc:
+                print(f"[YANGI STRATEGIYA] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
+
+        # Fibonacci is a first-class strategy family from books 25–32.
+        # It uses the same canonical candles already loaded above, then the common
+        # process_symbol() layer applies the strict per-module AI + execution gates.
+        for tf in intervals:
+            pc=live_by_tf.get(tf,([],"error",None))[0]
+            if len(pc)>=60:
+                try:
+                    fib_context={k:v[0] for k,v in live_by_tf.items() if v and v[0]}
+                    fib_item=analyze_fibonacci(pc,{"1day":fib_context.get("1day",[]),"4h":fib_context.get("4h",[]),"1h":fib_context.get("1h",[])})
+                    fib_item["interval"]=tf
+                    fib_item["candle_time"]=pc[-2].get("time") if len(pc)>1 else pc[-1].get("time")
+                    if fib_item.get("signal") in {"BUY","SELL"}:
+                        candidates.append({"source":"Fibonacci","interval":tf,"item":fib_item,"response":fib_item})
+                except Exception as exc:
+                    print(f"[FIBONACCI] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
+
+        # Remaining modules are evaluated on all supported timeframes.
+
         for tf in intervals:
             candles, mode, warning = live_by_tf.get(tf,([],"error",None))
             if len(candles)<40:
@@ -4896,11 +5679,6 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 classic=_classic_trade(candles,calculate_pivot_levels(float(candles[-2]["high"]),float(candles[-2]["low"]),float(candles[-2]["close"]),float(candles[-1]["close"])))
                 classic["strategy_chain"]=_strategy_chain(tf); classic["strategy_version"]="V2"
                 candidates.append({"source":"Classic Trade","interval":tf,"item":classic,"response":{"mode":mode,"warning":warning,"candle_time":ct}})
-            except Exception:
-                pass
-            try:
-                snr=_snr_zone_analysis(candles); snr["strategy_engine"]="Adaptive Institutional SNR V2"; snr["strategy_version"]="V2"; snr["strategy_chain"]=_strategy_chain(tf)
-                candidates.append({"source":"SNR","interval":tf,"item":snr,"response":{"mode":mode,"warning":warning,"candle_time":ct}})
             except Exception:
                 pass
             try:
@@ -4932,21 +5710,25 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     def _build_consensus(candidates: list[dict[str, Any]], interval: str, candle_time: str) -> dict[str, Any] | None:
         """Collapse all module outputs into ONE directional decision per XAU timeframe/candle.
 
-        Signal Lab and Signals are aliases of the same master output and therefore count as
-        one strategy family. A trade is emitted only when independent families agree; ties,
-        conflicts and weak consensus become WAIT. This is the final AutoTrade gate.
+        Active strategy modules are counted as independent families. Retired modules never
+        enter consensus; ties, conflicts and weak consensus become WAIT.
         """
         weights = {
             "Signal Engine": 1.00,
             "Technical Analysis": 1.00,
             "Classic Trade": 1.00,
-            "SNR": 1.20,
             "Auto Trend Line": 1.10,
             "ICT Signals": 1.40,
             "AI Smart Analysis": 0.80,
+            "MSAI/SNR": 1.20,
+            "SMC": 1.30,
+            "Algo/SMC": 1.50,
+            "Trend Channel Engine": 1.20,
+            "Fibonacci": 1.30,
+            "Yangi Strategiya": 1.70,
         }
         families: dict[str, dict[str, Any]] = {}
-        aliases = {"signal lab": "Signal Engine", "signals": "Signal Engine"}
+        aliases = {"signals": "Signal Engine"}
         for c in candidates:
             if str(c.get("interval")) != interval:
                 continue
@@ -5015,7 +5797,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         print(f"[SIGNAL FLOW] candidates={len(candidates)} market={key}")
 
         # Persist AND queue every confirmed module signal independently.
-        # M1 remains excluded; Book + OpenAI is excluded by the common queue guard.
+        # M1 remains excluded; Removed modules are excluded by the common queue guard.
         # Each module gets its own History row and its own AutoTrade queue key.
         # This intentionally does NOT collapse module signals into a single consensus order.
         for c in candidates:
@@ -5122,6 +5904,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 continue
 
             target_reached = gate.get("state") == "TARGET_REACHED"
+            rr_value = float(gate.get("r_multiple") or 0)
+            autotrade_rr_ok = bool(rr_value >= 1.50)
             if target_reached:
                 item.update({"signal":"WAIT","original_signal":direction,"setup":"TARGET_REACHED",
                              "entry":entry,"stop_loss":sl,"take_profit":[],"target_state":"TARGET_REACHED",
@@ -5130,16 +5914,18 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 direction_history = "WAIT"
             else:
                 item.update({"entry":entry,"stop_loss":sl,"take_profit":tp,"live_levels_verified":True,
-                             "levels_repaired_from_live_chart":repaired,"auto_trade_eligible":True,
-                             "execution_state":"READY","execution_reason":"ALL_GATES_PASSED",
-                             "risk_reward":gate.get("r_multiple")})
+                             "levels_repaired_from_live_chart":repaired,"auto_trade_eligible":bool(gate.get("ok") and autotrade_rr_ok),
+                             "execution_state":"READY","execution_reason":"ALL_GATES_PASSED" if autotrade_rr_ok else "HISTORY_ONLY_RR_BELOW_1.50",
+                             "risk_reward":gate.get("r_multiple"),"auto_trade_rr_ok":autotrade_rr_ok})
                 direction_history = direction
 
             payload = {"source":source,"module_signal":item,"symbol":key,"interval":tf,"candle_time":candle_time,
                        "live_generated":True,"execution_gate":{
                            "state":gate.get("state"),"reason":gate.get("reason"),"geometry_checked":True,
-                           "target_checked":True,"risk_checked":not target_reached,"auto_trade":bool(gate.get("ok")),
-                           "risk_reward":gate.get("r_multiple"),"risk":gate.get("risk"),"max_risk":gate.get("max_risk"),
+                           "target_checked":True,"risk_checked":not target_reached,
+                           "auto_trade":bool(gate.get("ok") and autotrade_rr_ok),
+                           "risk_reward":gate.get("r_multiple"),"autotrade_rr_min":1.50,
+                           "risk":gate.get("risk"),"max_risk":gate.get("max_risk"),
                            "levels_repaired":repaired},"auto_trade":{"queued":False}}
             recent = session.scalars(select(SignalHistory).where(
                 SignalHistory.user_id == user.id, SignalHistory.symbol == key,
@@ -5159,8 +5945,9 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 session.add(history_row)
                 created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction_history,
                                         "confidence":conf,"module_history":True,
-                                        "auto_trade_eligible":bool(gate.get("ok")),
-                                        "execution_state":gate.get("state"),"risk_reward":gate.get("r_multiple")})
+                                        "auto_trade_eligible":bool(gate.get("ok") and autotrade_rr_ok),
+                                        "execution_state":gate.get("state"),"risk_reward":gate.get("r_multiple"),
+                                        "auto_trade_rr_ok":autotrade_rr_ok})
                 print(f"[SIGNAL HISTORY] MODULE RECORDED source={source} market={key} tf={tf} dir={direction_history} state={gate.get('state')}")
             elif str(recent.status or "ACTIVE").upper() in {"ACTIVE","TP1 HIT","OPEN"} and str(recent.outcome or "OPEN").upper() in {"OPEN","TP1 HIT"}:
                 recent.direction = direction_history
@@ -5170,11 +5957,11 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 _history_sync_row(recent, payload)
 
             order = None
-            if direction in {"BUY", "SELL"} and tp:
+            if direction in {"BUY", "SELL"} and tp and bool(gate.get("ok")) and autotrade_rr_ok:
                 order = _queue_autotrade_order(
                     symbol=key, source=source, interval=tf, direction=direction,
                     entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
-                    confidence=conf, candle_time=candle_time,
+                    confidence=conf, candle_time=candle_time, risk_reward=rr_value,
                 )
             if order is not None:
                 payload["auto_trade"]["queued"] = True
@@ -5197,8 +5984,9 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         "module_autotrade_queued": module_signal_count,
         "history_count": len(rows),
         "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
-        "forward_mode": "EVERY CONFIRMED MODULE SIGNAL EXCEPT M1 AND BOOK + OPENAI",
-        "excluded_sources": ["Book + OpenAI", "M1 / 1min / 1m"],
+        "forward_mode": "EVERY CONFIRMED ACTIVE MODULE SIGNAL EXCEPT M1; MT5 requires RR >= 1.50",
+        "excluded_sources": ["Signal Lab", "AlgoTrade", "Book + OpenAI", "M1 / 1min / 1m"],
+        "active_sources": ["Signal Engine", "Technical Analysis", "Classic Trade", "Auto Trend Line", "ICT Signals", "AI Smart Analysis", "MSAI/SNR", "SMC", "Algo/SMC", "Patterns", "Trend Channel Engine", "Fibonacci", "Yangi Strategiya"],
         "items": created_history,
         "user_id": int(user.id),
     }
@@ -5363,32 +6151,6 @@ async def ai_signals_live(symbol: str, interval: str = DEFAULT_INTERVAL, authori
     item["warning"]=warning
     return {"symbol":key,"interval":interval,"signal":item,"ai_validation":ai,"mode":"live","source":f"TradingView {tv_symbol_for(key)} live candle","generated_at":datetime.now(timezone.utc).isoformat()}
 
-@app.post("/api/v1/signals/save-advanced")
-async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    user = current_user(authorization, session)
-    interval = validate_interval(interval)
-    candles_data, mode, warning = await get_candles(clean_symbol(symbol), interval, 260)
-    item = {**build_advanced_signal(candles_data, interval, news_blocked=False), "mode":mode, "warning":warning}
-    if not item or item.get("signal") not in ("BUY","SELL"):
-        raise HTTPException(status_code=400, detail="Bu timeframe uchun tasdiqlangan BUY/SELL signal mavjud emas.")
-    live_ct = _normalize_history_candle_time(candles_data[-1].get("time"))
-    existing = session.scalar(select(SignalHistory).where(
-        SignalHistory.user_id == user.id, SignalHistory.symbol == clean_symbol(symbol), SignalHistory.interval == interval,
-        SignalHistory.source == "Signal Lab", SignalHistory.candle_time == live_ct
-    ).order_by(SignalHistory.id.desc()))
-    payload = {"advanced":item,"setup":{"entry":item.get("entry"),"stop_loss":item.get("stop_loss"),"take_profit":item.get("take_profit",[])},"symbol":clean_symbol(symbol),"interval":interval,"source":"Signal Lab","candle_time":live_ct,"live_generated":True}
-    if existing is not None:
-        existing.direction = item["signal"]
-        existing.headline = f'{item["signal"]} • {item["setup"]}'[:255]
-        existing.price = float(item["entry"])
-        existing.payload = json.dumps(payload, ensure_ascii=False, default=str)
-        existing.outcome = "OPEN"; existing.status = "ACTIVE"; existing.closed_at = None; existing.result = None; existing.profit_loss = None; existing.r_multiple = None
-        _history_sync_row(existing,payload); session.commit()
-        return {"saved":False,"updated":True,"id":existing.id,"signal":item}
-    row = SignalHistory(user_id=user.id, symbol=clean_symbol(symbol), interval=interval, direction=item["signal"], headline=f'{item["signal"]} • {item["setup"]}', price=float(item["entry"]), payload=json.dumps(payload,ensure_ascii=False), outcome="OPEN", status="ACTIVE", created_at=datetime.now(timezone.utc), source="Signal Lab", candle_time=live_ct)
-    _history_sync_row(row,payload); session.add(row); session.commit(); session.refresh(row)
-    return {"saved":True,"id":row.id,"signal":item}
-
 
 def _setup_strength_from_payload(payload: dict[str, Any], confidence: float | None = None) -> tuple[float, str, bool]:
     """Extract a normalized setup strength for history without changing signal logic."""
@@ -5472,6 +6234,8 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     user = current_user(authorization, session)
     direction = str(body.direction or "WAIT").upper()
     source = _normalize_history_source(body.source or "Signals")
+    if _autotrade_source_excluded(source):
+        return {"saved": False, "reason": "MODULE_REMOVED"}
     interval = validate_interval(body.interval)
     symbol = clean_symbol(body.symbol)
     if direction not in {"BUY", "SELL"}:
@@ -5537,11 +6301,17 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         session.commit()
 
     order = None
-    if direction in {"BUY", "SELL"} and tp and not target_reached:
+    rr_value = None
+    try:
+        risk_abs = abs(float(entry) - float(sl)) if sl is not None else 0
+        rr_value = ((float(tp[0]) - float(entry)) / risk_abs) if direction == "BUY" and risk_abs > 0 else ((float(entry) - float(tp[0])) / risk_abs) if direction == "SELL" and risk_abs > 0 else None
+    except Exception:
+        rr_value = None
+    if direction in {"BUY", "SELL"} and tp and not target_reached and rr_value is not None and rr_value >= 1.50:
         order = _queue_autotrade_order(
             symbol=symbol, source=source, interval=interval, direction=direction,
             entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
-            confidence=body.confidence, candle_time=live_candle_time,
+            confidence=body.confidence, candle_time=live_candle_time, risk_reward=rr_value,
         )
     if existing is not None:
         return {"saved": False, "updated": str(existing.status or "ACTIVE").upper() in {"ACTIVE", "TP1 HIT", "OPEN"}, "duplicate": True, "id": existing.id, "queued": bool(order),
@@ -5740,7 +6510,7 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
         await _maybe_refresh_history_v2(session, user.id)
     except Exception as exc:
         print(f"[HISTORY V2] outcome refresh skipped: {type(exc).__name__}: {exc}")
-    q = select(SignalHistory).where(SignalHistory.user_id == user.id)
+    q = select(SignalHistory).where(SignalHistory.user_id == user.id, ~SignalHistory.source.in_(LEGACY_EXCLUDED_SIGNAL_SOURCES))
     if symbol:
         q = q.where(SignalHistory.symbol == clean_symbol(symbol))
     if direction and direction.upper() in {"BUY", "SELL"}:
@@ -5809,7 +6579,7 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
         await _maybe_refresh_history_v2(session, user.id)
     except Exception as exc:
         print(f"[HISTORY V2 STATS] outcome refresh skipped: {type(exc).__name__}: {exc}")
-    q=select(SignalHistory).where(SignalHistory.user_id==user.id)
+    q=select(SignalHistory).where(SignalHistory.user_id==user.id, ~SignalHistory.source.in_(LEGACY_EXCLUDED_SIGNAL_SOURCES))
     if symbol: q=q.where(SignalHistory.symbol==clean_symbol(symbol))
     if direction.upper() in {"BUY","SELL"}: q=q.where(SignalHistory.direction==direction.upper())
     if module: q=q.where(SignalHistory.source==module)
@@ -5874,10 +6644,10 @@ async def signal_history(limit: int = Query(50, ge=1, le=200), period: str = Que
     # History reads must stay fast and must never trigger expensive TradingView outcome scans.
     # Outcomes are refreshed by the auto-record/background path; this endpoint is read-only.
     if requested_symbol:
-        rows = list(session.scalars(select(SignalHistory).where(SignalHistory.user_id == user.id, SignalHistory.symbol == requested_symbol).order_by(SignalHistory.created_at.desc()).limit(limit)))
+        rows = list(session.scalars(select(SignalHistory).where(SignalHistory.user_id == user.id, ~SignalHistory.source.in_(LEGACY_EXCLUDED_SIGNAL_SOURCES), SignalHistory.symbol == requested_symbol).order_by(SignalHistory.created_at.desc()).limit(limit)))
         rows = list(reversed(rows))
     else:
-        rows = list(session.scalars(select(SignalHistory).where(SignalHistory.user_id == user.id).order_by(SignalHistory.created_at.desc()).limit(limit)))
+        rows = list(session.scalars(select(SignalHistory).where(SignalHistory.user_id == user.id, ~SignalHistory.source.in_(LEGACY_EXCLUDED_SIGNAL_SOURCES)).order_by(SignalHistory.created_at.desc()).limit(limit)))
         rows = list(reversed(rows))
     rows = filter_history_rows(rows, period, date)
     rows = rows[-limit:][::-1]
@@ -6219,8 +6989,6 @@ async def signal_storage_status(authorization: str | None = Header(default=None)
 # after all core models/routes exist, so no replacement launcher is required.
 from mt5_account_gateway import initialize_gateway_tables as _initialize_gateway_tables
 from mt5_account_gateway import router as _mt5_gateway_router
-from algotrade_strategy import router as _algotrade_router
 
 _initialize_gateway_tables()
 app.include_router(_mt5_gateway_router)
-app.include_router(_algotrade_router)

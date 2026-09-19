@@ -105,7 +105,10 @@ bool IsBlockedSource(string source)
    StringReplace(x,"-"," ");
    StringReplace(x,"_"," ");
    while(StringFind(x,"  ")>=0) StringReplace(x,"  "," ");
-   return (StringFind(x,"book")>=0 && StringFind(x,"openai")>=0);
+   if(StringFind(x,"book")>=0 && StringFind(x,"openai")>=0) return true;
+   if(StringFind(x,"signal lab")>=0) return true;
+   if(StringFind(x,"algotrade")>=0) return true;
+   return false;
 }
 
 string OrderGuardKey(string order_id)
@@ -414,7 +417,7 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
 
       if(IsBlockedSource(source))
       {
-         SendReport(order_id,dir,"ORDER_FAILED",expectedSymbol,"BLOCKED: Book + OpenAI source is excluded from AutoTrade");
+         SendReport(order_id,dir,"ORDER_FAILED",expectedSymbol,"BLOCKED: retired Signal Lab / AlgoTrade / Book + OpenAI source is excluded from AutoTrade");
          pos+=MathMax(1,StringLen(order_id));
          continue;
       }
