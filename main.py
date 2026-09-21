@@ -6565,7 +6565,23 @@ def _ensure_mt5_order_history(session: Session, item: dict[str, Any], *, state: 
         uid = int(item.get("user_id") or 0)
         row = session.scalar(select(SignalHistory).where(SignalHistory.signal_uid == sid)) if sid else None
         if row is not None:
+            # Backfill queue metadata so the same history row can be updated by
+            # the subsequent MT5 report, even when the queued item came from an
+            # older deployment that did not carry signal_id/user_id.
+            if not item.get("signal_id"):
+                item["signal_id"] = str(row.signal_uid or "")
+            if not item.get("user_id"):
+                item["user_id"] = int(row.user_id or 0)
             return row
+        # Legacy queue items created before History↔MT5 sync may have no user_id.
+        # Recover them under the internal/admin SignalX user instead of dropping
+        # the history record. This keeps old queued Fibonacci/ICT/SMC/etc. signals
+        # visible in the same History journal.
+        if uid <= 0:
+            admin_user = session.scalar(select(User).where(User.username == ADMIN_LOGIN))
+            uid = int(admin_user.id) if admin_user is not None else 0
+            if uid > 0:
+                item["user_id"] = uid
         if uid <= 0:
             return None
         symbol = clean_symbol(str(item.get("symbol") or item.get("market") or "XAU/USD"))
@@ -6577,6 +6593,19 @@ def _ensure_mt5_order_history(session: Session, item: dict[str, Any], *, state: 
         if direction not in {"BUY", "SELL"}:
             return None
         candle_time = _normalize_history_candle_time(item.get("candle_time"))
+        # When signal_uid is missing, recover an existing live-history row by the
+        # same identity tuple instead of creating a duplicate record.
+        existing = session.scalar(select(SignalHistory).where(
+            SignalHistory.user_id == uid,
+            SignalHistory.symbol == symbol,
+            SignalHistory.interval == interval,
+            SignalHistory.source == source,
+            SignalHistory.candle_time == candle_time,
+        ).order_by(SignalHistory.id.desc())) if candle_time else None
+        if existing is not None:
+            item["signal_id"] = str(existing.signal_uid or "")
+            item["user_id"] = uid
+            return existing
         entry = float(item.get("entry") or 0)
         sl = float(item.get("sl") or 0)
         raw_tp = item.get("tp") or []
@@ -8226,7 +8255,10 @@ async def mt5_poll(token: str = Query(...), market: str = Query(...), client_id:
         # Signal History independent from frontend page loads and MT5 execution.
         try:
             with SessionLocal() as hs:
-                _ensure_mt5_order_history(hs, item, state="QUEUED", reason="MT5 poll")
+                recovered = _ensure_mt5_order_history(hs, item, state="QUEUED", reason="MT5 poll")
+                if recovered is not None:
+                    item["signal_id"] = str(recovered.signal_uid or item.get("signal_id") or "")
+                    item["user_id"] = int(recovered.user_id or item.get("user_id") or 0)
         except Exception as exc:
             print(f"[SIGNAL HISTORY] MT5 poll recovery warning: {type(exc).__name__}: {exc}")
         orders.append(item)
@@ -8304,8 +8336,10 @@ async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, 
             try:
                 with SessionLocal() as hs:
                     recovered = _ensure_mt5_order_history(hs, item, state="QUEUED", reason="MT5 report")
-                    if not item_signal_id and recovered is not None:
-                        item_signal_id = str(recovered.signal_uid or "")
+                    if recovered is not None:
+                        item_signal_id = str(recovered.signal_uid or item_signal_id or "")
+                        item["signal_id"] = item_signal_id
+                        item["user_id"] = int(recovered.user_id or item.get("user_id") or 0)
             except Exception as exc:
                 print(f"[SIGNAL HISTORY] MT5 report recovery warning: {type(exc).__name__}: {exc}")
             if status in {"order_sent", "sent", "success", "filled", "pending_placed"}:
