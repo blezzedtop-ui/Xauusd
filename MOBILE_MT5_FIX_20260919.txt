@@ -1,0 +1,22 @@
+SignalX Mobile + MT5 Account Controls Fix — 2026-09-19
+
+1) Mobile drawer:
+- Removed mobile sidebar dimmer/overlay from the touch layer to prevent the screen from turning black and blocking taps.
+- Sidebar uses a deterministic fixed drawer with high z-index and pointer-events only when open.
+- Mobile navigation buttons close the drawer after selecting a section.
+- Desktop layout is intentionally unchanged (breakpoint <=1100px only).
+
+2) MT5 account controls:
+- Existing account-level AUTO TRADE ON/OFF remains independent per account.
+- Added independent AUTO PENDING ON/OFF per REAL/DEMO account.
+- AUTO PENDING controls BUY STOP, SELL STOP, BUY LIMIT and SELL LIMIT.
+- MARKET orders remain controlled by AUTO TRADE.
+- Turning AUTO PENDING OFF cancels queued pending orders for that account and sends cancellation commands to the EA.
+- Turning AUTO PENDING ON requires the account to be connected.
+- Existing accounts receive pending_trade_enabled=true via backward-compatible migration to preserve previous pending behavior.
+
+3) Verification:
+- Python backend syntax: PASS
+- app.js Node syntax: PASS
+- Static UI/backend presence checks: PASS
+- MetaEditor/MQL5 compiler and live broker runtime test: NOT available in this environment.
