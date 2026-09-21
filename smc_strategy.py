@@ -357,7 +357,7 @@ def analyze_smc(candles: list[dict[str, Any]], mtf: dict[str, Any] | None = None
         sl = structural_low - atr * 0.15
         risk = max(price - sl, atr * 0.6)
         target = _nearest_opposing(candles, direction, price)
-        tp1 = target if target and (target - price) / risk >= 1.40 else price + risk * 2.0
+        tp1 = target if target and (target - price) / risk >= 1.5 else price + risk * 2.0
         tp2 = price + risk * 3.0
         rr = (tp1 - price) / risk
     else:
@@ -365,7 +365,7 @@ def analyze_smc(candles: list[dict[str, Any]], mtf: dict[str, Any] | None = None
         sl = structural_high + atr * 0.15
         risk = max(sl - price, atr * 0.6)
         target = _nearest_opposing(candles, direction, price)
-        tp1 = target if target and (price - target) / risk >= 1.40 else price - risk * 2.0
+        tp1 = target if target and (price - target) / risk >= 1.5 else price - risk * 2.0
         tp2 = price - risk * 3.0
         rr = (price - tp1) / risk
 

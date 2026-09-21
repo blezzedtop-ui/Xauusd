@@ -15,7 +15,7 @@ input long   SignalXMagic=26091401;
 input int    DuplicateCooldownSeconds=30;
 input int    MaxDeviationPoints=100; // wider XAU execution tolerance for normal market movement
 input int    ExecutionRetries=2; // retry transient price/quote errors only
-input int    MaxSpreadPoints=300; // XAUUSDm maximum bid/ask spread in points (0.300 for 3-digit gold)
+input int    MaxSpreadPoints=80; // XAUUSDm maximum bid/ask spread in points
 input string BridgeClientId=""; // blank = account-specific client id
 input bool   SingleSession=true; // only one EA instance per MT5 terminal/account
 input int    SessionLeaseSeconds=15;

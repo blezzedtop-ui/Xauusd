@@ -948,6 +948,7 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
                 order_type=str(payload.get("order_type") or payload.get("pending_type") or "MARKET"),
                 expires_at=str(payload.get("expires_at") or payload.get("expiry_at") or ""),
                 signal_id=row.signal_uid,
+                user_id=row.user_id,
             )
         except Exception as exc:
             print(f"[HISTORY AUTOTRADE BRIDGE] error signal_id={row.signal_uid} source={source}: {type(exc).__name__}: {exc}")
@@ -4223,9 +4224,9 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
     entry=current
     swing_low=structure["swing_low"]; swing_high=structure["swing_high"]
     if direction=="BUY":
-        sl=min(swing_low, current-avtr*1.2); risk=max(entry-sl,avtr*0.6); tp=[entry+risk*1.40,entry+risk*2.5]
+        sl=min(swing_low, current-avtr*1.2); risk=max(entry-sl,avtr*0.6); tp=[entry+risk*1.5,entry+risk*2.5]
     elif direction=="SELL":
-        sl=max(swing_high, current+avtr*1.2); risk=max(sl-entry,avtr*0.6); tp=[entry-risk*1.40,entry-risk*2.5]
+        sl=max(swing_high, current+avtr*1.2); risk=max(sl-entry,avtr*0.6); tp=[entry-risk*1.5,entry-risk*2.5]
     else: sl=None; tp=[]
     rr=(abs((tp[0]-entry)/(entry-sl)) if direction=="BUY" and sl is not None else abs((entry-tp[0])/(sl-entry)) if direction=="SELL" and sl is not None else 0.0)
     confirmations=sum([
@@ -6183,12 +6184,12 @@ def _m5_strategic_pro(c5: list[dict[str, Any]], c15: list[dict[str, Any]],
                 "bias":{"H4":b4,"H1":b1,"M15":b15},"liquidity":sweep}
     target=_ict_target_liquidity(c5,direction,entry)
     if direction=="BUY":
-        tp1=target if target and target>entry+risk*1.40 else entry+risk*1.40
+        tp1=target if target and target>entry+risk*1.5 else entry+risk*1.5
         tp2=entry+risk*2.5
         if target and target>tp1: tp2=max(tp2,target)
         rr=(tp1-entry)/risk
     else:
-        tp1=target if target and target<entry-risk*1.40 else entry-risk*1.40
+        tp1=target if target and target<entry-risk*1.5 else entry-risk*1.5
         tp2=entry-risk*2.5
         if target and target<tp1: tp2=min(tp2,target)
         rr=(entry-tp1)/risk
@@ -6331,10 +6332,10 @@ def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[di
     else: sl=price; target=price; risk=0
     risk_ok=0<risk<=a*profile["max_risk_atr"]
     if direction=="BUY" and risk_ok:
-        t1=max(price+risk*1.40,target); t2=max(price+risk*2.5,t1+risk*0.5)
+        t1=max(price+risk*1.5,target); t2=max(price+risk*2.5,t1+risk*0.5)
         rr=(t1-price)/max(risk,1e-9)
     elif direction=="SELL" and risk_ok:
-        t1=min(price-risk*1.40,target); t2=min(price-risk*2.5,t1-risk*0.5)
+        t1=min(price-risk*1.5,target); t2=min(price-risk*2.5,t1-risk*0.5)
         rr=(price-t1)/max(risk,1e-9)
     else:
         t1=t2=price; rr=0
@@ -6454,7 +6455,7 @@ def _mark_signal_execution_history(signal_id: str, state: str, *, reason: str = 
 def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction: str,
                            entry: float, sl: float, tp: list[float], volume: float,
                            confidence: float | None, candle_time: str,
-                           risk_reward: float | None = None,
+                           risk_reward: float | None = None, user_id: int | None = None,
                            order_type: str = "MARKET",
                            expires_at: str | None = None,
                            signal_id: str = "") -> dict[str, Any] | None:
@@ -6532,6 +6533,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
         "volume": float(volume or MT5_LOT_SIZE),
         "source": source.strip(),
         "signal_id": str(signal_id or ""),
+        "user_id": int(user_id) if user_id is not None else None,
         "confidence": float(confidence or 0),
         "risk_reward": float(rr_eval),
         "candle_time": str(candle_time),
@@ -6549,6 +6551,79 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
                                        order_type=order_type)
     print(f"[AUTO TRADE QUEUE] QUEUED market={market} source={source} tf={interval} dir={direction} entry={entry} sl={sl} tp={tp}")
     return order
+
+def _ensure_mt5_order_history(session: Session, item: dict[str, Any], *, state: str = "QUEUED", reason: str = "") -> SignalHistory | None:
+    """Guarantee that every MT5-queued/received signal has a Signal History row.
+
+    Signal generation and MT5 execution are separate lifecycles. If a deployment,
+    UI refresh, or legacy queue path produced an order without a persisted history
+    row, recover the row from the queue payload before the order reaches the EA.
+    This is intentionally idempotent by signal_uid and by the live history identity.
+    """
+    try:
+        sid = str(item.get("signal_id") or "").strip()
+        uid = int(item.get("user_id") or 0)
+        row = session.scalar(select(SignalHistory).where(SignalHistory.signal_uid == sid)) if sid else None
+        if row is not None:
+            return row
+        if uid <= 0:
+            return None
+        symbol = clean_symbol(str(item.get("symbol") or item.get("market") or "XAU/USD"))
+        if symbol != "XAU/USD":
+            return None
+        source = _normalize_history_source(str(item.get("source") or HISTORY_DEFAULT_SOURCE))
+        interval = validate_interval(str(item.get("interval") or DEFAULT_INTERVAL))
+        direction = str(item.get("direction") or "WAIT").upper()
+        if direction not in {"BUY", "SELL"}:
+            return None
+        candle_time = _normalize_history_candle_time(item.get("candle_time"))
+        entry = float(item.get("entry") or 0)
+        sl = float(item.get("sl") or 0)
+        raw_tp = item.get("tp") or []
+        if not isinstance(raw_tp, (list, tuple)):
+            raw_tp = [raw_tp]
+        tps = [float(x) for x in raw_tp[:2] if x not in (None, "")]
+        rr = item.get("risk_reward")
+        try:
+            rr = float(rr) if rr is not None else None
+        except Exception:
+            rr = None
+        conf = item.get("confidence")
+        try:
+            conf = float(conf) if conf is not None else None
+        except Exception:
+            conf = None
+        payload = {
+            "source": source, "symbol": symbol, "interval": interval,
+            "candle_time": candle_time, "live_generated": True,
+            "module_signal": {
+                "signal": direction, "entry": entry, "stop_loss": sl,
+                "take_profit": tps, "confidence": conf, "risk_reward": rr,
+            },
+            "risk_reward": rr, "rr": rr,
+            "auto_trade": {"queued": True, "order_id": str(item.get("id") or ""), "risk_reward": rr},
+            "execution": {"state": state, "reason": reason, "timeline": {state: datetime.now(timezone.utc).isoformat()}},
+            "mt5_history_recovered": True,
+        }
+        row = SignalHistory(
+            user_id=uid, symbol=symbol, interval=interval, direction=direction,
+            headline=f"{source} · {direction} · {conf:.1f}%" if conf is not None else f"{source} · {direction}",
+            price=entry, payload=json.dumps(payload, ensure_ascii=False, default=str),
+            outcome="OPEN", status="ACTIVE", created_at=datetime.now(timezone.utc),
+            source=source, candle_time=candle_time,
+        )
+        _history_sync_row(row, payload)
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        print(f"[SIGNAL HISTORY] MT5 RECOVERED source={source} signal_id={row.signal_uid} order_id={item.get('id')}")
+        return row
+    except Exception as exc:
+        try: session.rollback()
+        except Exception: pass
+        print(f"[SIGNAL HISTORY] MT5 recovery skipped: {type(exc).__name__}: {exc}")
+        return None
+
 
 @app.post("/api/v1/signals/auto-record")
 async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
@@ -7078,6 +7153,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                     entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
                     confidence=conf, candle_time=candle_time, risk_reward=rr_value,
                     signal_id=signal_uid,
+                    user_id=user.id,
                 )
             if order is not None:
                 payload["auto_trade"]["queued"] = True
@@ -7450,6 +7526,7 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
             entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
             confidence=body.confidence, candle_time=live_candle_time, risk_reward=rr_value,
             signal_id=str(getattr(target_row, "signal_uid", "") or ""),
+            user_id=user.id,
         )
     if order is not None:
         payload["auto_trade"] = {"queued": True, "order_id": order.get("id"), "risk_reward": rr_value}
@@ -8145,6 +8222,13 @@ async def mt5_poll(token: str = Query(...), market: str = Query(...), client_id:
         item["claimed_by"] = client
         item["claim_expires"] = now + MT5_CLAIM_LEASE_SECONDS
         MT5_ORDER_ATTEMPTS[item["id"]] = MT5_ORDER_ATTEMPTS.get(item["id"], 0) + 1
+        # Persist/recover the signal BEFORE the EA receives the order. This makes
+        # Signal History independent from frontend page loads and MT5 execution.
+        try:
+            with SessionLocal() as hs:
+                _ensure_mt5_order_history(hs, item, state="QUEUED", reason="MT5 poll")
+        except Exception as exc:
+            print(f"[SIGNAL HISTORY] MT5 poll recovery warning: {type(exc).__name__}: {exc}")
         orders.append(item)
         if len(orders) >= 10:
             break
@@ -8215,6 +8299,15 @@ async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, 
                 break
             item_type = str(item.get("order_type") or "MARKET").upper()
             item_signal_id = str(item.get("signal_id") or "")
+            # Recover a missing History row from the exact queued order before
+            # applying the execution lifecycle state.
+            try:
+                with SessionLocal() as hs:
+                    recovered = _ensure_mt5_order_history(hs, item, state="QUEUED", reason="MT5 report")
+                    if not item_signal_id and recovered is not None:
+                        item_signal_id = str(recovered.signal_uid or "")
+            except Exception as exc:
+                print(f"[SIGNAL HISTORY] MT5 report recovery warning: {type(exc).__name__}: {exc}")
             if status in {"order_sent", "sent", "success", "filled", "pending_placed"}:
                 qk = item.get("queue_key")
                 if isinstance(qk, list) and len(qk) == 5:

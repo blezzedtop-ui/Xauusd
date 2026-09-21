@@ -435,7 +435,7 @@ def analyze_fibonacci(candles: list[dict[str, Any]], higher_frames: dict[str, li
             "fibomusang_setup": musang_valid,
             "mtf_alignment": mtf_match,
             "volatility_quality": not hard_wait,
-            "rr_ge_1_40": rr >= 1.40,
+            "rr_ge_1_50": rr >= 1.40,
         },
         "source_strategy": "8 Fibonacci/Fibo Musang books + deterministic confluence + AI validation",
     }
