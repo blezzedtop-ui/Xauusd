@@ -7118,7 +7118,11 @@ async def _autotrade_worker() -> None:
         session = SessionLocal()
         try:
             market_gate = market_gate_status("XAU/USD")
-            if MT5_AUTO_TRADING and AUTO_ENTRY_ENABLED and market_gate.get("open"):
+            # Signal History must be populated independently of MT5 execution.
+            # The history writer already keeps execution behind its own MT5 safety gates.
+            # Previously this worker stopped calling auto_record_signals when MT5_AUTO_TRADING
+            # was false, so dashboard/module signals never reached Signal History.
+            if market_gate.get("open") and AUTO_ENTRY_ENABLED:
                 result = await auto_record_signals(
                     symbol="XAU/USD", interval="5min",
                     authorization=f"Bearer {AUTOTRADE_INTERNAL_TOKEN}", session=session
@@ -7130,9 +7134,9 @@ async def _autotrade_worker() -> None:
                     bridge_user_id = int(admin_user.id) if admin_user else 0
                 history_forwarded = _forward_recent_history_to_mt5(session, bridge_user_id) if bridge_user_id else []
                 print(f"[AUTO TRADE WORKER] symbols={result.get('symbols')} queued={queued_count} history_forwarded={len(history_forwarded)} queue_total={len(MT5_ORDER_QUEUE)}")
-            elif MT5_AUTO_TRADING and AUTO_ENTRY_ENABLED:
+            elif AUTO_ENTRY_ENABLED:
                 MT5_ORDER_QUEUE[:] = [item for item in MT5_ORDER_QUEUE if item.get("claimed")]
-                print(f"[AUTO TRADE WORKER] MARKET GATE CLOSED reason={market_gate.get('reason')} source={market_gate.get('source')}")
+                print(f"[SIGNAL HISTORY WORKER] MARKET GATE CLOSED reason={market_gate.get('reason')} source={market_gate.get('source')}")
         except Exception as exc:
             print(f"[AUTO TRADE WORKER] error={exc}")
         finally:
