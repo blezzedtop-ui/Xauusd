@@ -6486,7 +6486,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
             if risk_abs <= 0 or first_tp is None:
                 return None
             rr_eval = ((first_tp - float(entry)) / risk_abs) if str(direction).upper() == "BUY" else ((float(entry) - first_tp) / risk_abs)
-        if rr_eval < 1.50:
+        if rr_eval < (1.50 - 1e-9):
             print(f"[AUTO TRADE QUEUE] RR BLOCKED market={symbol} source={source} tf={interval} rr={rr_eval:.2f}")
             return None
     except Exception:
@@ -7016,7 +7016,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
 
             target_reached = gate.get("state") == "TARGET_REACHED"
             rr_value = float(gate.get("r_multiple") or 0)
-            autotrade_rr_ok = bool(rr_value >= 1.50)
+            autotrade_rr_ok = bool(rr_value >= (1.50 - 1e-9))
             if target_reached:
                 item.update({"signal":"WAIT","original_signal":direction,"setup":"TARGET_REACHED",
                              "entry":entry,"stop_loss":sl,"take_profit":[],"target_state":"TARGET_REACHED",
@@ -7391,6 +7391,19 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         "live_levels_verified": True, "levels_repaired_from_live_chart": bool(repaired),
         "setup_strength": setup_strength, "setup_grade": setup_grade, "strong_setup": strong_setup,
     })
+    rr_for_history = None
+    try:
+        risk_abs = abs(float(entry) - float(sl)) if sl is not None else 0.0
+        first_tp = float(tp[0]) if tp else None
+        if risk_abs > 0 and first_tp is not None:
+            rr_for_history = ((first_tp - float(entry)) / risk_abs) if direction == "BUY" else ((float(entry) - first_tp) / risk_abs) if direction == "SELL" else None
+            if rr_for_history is not None:
+                rr_for_history = round(rr_for_history, 4)
+    except Exception:
+        rr_for_history = None
+    if rr_for_history is not None:
+        payload["risk_reward"] = rr_for_history
+        payload["rr"] = rr_for_history
     snapshot=_history_snapshot_payload(payload,source,symbol,interval,direction,body.confidence,entry,sl,tp,live_candle_time)
     payload["history_snapshot"]=snapshot
     history_direction = "WAIT" if target_reached else direction
@@ -7426,12 +7439,26 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         rr_value = ((float(tp[0]) - float(entry)) / risk_abs) if direction == "BUY" and risk_abs > 0 else ((float(entry) - float(tp[0])) / risk_abs) if direction == "SELL" and risk_abs > 0 else None
     except Exception:
         rr_value = None
-    if direction in {"BUY", "SELL"} and tp and not target_reached and rr_value is not None and rr_value >= 1.50:
+    if direction in {"BUY", "SELL"} and tp and not target_reached and rr_value is not None and rr_value >= (1.50 - 1e-9):
         order = _queue_autotrade_order(
             symbol=symbol, source=source, interval=interval, direction=direction,
             entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
             confidence=body.confidence, candle_time=live_candle_time, risk_reward=rr_value,
         )
+    if order is not None:
+        payload["auto_trade"] = {"queued": True, "order_id": order.get("id"), "risk_reward": rr_value}
+        payload["execution_gate"] = {"auto_trade": True, "risk_reward": rr_value, "rr_min": 1.50, "state": "READY"}
+        target = existing if existing is not None else row
+        target.payload = json.dumps(payload, ensure_ascii=False, default=str)
+        _history_sync_row(target, payload)
+        session.commit()
+        # Push the in-memory core queue into the account-scoped MT5 gateway immediately.
+        # This removes the old 15s worker race from UI-triggered signals.
+        try:
+            import mt5_account_gateway as _gw
+            _gw._sync_core_queue(session)
+        except Exception as exc:
+            print(f"[MT5 GATEWAY SYNC] deferred signal_id={getattr(target, 'signal_uid', '')}: {type(exc).__name__}: {exc}")
     if existing is not None:
         return {"saved": False, "updated": str(existing.status or "ACTIVE").upper() in {"ACTIVE", "TP1 HIT", "OPEN"}, "duplicate": True, "id": existing.id, "queued": bool(order),
                 "source": source, "symbol": symbol, "entry": existing.price, "stop_loss": existing.stop_loss,
