@@ -261,7 +261,7 @@ async function loadICTSignals(){
     $('ictM5FVGRange').textContent=ictRange(m5.fvg); $('ictM5MSS').textContent=m5.mss?'CONFIRMED':'WAIT';
     $('ictDisp').textContent=`Displacement ${m5.displacement?'✓':'—'}`; $('ictDispRatio').textContent=`${m5.displacement_atr??0} ATR`; $('ictLiqLevel').textContent=fmt(liq.level);
     $('ictChecks').innerHTML=(x.checks||[]).map(c=>`<div class="component"><small>${c.name}</small><b>${ictState(c.status==='PASS')} · +${c.points||0}</b></div>`).join('');
-    $('ictStatus').textContent=`Live · M30 ${d.m30_candles} candles · M5 ${d.m5_candles} candles · ${new Date(d.generated_at).toLocaleString()}`;; recordModuleSignal('ICT Signals',d,x,'30min',d.m30_candle_time||liveCandle?.time)
+    $('ictStatus').textContent=`Live · M30 ${d.m30_candles} candles · M5 ${d.m5_candles} candles · ${new Date(d.generated_at).toLocaleString()}`;; await recordModuleSignal('ICT Signals',d,x,'30min',x.candle_time||d.m30_candle_time||liveCandle?.time)
   }catch(e){
     $('ictStatus').textContent='ICT error: '+(e.message||'server error');
     $('ictReason').textContent='Signal unavailable — market data/API ni tekshiring.';

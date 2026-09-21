@@ -358,7 +358,7 @@ def analyze_msai(
 
     # Book-faithful hard execution gate: validation + LTF confirmation + MTF agreement.
     critical = checks["wick_rejection"] and checks["engulfing"] and checks["mtf_match"] and checks["breakout"]
-    confirmed = critical and score >= 75 and rr >= 1.5
+    confirmed = critical and score >= 75 and rr >= 1.40
     signal = direction if confirmed else "WAIT"
     state = "CONFIRMED" if confirmed else "WAIT_VALIDATION"
 

@@ -388,10 +388,10 @@ def analyze_smc(candles: list[dict[str, Any]], mtf: dict[str, Any] | None = None
         "single_candle_liquidity_check": modules.get("single_candle_liquidity_check", False),
         "engulfing_confirmation": modules.get("engulfing_confirmation", False),
         "mtf_match": mtf_match,
-        "rr_ok": rr >= 1.5,
+        "rr_ok": rr >= 1.40,
     }
 
-    critical = structure_ok and entry_ok and mtf_match and rr >= 1.5
+    critical = structure_ok and entry_ok and mtf_match and rr >= 1.40
     confirmed = bool(critical and score >= 70)
     signal = direction if confirmed else "WAIT"
 
@@ -409,7 +409,7 @@ def analyze_smc(candles: list[dict[str, Any]], mtf: dict[str, Any] | None = None
     if modules.get("single_candle_liquidity_check"): reasons.append("single-candle liquidity check")
     if modules.get("engulfing_confirmation"): reasons.append("candle confirmation")
     if not mtf_match: reasons.append(f"MTF conflict: {mtf_bias}")
-    if not rr >= 1.5: reasons.append("RR below SignalX minimum 1.5")
+    if not rr >= 1.40: reasons.append("RR below SignalX minimum 1.40")
     if not confirmed: reasons.append("NO VALIDATION, NO TRADE")
 
     return {

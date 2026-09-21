@@ -4239,8 +4239,8 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
         1 if (direction=="BUY" and trendline.get("signal")=="BUY") or (direction=="SELL" and trendline.get("signal")=="SELL") else 0,
     ]) if direction!="WAIT" else 0
     confidence=min(99,max(35,50+abs(score)*5+confirmations*3))
-    setup="ULTRA_CONFLUENCE" if direction!="WAIT" and confirmations>=5 and rr>=1.5 else ("CONFLUENCE" if direction!="WAIT" else "WAIT_CONFLUENCE")
-    quality="A+" if direction!="WAIT" and confidence>=90 and confirmations>=5 and rr>=1.5 else "A" if direction!="WAIT" else "WAIT"
+    setup="ULTRA_CONFLUENCE" if direction!="WAIT" and confirmations>=5 and rr>=1.40 else ("CONFLUENCE" if direction!="WAIT" else "WAIT_CONFLUENCE")
+    quality="A+" if direction!="WAIT" and confidence>=90 and confirmations>=5 and rr>=1.40 else "A" if direction!="WAIT" else "WAIT"
     result={
         "interval":interval,"signal":direction,"entry":round(entry,4),"stop_loss":round(sl,4) if sl is not None else None,
         "take_profit":[round(x,4) for x in tp],"confidence":confidence,"score":score,"setup":setup,
@@ -4581,12 +4581,12 @@ async def build_msai_strategy(symbol: str, selected: str) -> dict[str, Any]:
             base["reason"] = (base.get("reason", "") + "; 2-TF confirmation missing").strip("; ")
 
     # Hard risk/geometry gate. The book illustrates risk/reward examples; SignalX uses
-    # RR >= 1.5 as an implementation threshold, not as a claim that the book specifies 1.5.
-    if base.get("signal") in {"BUY", "SELL"} and float(base.get("risk_reward") or 0) < 1.5:
+    # RR >= 1.40 as an implementation threshold, not as a claim that the book specifies 1.5.
+    if base.get("signal") in {"BUY", "SELL"} and float(base.get("risk_reward") or 0) < 1.40:
         base["signal"] = "WAIT"
         base["state"] = "WAIT_RR"
         base["setup"] = "WAIT_RR"
-        base["reason"] = (base.get("reason", "") + "; RR below SignalX minimum 1.5").strip("; ")
+        base["reason"] = (base.get("reason", "") + "; RR below SignalX minimum 1.40").strip("; ")
 
     # AI gate: one structured second-opinion call per symbol/timeframe/candle.
     candle_time = selected_candles[-1].get("time")
@@ -5450,11 +5450,11 @@ def build_ict_m30_m5(candles30:list[dict[str,Any]], candles5:list[dict[str,Any]]
     extreme=sweep["extreme"] if sweep["type"]!="NONE" else (min(float(c["low"]) for c in candles5[-8:]) if direction=="BUY" else max(float(c["high"]) for c in candles5[-8:]))
     if direction=="BUY":
         sl=min(extreme,entry-a5*1.1); risk=max(entry-sl,a5*0.7)
-        tp1=target if target and target>entry+risk else entry+risk*1.5
+        tp1=target if target and target>entry+risk*1.40 else entry+risk*1.40
         tp2=max(entry+risk*2.5,tp1+risk*0.5)
     elif direction=="SELL":
         sl=max(extreme,entry+a5*1.1); risk=max(sl-entry,a5*0.7)
-        tp1=target if target and target<entry-risk else entry-risk*1.5
+        tp1=target if target and target<entry-risk*1.40 else entry-risk*1.40
         tp2=min(entry-risk*2.5,tp1-risk*0.5)
     else:
         sl=None;tp1=tp2=None;risk=None
