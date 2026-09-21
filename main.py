@@ -4223,9 +4223,9 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
     entry=current
     swing_low=structure["swing_low"]; swing_high=structure["swing_high"]
     if direction=="BUY":
-        sl=min(swing_low, current-avtr*1.2); risk=max(entry-sl,avtr*0.6); tp=[entry+risk*1.5,entry+risk*2.5]
+        sl=min(swing_low, current-avtr*1.2); risk=max(entry-sl,avtr*0.6); tp=[entry+risk*1.40,entry+risk*2.5]
     elif direction=="SELL":
-        sl=max(swing_high, current+avtr*1.2); risk=max(sl-entry,avtr*0.6); tp=[entry-risk*1.5,entry-risk*2.5]
+        sl=max(swing_high, current+avtr*1.2); risk=max(sl-entry,avtr*0.6); tp=[entry-risk*1.40,entry-risk*2.5]
     else: sl=None; tp=[]
     rr=(abs((tp[0]-entry)/(entry-sl)) if direction=="BUY" and sl is not None else abs((entry-tp[0])/(sl-entry)) if direction=="SELL" and sl is not None else 0.0)
     confirmations=sum([
@@ -6183,12 +6183,12 @@ def _m5_strategic_pro(c5: list[dict[str, Any]], c15: list[dict[str, Any]],
                 "bias":{"H4":b4,"H1":b1,"M15":b15},"liquidity":sweep}
     target=_ict_target_liquidity(c5,direction,entry)
     if direction=="BUY":
-        tp1=target if target and target>entry+risk*1.5 else entry+risk*1.5
+        tp1=target if target and target>entry+risk*1.40 else entry+risk*1.40
         tp2=entry+risk*2.5
         if target and target>tp1: tp2=max(tp2,target)
         rr=(tp1-entry)/risk
     else:
-        tp1=target if target and target<entry-risk*1.5 else entry-risk*1.5
+        tp1=target if target and target<entry-risk*1.40 else entry-risk*1.40
         tp2=entry-risk*2.5
         if target and target<tp1: tp2=min(tp2,target)
         rr=(entry-tp1)/risk
@@ -6331,10 +6331,10 @@ def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[di
     else: sl=price; target=price; risk=0
     risk_ok=0<risk<=a*profile["max_risk_atr"]
     if direction=="BUY" and risk_ok:
-        t1=max(price+risk*1.5,target); t2=max(price+risk*2.5,t1+risk*0.5)
+        t1=max(price+risk*1.40,target); t2=max(price+risk*2.5,t1+risk*0.5)
         rr=(t1-price)/max(risk,1e-9)
     elif direction=="SELL" and risk_ok:
-        t1=min(price-risk*1.5,target); t2=min(price-risk*2.5,t1-risk*0.5)
+        t1=min(price-risk*1.40,target); t2=min(price-risk*2.5,t1-risk*0.5)
         rr=(price-t1)/max(risk,1e-9)
     else:
         t1=t2=price; rr=0

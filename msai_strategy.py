@@ -345,14 +345,14 @@ def analyze_msai(
         sl = min(recent_low, zone.low if zone else recent_low) - atr * 0.15
         risk = max(price - sl, atr * 0.6)
         opposing = nearest_r.level if nearest_r and nearest_r.level > price else None
-        tp1 = opposing if opposing and (opposing - price) / risk >= 1.5 else price + risk * 2.0
+        tp1 = opposing if opposing and (opposing - price) / risk >= 1.40 else price + risk * 2.0
         tp2 = max(tp1, price + risk * 3.0)
         rr = (tp1 - price) / risk
     else:
         sl = max(recent_high, zone.high if zone else recent_high) + atr * 0.15
         risk = max(sl - price, atr * 0.6)
         opposing = nearest_s.level if nearest_s and nearest_s.level < price else None
-        tp1 = opposing if opposing and (price - opposing) / risk >= 1.5 else price - risk * 2.0
+        tp1 = opposing if opposing and (price - opposing) / risk >= 1.40 else price - risk * 2.0
         tp2 = min(tp1, price - risk * 3.0)
         rr = (price - tp1) / risk
 
