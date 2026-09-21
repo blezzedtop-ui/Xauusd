@@ -1,0 +1,436 @@
+    It intentionally calculates only the selected timeframe to keep the dedicated UI fast.
+    """
+    require_admin(authorization, session)
+    key=clean_symbol(symbol); interval=validate_interval(interval)
+    market_gate = market_gate_status(key)
+    if not market_gate.get("open"):
+        return {"symbol":key,"interval":interval,"signal":{"signal":"WAIT","confidence":0,"reason":"MARKET_CLOSED","mode":"market_closed","market_gate":market_gate},"ai_validation":{"mode":"market_closed","signal":"WAIT","validation":False,"reasoning":f"Market Gate: {market_gate.get('reason')}"},"mode":"market_closed","source":"SignalX Market Gate","generated_at":datetime.now(timezone.utc).isoformat()}
+    candles_data, mode, warning = await get_candles(key, interval, 260)
+    if len(candles_data) < 40:
+        raise MarketDataError(f"{interval} uchun real signal hisoblashga candle yetarli emas")
+    item=build_advanced_signal(candles_data, interval, news_blocked=False)
+    candle_time=candles_data[-1].get("time") if candles_data else None
+    ai=await ai_validate_module_signal("AI Signals", key, interval, candle_time, item)
+    item=merge_ai_validation(item, ai)
+    item["candle_time"]=candle_time
+    item["mode"]=mode
+    item["warning"]=warning
+    return {"symbol":key,"interval":interval,"signal":item,"ai_validation":ai,"mode":"live","source":f"TradingView {tv_symbol_for(key)} live candle","generated_at":datetime.now(timezone.utc).isoformat()}
+
+
+def _setup_strength_from_payload(payload: dict[str, Any], confidence: float | None = None) -> tuple[float, str, bool]:
+    """Extract a normalized setup strength for history without changing signal logic."""
+    candidates: list[float] = []
+    for key in ("setup_strength", "zone_strength", "zone_quality", "confidence_at_entry", "confidence"):
+        v = payload.get(key)
+        try:
+            if v is not None: candidates.append(float(v))
+        except (TypeError, ValueError):
+            pass
+    resp = payload.get("response") if isinstance(payload.get("response"), dict) else {}
+    sig = payload.get("signal") if isinstance(payload.get("signal"), dict) else {}
+    for obj in (resp, sig):
+        for key in ("setup_strength", "zone_strength", "zone_quality", "confidence"):
+            try:
+                if obj.get(key) is not None: candidates.append(float(obj.get(key)))
+            except (TypeError, ValueError):
+                pass
+    strength = max(candidates) if candidates else float(confidence or 0)
+    # A signal already issued by the strong-zone engine is considered strong when
+    # its confidence/zone quality is at least 82.  This is only a history label.
+    label = "STRONG" if strength >= 82 else "GOOD" if strength >= 72 else "STANDARD"
+    return round(strength, 2), label, strength >= 82
+
+
+class MT5ConnectBody(BaseModel):
+    login: str = ""
+    server: str = ""
+    password: str = ""
+    demo: bool = True
+
+class MT5LotBody(BaseModel):
+    lot: float = 0.01
+
+class MT5StateBody(BaseModel):
+    connected: bool = False
+    session_open: bool | None = None
+    session_source: str = ""
+    server_time: str = ""
+    symbol: str = ""
+    login: str = ""
+    server: str = ""
+    balance: float | None = None
+    equity: float | None = None
+    free_margin: float | None = None
+    margin: float | None = None
+    positions: int = 0
+    error: str = ""
+    candles: dict[str, list[dict[str, Any]]] = {}
+    markets: dict[str, dict[str, Any]] = {}
+    client_id: str = ""
+
+class MT5ReportBody(BaseModel):
+    action: str = ""
+    ticket: str = ""
+    symbol: str = ""
+    status: str = ""
+    price: float | None = None
+    profit: float | None = None
+    message: str = ""
+    client_id: str = ""
+
+class ModuleSignalBody(BaseModel):
+    symbol: str = DEFAULT_SYMBOL
+    interval: str = DEFAULT_INTERVAL
+    source: str = HISTORY_DEFAULT_SOURCE
+    direction: str = "WAIT"
+    confidence: float | None = None
+    entry: float | None = None
+    stop_loss: float | None = None
+    take_profit: list[float] = Field(default_factory=list)
+    headline: str = ""
+    candle_time: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+@app.post("/api/v1/signals/record-module")
+async def record_module_signal(body: ModuleSignalBody, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    """Persist a module signal using fresh candles for the exact symbol/timeframe.
+
+    Client-supplied Entry/SL/TP are treated as hints only; the server revalidates them
+    against the current TradingView chart so history cannot store cross-symbol or stale
+    levels.
+    """
+    user = current_user(authorization, session)
+    direction = str(body.direction or "WAIT").upper()
+    source = _normalize_history_source(body.source or HISTORY_DEFAULT_SOURCE)
+    if _autotrade_source_excluded(source):
+        return {"saved": False, "reason": "MODULE_REMOVED"}
+    interval = validate_interval(body.interval)
+    symbol = clean_symbol(body.symbol)
+    if direction not in {"BUY", "SELL"}:
+        return {"saved": False, "reason": "WAIT"}
+
+    try:
+        live_candles, _, _ = await get_candles(symbol, interval, 260)
+        entry, sl, tp, repaired = _normalize_auto_trade_levels({
+            "entry": body.entry, "stop_loss": body.stop_loss, "take_profit": body.take_profit
+        }, live_candles, direction, interval)
+    except Exception as exc:
+        return {"saved": False, "reason": f"LIVE_LEVELS_UNAVAILABLE: {exc}"}
+    target_reached = not bool(tp)
+    live_candle_time = _normalize_history_candle_time(live_candles[-1].get("time"))
+
+    # Exactly one record per module/timeframe/live candle. Direction is mutable while
+    # the current candle recalculates; do not create a second row on a BUY↔SELL flip.
+    q = select(SignalHistory).where(
+        SignalHistory.user_id == user.id,
+        SignalHistory.source == source,
+        SignalHistory.symbol == symbol,
+        SignalHistory.interval == interval,
+        SignalHistory.candle_time == live_candle_time
+    ).order_by(SignalHistory.id.desc())
+    existing = session.scalar(q)
+
+    payload = dict(body.payload or {})
+    setup_strength, setup_grade, strong_setup = _setup_strength_from_payload(payload, body.confidence)
+    payload.update({
+        "source": source, "symbol": symbol, "interval": interval, "confidence_at_entry": body.confidence,
+        "setup": {"entry": entry, "stop_loss": sl, "take_profit": tp},
+        "signal": {"direction": ("WAIT" if target_reached else direction), "original_direction": direction, "confidence": body.confidence},
+        "target_state": "TARGET_REACHED" if target_reached else "ACTIVE", "candle_time": live_candle_time,
+        "live_levels_verified": True, "levels_repaired_from_live_chart": bool(repaired),
+        "setup_strength": setup_strength, "setup_grade": setup_grade, "strong_setup": strong_setup,
+    })
+    rr_for_history = None
+    try:
+        risk_abs = abs(float(entry) - float(sl)) if sl is not None else 0.0
+        first_tp = float(tp[0]) if tp else None
+        if risk_abs > 0 and first_tp is not None:
+            rr_for_history = ((first_tp - float(entry)) / risk_abs) if direction == "BUY" else ((float(entry) - first_tp) / risk_abs) if direction == "SELL" else None
+            if rr_for_history is not None:
+                rr_for_history = round(rr_for_history, 4)
+    except Exception:
+        rr_for_history = None
+    if rr_for_history is not None:
+        payload["risk_reward"] = rr_for_history
+        payload["rr"] = rr_for_history
+    snapshot=_history_snapshot_payload(payload,source,symbol,interval,direction,body.confidence,entry,sl,tp,live_candle_time)
+    payload["history_snapshot"]=snapshot
+    history_direction = "WAIT" if target_reached else direction
+    history_status = "CANCELLED" if target_reached else "ACTIVE"
+    history_outcome = "TARGET_REACHED" if target_reached else "OPEN"
+    row = SignalHistory(
+        user_id=user.id, symbol=symbol, interval=interval, direction=history_direction, headline=(body.headline or f"{source} · {history_direction}")[:255],
+        price=float(entry), payload=json.dumps(payload, ensure_ascii=False), outcome=history_outcome, status=history_status, created_at=datetime.now(timezone.utc), source=source, candle_time=live_candle_time
+    )
+    _history_sync_row(row,payload)
+    if existing is None:
+        try:
+            session.add(row); session.commit(); session.refresh(row)
+        except IntegrityError:
+            session.rollback()
+            existing = session.scalar(q)
+            if existing is None:
+                raise
+    if existing is not None and str(existing.status or "ACTIVE").upper() in {"ACTIVE", "TP1 HIT", "OPEN"} and str(existing.outcome or "OPEN").upper() in {"OPEN", "TP1 HIT"}:
+        existing.direction = direction
+        existing.headline = (body.headline or f"{source} · {direction}")[:255]
+        existing.price = float(entry)
+        existing.payload = json.dumps(payload, ensure_ascii=False, default=str)
+        existing.status = "ACTIVE" if str(existing.status or "ACTIVE").upper() != "TP1 HIT" else existing.status
+        existing.outcome = "OPEN" if str(existing.outcome or "OPEN").upper() != "TP1 HIT" else existing.outcome
+        _history_sync_row(existing, payload)
+        session.commit()
+
+    order = None
+    rr_value = None
+    try:
+        risk_abs = abs(float(entry) - float(sl)) if sl is not None else 0
+        rr_value = ((float(tp[0]) - float(entry)) / risk_abs) if direction == "BUY" and risk_abs > 0 else ((float(entry) - float(tp[0])) / risk_abs) if direction == "SELL" and risk_abs > 0 else None
+    except Exception:
+        rr_value = None
+    if direction in {"BUY", "SELL"} and tp and not target_reached and rr_value is not None and rr_value >= (AUTOTRADE_MIN_RR - 1e-9):
+        target_row = existing if existing is not None else row
+        order = _queue_autotrade_order(
+            symbol=symbol, source=source, interval=interval, direction=direction,
+            entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
+            confidence=body.confidence, candle_time=live_candle_time, risk_reward=rr_value,
+            signal_id=str(getattr(target_row, "signal_uid", "") or ""),
+            user_id=user.id,
+        )
+    if order is not None:
+        payload["auto_trade"] = {"queued": True, "order_id": order.get("id"), "risk_reward": rr_value}
+        payload["execution_gate"] = {"auto_trade": True, "risk_reward": rr_value, "rr_min": AUTOTRADE_MIN_RR, "state": "READY"}
+        target = existing if existing is not None else row
+        target.payload = json.dumps(payload, ensure_ascii=False, default=str)
+        _history_sync_row(target, payload)
+        session.commit()
+        # Push the in-memory core queue into the account-scoped MT5 gateway immediately.
+        # This removes the old 15s worker race from UI-triggered signals.
+        try:
+            import mt5_account_gateway as _gw
+            _gw._sync_core_queue(session)
+        except Exception as exc:
+            print(f"[MT5 GATEWAY SYNC] deferred signal_id={getattr(target, 'signal_uid', '')}: {type(exc).__name__}: {exc}")
+    if existing is not None:
+        return {"saved": False, "updated": str(existing.status or "ACTIVE").upper() in {"ACTIVE", "TP1 HIT", "OPEN"}, "duplicate": True, "id": existing.id, "queued": bool(order),
+                "source": source, "symbol": symbol, "entry": existing.price, "stop_loss": existing.stop_loss,
+                "take_profit": [x for x in (existing.take_profit_1, existing.take_profit_2) if x is not None], "direction": existing.direction, "candle_time": live_candle_time}
+    return {"saved": True, "id": row.id, "source": source, "outcome": row.outcome,
+            "symbol": symbol, "entry": entry, "stop_loss": sl, "take_profit": tp,
+            "candle_time": live_candle_time, "queued": bool(order)}
+
+@app.get("/api/v1/signals/analytics")
+async def signal_analytics(period: str = Query("all"), date: str | None = Query(None), symbol: str = Query(""), authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    user = current_user(authorization, session)
+    requested_symbol = clean_symbol(symbol) if symbol else ""
+    rows = await refresh_signal_outcomes(session, user.id, limit=500)
+    if requested_symbol:
+        rows = [r for r in rows if clean_symbol(r.symbol) == requested_symbol]
+    rows = filter_history_rows(rows, period, date)
+    wins = sum(1 for r in rows if _history_status(r) == "TP2 HIT" or r.outcome == "TP HIT")
+    losses = sum(1 for r in rows if _history_status(r) == "SL HIT" or r.outcome == "SL HIT")
+    completed = wins + losses
+    winrate = round((wins / completed) * 100, 2) if completed else 0.0
+    by_tf: dict[str, dict[str, Any]] = {}
+    by_source: dict[str, dict[str, Any]] = {}
+    by_date: dict[str, dict[str, Any]] = {}
+
+    def bucket() -> dict[str, Any]:
+        return {"total_signals":0,"completed_trades":0,"wins":0,"losses":0,"open":0,"ambiguous":0,"winrate":0.0}
+
+    def finish(item: dict[str, Any]) -> None:
+        item["completed_trades"] = item["wins"] + item["losses"]
+        item["winrate"] = round(item["wins"] / item["completed_trades"] * 100, 2) if item["completed_trades"] else 0.0
+
+    for r in rows:
+        item = by_tf.setdefault(r.interval, bucket())
+        src = getattr(r, "source", None) or HISTORY_DEFAULT_SOURCE
+        src_item = by_source.setdefault(src, bucket())
+        dt = r.created_at
+        if dt is None:
+            continue
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        day_key = dt.astimezone(HISTORY_LOCAL_TZ).date().isoformat()
+        day_item = by_date.setdefault(day_key, bucket())
+
+        for target in (item, src_item, day_item):
+            target["total_signals"] += 1
+            status = _history_status(r)
+            if status == "TP2 HIT" or r.outcome == "TP HIT":
+                target["wins"] += 1
+            elif status == "SL HIT" or r.outcome == "SL HIT":
+                target["losses"] += 1
+            elif status == "CANCELLED" or r.outcome == "AMBIGUOUS":
+                target["ambiguous"] += 1
+            elif status in {"ACTIVE", "TP1 HIT"} or r.outcome == "OPEN":
+                target["open"] += 1
+            finish(target)
+
+    return {
+        "total_signals": len(rows),
+        "completed_trades": completed,
+        "wins": wins,
+        "losses": losses,
+        "winrate": winrate,
+        "open": sum(1 for r in rows if r.outcome == "OPEN"),
+        "ambiguous": sum(1 for r in rows if r.outcome == "AMBIGUOUS"),
+        "by_timeframe": by_tf,
+        "by_source": by_source,
+        "by_date": dict(sorted(by_date.items(), reverse=True)),
+    }
+
+
+# ---------------- Professional Signal History v2 ----------------
+HISTORY_STATUS_VALUES = {"ACTIVE", "TP1 HIT", "TP2 HIT", "SL HIT", "EXPIRED", "CANCELLED", "TARGET_REACHED"}
+
+def _history_snapshot_payload(payload: Any, source: str, symbol: str, interval: str, direction: str, confidence: Any = None,
+                             entry: Any = None, sl: Any = None, tp: Any = None, candle_time: Any = None) -> dict[str, Any]:
+    """Freeze the signal-time evidence in a JSON snapshot; never mutate it later."""
+    base = payload if isinstance(payload, dict) else {"raw": payload}
+    snap = json.loads(json.dumps(base, ensure_ascii=False, default=str))
+    snap.setdefault("history_snapshot_version", "2.0")
+    snap["source"] = source
+    snap["symbol"] = clean_symbol(symbol)
+    snap["interval"] = interval
+    snap["direction"] = direction
+    snap["confidence_at_entry"] = confidence
+    snap["setup"] = {
+        "entry": entry, "stop_loss": sl,
+        "take_profit": list(tp or []) if isinstance(tp, (list, tuple)) else tp,
+    }
+    snap["candle_time"] = str(candle_time) if candle_time is not None else None
+    snap["snapshot_created_at"] = datetime.now(timezone.utc).isoformat()
+    snap["immutable"] = True
+    return snap
+
+def _history_numeric_levels(payload: dict[str, Any], row: SignalHistory) -> tuple[float | None, float | None, float | None, float | None]:
+    setup = payload.get("setup") if isinstance(payload.get("setup"), dict) else {}
+    adv = payload.get("advanced") if isinstance(payload.get("advanced"), dict) else (payload.get("signal") if isinstance(payload.get("signal"), dict) else {})
+    module = payload.get("module_signal") if isinstance(payload.get("module_signal"), dict) else {}
+    entry = setup.get("entry", payload.get("entry", adv.get("entry", module.get("entry", row.price))))
+    sl = setup.get("stop_loss", payload.get("stop_loss", payload.get("sl", adv.get("stop_loss", module.get("stop_loss")))))
+    tps = setup.get("take_profit", payload.get("take_profit", payload.get("tp", adv.get("take_profit", module.get("take_profit", [])))))
+    def f(v):
+        try: return float(v) if v is not None else None
+        except Exception: return None
+    tp1 = f(tps[0]) if isinstance(tps, (list, tuple)) and len(tps) > 0 else f(tps)
+    tp2 = f(tps[1]) if isinstance(tps, (list, tuple)) and len(tps) > 1 else None
+    return f(entry), f(sl), tp1, tp2
+
+def _history_score_strength(payload: dict[str, Any]) -> tuple[float | None, str | None, float | None]:
+    score = payload.get("signal_score", payload.get("score", payload.get("confidence_at_entry", payload.get("confidence"))))
+    try: score = float(score) if score is not None else None
+    except Exception: score = None
+    strength = payload.get("signal_strength") or payload.get("setup_grade") or payload.get("strength")
+    rr = payload.get("risk_reward") or payload.get("rr")
+    try: rr = float(rr) if rr is not None else None
+    except Exception: rr = None
+    return score, str(strength) if strength is not None else None, rr
+
+def _history_sync_row(row: SignalHistory, payload: dict[str, Any]) -> None:
+    entry, sl, tp1, tp2 = _history_numeric_levels(payload, row)
+    score, strength, rr = _history_score_strength(payload)
+    row.entry_price, row.stop_loss, row.take_profit_1, row.take_profit_2 = entry, sl, tp1, tp2
+    row.signal_score, row.signal_strength, row.risk_reward = score, strength, rr
+    row.status = row.status or ("ACTIVE" if row.outcome in {None, "OPEN"} else row.outcome)
+    row.result = row.result or (row.outcome if row.outcome not in {None, "OPEN", "AMBIGUOUS"} else None)
+    if not row.signal_uid:
+        row.signal_uid = "SIG-" + secrets.token_hex(10).upper()
+
+def _history_result_metrics(row: SignalHistory, status: str, result_price: float | None) -> tuple[float | None, float | None]:
+    entry, sl = row.entry_price, row.stop_loss
+    if entry is None or sl is None or entry == sl or result_price is None: return None, None
+    risk = abs(entry - sl)
+    pnl = (result_price - entry) if row.direction == "BUY" else (entry - result_price)
+    return round(pnl, 4), round(pnl / risk, 4) if risk else None
+
+
+def _history_status(row: SignalHistory) -> str:
+    s = (getattr(row, "status", None) or "").upper().strip()
+    if s == "OPEN": return "ACTIVE"
+    if s == "TP HIT": return "TP2 HIT"
+    if s == "AMBIGUOUS": return "CANCELLED"
+    if s == "TARGET_REACHED": return "TARGET_REACHED"
+    return s or ("ACTIVE" if row.outcome == "OPEN" else row.outcome or "ACTIVE")
+
+def _history_v2_date_bounds(start_date: str | None, end_date: str | None):
+    """Convert UI dates in Asia/Tashkent into UTC [start, end) bounds."""
+    start_dt = end_dt = None
+    tz = HISTORY_LOCAL_TZ
+    if start_date:
+        try:
+            d = datetime.strptime(start_date, "%Y-%m-%d").date()
+            start_dt = datetime(d.year, d.month, d.day, tzinfo=tz).astimezone(timezone.utc)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="start_date YYYY-MM-DD formatda bo‘lishi kerak")
+    if end_date:
+        try:
+            d = datetime.strptime(end_date, "%Y-%m-%d").date()
+            next_d = d + timedelta(days=1)
+            end_dt = datetime(next_d.year, next_d.month, next_d.day, tzinfo=tz).astimezone(timezone.utc)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="end_date YYYY-MM-DD formatda bo‘lishi kerak")
+    if start_dt and end_dt and start_dt >= end_dt:
+        raise HTTPException(status_code=400, detail="start_date end_date dan katta yoki teng bo‘lishi mumkin emas")
+    return start_dt, end_dt
+
+# History outcome refresh is throttled so opening the journal repeatedly does not
+# trigger repeated candle scans. It does not alter signal generation or execution.
+_HISTORY_V2_REFRESH_TS: dict[int, float] = {}
+_HISTORY_V2_REFRESH_LOCKS: dict[int, asyncio.Lock] = {}
+_HISTORY_V2_REFRESH_COOLDOWN = max(5.0, float(os.getenv("HISTORY_V2_REFRESH_COOLDOWN", "20")))
+
+async def _maybe_refresh_history_v2(session: Session, user_id: int, limit: int = 2000) -> None:
+    uid = int(user_id)
+    lock = _HISTORY_V2_REFRESH_LOCKS.setdefault(uid, asyncio.Lock())
+    async with lock:
+        now_mono = asyncio.get_running_loop().time()
+        last = _HISTORY_V2_REFRESH_TS.get(uid, 0.0)
+        if now_mono - last < _HISTORY_V2_REFRESH_COOLDOWN:
+            return
+        try:
+            await refresh_signal_outcomes(session, uid, limit=limit)
+        except Exception as exc:
+            # Outcome refresh is best-effort; History reads must not become HTTP 500.
+            print(f"[HISTORY V2] outcome refresh skipped: {type(exc).__name__}: {exc}")
+        finally:
+            _HISTORY_V2_REFRESH_TS[uid] = asyncio.get_running_loop().time()
+
+@app.get("/api/v2/signal-history")
+async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0),
+                            start_date: str | None = Query(None), end_date: str | None = Query(None),
+                            symbol: str = Query(""), direction: str = Query(""), result: str = Query(""),
+                            module: str = Query(""), authorization: str | None = Header(default=None),
+                            session: Session = Depends(db)) -> dict[str, Any]:
+    user = current_user(authorization, session)
+    try:
+        await _maybe_refresh_history_v2(session, user.id)
+    except Exception as exc:
+        print(f"[HISTORY V2] outcome refresh skipped: {type(exc).__name__}: {exc}")
+    q = select(SignalHistory).where(SignalHistory.user_id == user.id, ~SignalHistory.source.in_(LEGACY_EXCLUDED_SIGNAL_SOURCES))
+    if symbol:
+        q = q.where(SignalHistory.symbol == clean_symbol(symbol))
+    if direction and direction.upper() in {"BUY", "SELL"}:
+        q = q.where(SignalHistory.direction == direction.upper())
+    if result:
+        norm = result.upper().replace("_", " ")
+        q = q.where((SignalHistory.status == norm) | (SignalHistory.outcome == norm))
+    if module:
+        q = q.where(SignalHistory.source == module)
+    start_dt, end_dt = _history_v2_date_bounds(start_date, end_date)
+    if start_dt is not None:
+        q = q.where(SignalHistory.created_at >= start_dt)
+    if end_dt is not None:
+        q = q.where(SignalHistory.created_at < end_dt)
+    total_count = int(session.scalar(select(func.count()).select_from(q.subquery())) or 0)
+    rows = list(session.scalars(q.order_by(SignalHistory.created_at.desc(), SignalHistory.id.desc()).offset(offset).limit(limit)).all())
+    items=[]
+    for r in rows:
+        try: payload=json.loads(r.payload or "{}")
+        except Exception: payload={}
+        if not isinstance(payload, dict):
+            payload = {"raw_payload": payload}
+        _history_sync_row(r,payload)
+        entry,sl,tp1,tp2=r.entry_price,r.stop_loss,r.take_profit_1,r.take_profit_2

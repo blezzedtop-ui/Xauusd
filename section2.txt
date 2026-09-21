@@ -1,0 +1,536 @@
+        intervals=["5min","15min","30min","1h","4h","1day"]
+        live_by_tf: dict[str, tuple[list[dict[str, Any]],str,str|None]] = {}
+        async def load_tf(tf: str):
+            try:
+                live_by_tf[tf]=await get_candles(key,tf,260)
+            except Exception:
+                live_by_tf[tf]=([],"error",None)
+        await asyncio.gather(*(load_tf(tf) for tf in intervals))
+
+        # Patterns is a first-class strategy family: book pattern = trigger, AI = filter.
+        # Pattern detection itself is deterministic here; the common process_symbol()
+        # layer applies the per-module AI + geometry + target + risk gates before queueing.
+        for tf in intervals:
+            pc=live_by_tf.get(tf,([],"error",None))[0]
+            if len(pc)>=45:
+                try:
+                    pattern_context={k:v[0] for k,v in live_by_tf.items() if v and v[0]}
+                    raw_pattern=detect_patterns(pc,pattern_context,tf)
+                    raw_pattern["interval"]=tf
+                    raw_pattern["candle_time"]=pc[-2].get("time") if len(pc)>1 else pc[-1].get("time")
+                    pattern_item=_finalize_pattern_result(raw_pattern,pattern_context,tf)
+                    if pattern_item.get("signal") in {"BUY","SELL"} and pattern_item.get("hard_pattern_ok"):
+                        candidates.append({"source":"Patterns","interval":tf,"item":pattern_item,"response":pattern_item})
+                except Exception as exc:
+                    print(f"[PATTERNS] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
+
+        # Algo/SMC book strategy: deterministic book-derived setup + strict AI validation.
+        # It is a first-class family and only emits BUY/SELL when the AI hard gate passes.
+        for tf in intervals:
+            try:
+                if tf not in live_by_tf or len(live_by_tf[tf][0]) < 60:
+                    continue
+                algo_result = await build_algo_smc_strategy(key, tf, prefetched=live_by_tf, validate_ai=False)
+                algo_item = dict(algo_result.get("strategy") or {})
+                if algo_item.get("signal") in {"BUY", "SELL"} and algo_item.get("ai_gate", {}).get("passed"):
+                    candidates.append({"source":"Algo/SMC","interval":tf,"item":algo_item,"response":algo_result})
+            except Exception as exc:
+                print(f"[ALGO/SMC] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
+
+        # MSAI/SNR: deterministic Malaysian-SNR analysis is kept independent from ICT/SMC;
+        # the common process layer adds live AI validation before History/AutoTrade.
+        for tf in intervals:
+            pc=live_by_tf.get(tf,([],"error",None))[0]
+            if len(pc)>=60:
+                try:
+                    daily=live_by_tf.get("1day",([],"error",None))[0]
+                    weekly=aggregate_weekly(daily) if daily else []
+                    local_mtf={
+                        "direction_bias": direction_from_candles(weekly) if len(weekly)>=5 else "NEUTRAL",
+                        "alignment": True,
+                    }
+                    msai_item=analyze_msai(pc,local_mtf,tf)
+                    msai_item["interval"]=tf
+                    msai_item["candle_time"]=pc[-2].get("time") if len(pc)>1 else pc[-1].get("time")
+                    if msai_item.get("signal") in {"BUY","SELL"}:
+                        candidates.append({"source":"MSAI/SNR","interval":tf,"item":msai_item,"response":msai_item})
+                except Exception as exc:
+                    print(f"[MSAI] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
+
+        # SMC: deterministic BOS/CHoCH, liquidity, IDM, POI and LTF framework.
+        for tf in intervals:
+            pc=live_by_tf.get(tf,([],"error",None))[0]
+            if len(pc)>=60:
+                try:
+                    daily=live_by_tf.get("1day",([],"error",None))[0]
+                    weekly=aggregate_weekly(daily) if daily else []
+                    bias=direction_from_candles(weekly) if len(weekly)>=5 else "NEUTRAL"
+                    smc_mtf={"direction_bias":bias,"alignment":bias in {"BULLISH","BEARISH"}}
+                    smc_item=analyze_smc(pc,smc_mtf,tf)
+                    smc_item["interval"]=tf
+                    smc_item["candle_time"]=pc[-2].get("time") if len(pc)>1 else pc[-1].get("time")
+                    if smc_item.get("signal") in {"BUY","SELL"}:
+                        candidates.append({"source":"SMC","interval":tf,"item":smc_item,"response":smc_item})
+                except Exception as exc:
+                    print(f"[SMC] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
+
+        # Trend Channel Engine: use the same canonical candle set; final AI + execution gates
+        # are applied once by process_symbol() so History and AutoTrade stay synchronized.
+        for tf in intervals:
+            pc=live_by_tf.get(tf,([],"error",None))[0]
+            if len(pc)>=60:
+                try:
+                    higher={x:live_by_tf.get(x,([],"error",None))[0] for x in ("1day","4h","1h")}
+                    tc_item=analyze_trend_channel(pc,higher)
+                    tc_item["interval"]=tf
+                    tc_item["candle_time"]=pc[-2].get("time") if len(pc)>1 else pc[-1].get("time")
+                    if tc_item.get("signal") in {"BUY","SELL"}:
+                        candidates.append({"source":"Trend Channel Engine","interval":tf,"item":tc_item,"response":tc_item})
+                except Exception as exc:
+                    print(f"[TREND CHANNEL] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
+
+        # Yangi Strategiya: all-book fusion (32 supplied sources), using the same canonical
+        # candles already loaded. It is its own independent strategy family.
+        for tf in intervals:
+            try:
+                raw_prefetched={k:v for k,v in live_by_tf.items() if v and v[0]}
+                fusion_result=await build_book_fusion_strategy(key,tf,prefetched=raw_prefetched,validate_ai=False)
+                fusion_item=dict(fusion_result.get("strategy") or {})
+                if fusion_item.get("signal") in {"BUY","SELL"}:
+                    candidates.append({"source":"Yangi Strategiya","interval":tf,"item":fusion_item,"response":fusion_result})
+            except Exception as exc:
+                print(f"[YANGI STRATEGIYA] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
+
+        # Fibonacci is a first-class strategy family from books 25–32.
+        # It uses the same canonical candles already loaded above, then the common
+        # process_symbol() layer applies the strict per-module AI + execution gates.
+        for tf in intervals:
+            pc=live_by_tf.get(tf,([],"error",None))[0]
+            if len(pc)>=60:
+                try:
+                    fib_context={k:v[0] for k,v in live_by_tf.items() if v and v[0]}
+                    fib_item=analyze_fibonacci(pc,{"1day":fib_context.get("1day",[]),"4h":fib_context.get("4h",[]),"1h":fib_context.get("1h",[])})
+                    fib_item["interval"]=tf
+                    fib_item["candle_time"]=pc[-2].get("time") if len(pc)>1 else pc[-1].get("time")
+                    if fib_item.get("signal") in {"BUY","SELL"}:
+                        candidates.append({"source":"Fibonacci","interval":tf,"item":fib_item,"response":fib_item})
+                except Exception as exc:
+                    print(f"[FIBONACCI] candidate build error tf={tf}: {type(exc).__name__}: {exc}")
+
+        # Remaining modules are evaluated on all supported timeframes.
+
+        for tf in intervals:
+            candles, mode, warning = live_by_tf.get(tf,([],"error",None))
+            if len(candles)<40:
+                continue
+            ct=candles[-1].get("time")
+            try:
+                ref=candles[-2] if len(candles)>1 else candles[-1]
+                price=float(candles[-1]["close"])
+                levels=calculate_pivot_levels(float(ref["high"]),float(ref["low"]),float(ref["close"]),price)
+                technical=build_key_level_signal(candles,levels,news_blocked=False)
+                technical=_enhance_strategy_result(technical,candles,tf)
+                candidates.append({"source":"Technical Analysis","interval":tf,"item":technical,"response":{"mode":mode,"warning":warning,"candle_time":ct}})
+            except Exception:
+                technical={}
+            try:
+                classic=_classic_trade(candles,calculate_pivot_levels(float(candles[-2]["high"]),float(candles[-2]["low"]),float(candles[-2]["close"]),float(candles[-1]["close"])))
+                classic["strategy_chain"]=_strategy_chain(tf); classic["strategy_version"]="V2"
+                candidates.append({"source":"Classic Trade","interval":tf,"item":classic,"response":{"mode":mode,"warning":warning,"candle_time":ct}})
+            except Exception:
+                pass
+            try:
+                trend=_trendline_analysis(candles); fib=_fibonacci_analysis(candles)
+                trend["strategy_engine"]="Market Structure Trendline V2"; trend["strategy_version"]="V2"; trend["strategy_chain"]=_strategy_chain(tf)
+                trend["take_profit"]=[v for v in [fib.get("extension_targets",{}).get("1.272"),fib.get("extension_targets",{}).get("1.618")] if v is not None]
+                candidates.append({"source":"Auto Trend Line","interval":tf,"item":trend,"response":{"mode":mode,"warning":warning,"candle_time":ct,"fibonacci":fib}})
+            except Exception:
+                pass
+            # ICT uses its dedicated M30→M5 structure. For every TF, expose the same
+            # canonical ICT result in that TF's chain so AutoTrade can receive any TF.
+            try:
+                c30=live_by_tf.get("30min",([],"",None))[0]; c5=live_by_tf.get("5min",([],"",None))[0]
+                if len(c30)>=40 and len(c5)>=40:
+                    ict=build_ict_m30_m5(c30,c5); ict["interval"]=tf; ict["strategy_engine"]="ICT M30→M5 V2"; ict["strategy_version"]="V2"; ict["strategy_chain"]=_strategy_chain(tf)
+                    candidates.append({"source":"ICT Signals","interval":tf,"item":ict,"response":{"mode":"tradingview","candle_time":ct}})
+            except Exception:
+                pass
+            # AI Smart Analysis remains chained to the same TF's technical result plus MTF context.
+            try:
+                mtf=await multi_timeframe(key)
+                smart={"signal":technical.get("signal","WAIT"),"confidence":technical.get("confidence",0),"entry":technical.get("entry"),"stop_loss":technical.get("stop_loss"),"take_profit":technical.get("take_profit",[]),"reason":f"Technical V2 + MTF {mtf.get('overall','MIXED')}","strategy_engine":"Multi-scenario AI Decision V2","strategy_version":"V2","strategy_chain":_strategy_chain(tf),"interval":tf}
+                if smart["signal"] in {"BUY","SELL"}:
+                    candidates.append({"source":"AI Smart Analysis","interval":tf,"item":smart,"response":{"mode":"confirmation-only","multi_timeframe":mtf,"candle_time":ct}})
+            except Exception:
+                pass
+        return candidates, live_by_tf
+
+    def _build_consensus(candidates: list[dict[str, Any]], interval: str, candle_time: str) -> dict[str, Any] | None:
+        """Collapse all module outputs into ONE directional decision per XAU timeframe/candle.
+
+        Active strategy modules are counted as independent families. Retired modules never
+        enter consensus; ties, conflicts and weak consensus become WAIT.
+        """
+        weights = {
+            "Technical Analysis": 1.00,
+            "Classic Trade": 1.00,
+            "Auto Trend Line": 1.10,
+            "ICT Signals": 1.40,
+            "AI Smart Analysis": 0.80,
+            "MSAI/SNR": 1.20,
+            "SMC": 1.30,
+            "Algo/SMC": 1.50,
+            "Trend Channel Engine": 1.20,
+            "Fibonacci": 1.30,
+            "Yangi Strategiya": 1.70,
+            "Patterns": 1.10,
+        }
+        families: dict[str, dict[str, Any]] = {}
+        aliases = {}
+        for c in candidates:
+            if str(c.get("interval")) != interval:
+                continue
+            item = c.get("item") or {}
+            direction = str(item.get("signal") or item.get("direction") or "WAIT").upper()
+            if direction not in {"BUY", "SELL"}:
+                continue
+            source = str(c.get("source") or "").strip()
+            family = aliases.get(source.lower(), source)
+            if family not in weights:
+                continue
+            confidence = max(0.0, min(100.0, float(item.get("confidence") or item.get("trend_power") or 0)))
+            # Confidence contributes gradually; no single module can dominate the ensemble.
+            score = weights[family] * (0.55 + 0.45 * confidence / 100.0)
+            bucket = families.setdefault(family, {"BUY": 0.0, "SELL": 0.0, "items": []})
+            bucket[direction] += score
+            bucket["items"].append((direction, item, source, confidence))
+
+        if not families:
+            return None
+        totals = {d: 0.0 for d in ("BUY", "SELL")}
+        for f in families.values():
+            totals["BUY"] += f["BUY"]
+            totals["SELL"] += f["SELL"]
+        winner = "BUY" if totals["BUY"] > totals["SELL"] else "SELL" if totals["SELL"] > totals["BUY"] else "WAIT"
+        if winner == "WAIT":
+            return None
+        loser = "SELL" if winner == "BUY" else "BUY"
+        active_total = totals[winner] + totals[loser]
+        agreement = (totals[winner] / active_total) if active_total else 0.0
+        distinct_winner = sum(1 for f in families.values() if f[winner] > 0)
+        min_families = 2  # tradable timeframes: require two independent strategy families
+        # Hard conflict protection: if the opposing side is materially represented, wait.
+        if distinct_winner < min_families or agreement < 0.60 or (active_total and totals[loser] / active_total > 0.35):
+            return None
+        # Choose the strongest representative setup on the winning side for levels.
+        reps=[]
+        for f in families.values():
+            for d,item,source,conf in f["items"]:
+                if d == winner:
+                    reps.append((weights.get(aliases.get(source.lower(), source),1.0) * (0.55+0.45*conf/100), item, source, conf))
+        reps.sort(key=lambda x:x[0], reverse=True)
+        _, representative, rep_source, rep_conf = reps[0]
+        return {
+            "signal": winner,
+            "confidence": round(min(99.0, max(0.0, 50.0 + 50.0 * agreement)), 1),
+            "entry": representative.get("entry"),
+            "stop_loss": representative.get("stop_loss"),
+            "take_profit": representative.get("take_profit") or [],
+            "reason": f"Consensus {winner}: {distinct_winner} independent strategy families agreed; agreement {agreement*100:.1f}%.",
+            "consensus_agreement": round(agreement*100, 1),
+            "consensus_families": sorted(families.keys()),
+            "consensus_votes": {f:{"BUY":round(v["BUY"],3),"SELL":round(v["SELL"],3)} for f,v in families.items()},
+            "consensus_source": rep_source,
+            "consensus_source_confidence": rep_conf,
+            "candle_time": candle_time,
+            "strategy_engine": "SignalX Consensus Engine V3",
+            "strategy_version": "V3",
+            "decision_state": "CONFIRMED",
+            "strategy_chain": _strategy_chain(interval),
+        }
+
+    async def process_symbol(key: str):
+        nonlocal created_history, queued, module_signal_count
+        candidates, live_by_tf = await load_symbol_candidates(key)
+        print(f"[SIGNAL FLOW] candidates={len(candidates)} market={key}")
+
+        # Persist and queue module signals independently, but use ONE AI validation
+        # decision per closed-candle/timeframe event. Deterministic engines run 24/7;
+        # AI is only invoked when a real candidate consensus exists. Weak/isolated
+        # candidates are recorded to History without spending AI tokens.
+        closed_candle_by_tf = {}
+        candidate_groups = {}
+        for c in candidates:
+            tf = str(c.get("interval") or "").strip().lower()
+            item = c.get("item") or {}
+            direction = str(item.get("signal") or item.get("direction") or "WAIT").upper()
+            if tf not in {"5min", "15min", "30min", "1h", "4h", "1day"} or direction not in {"BUY", "SELL"}:
+                continue
+            candles = live_by_tf.get(tf, ([], "error", None))[0]
+            if len(candles) < 40:
+                continue
+            closed_candle = candles[-2] if len(candles) > 1 else candles[-1]
+            closed_time = _normalize_history_candle_time(closed_candle.get("time"))
+            closed_candle_by_tf[tf] = closed_time
+            candidate_groups.setdefault((tf, closed_time), []).append(c)
+
+        async def _validate_group(tf: str, candle_time: str, group: list[dict[str, Any]]):
+            # Require at least two independent deterministic strategy families before
+            # spending an AI request. This is the main token-saving gate.
+            consensus = _build_consensus(group, tf, candle_time)
+            if not consensus:
+                return None, None
+            try:
+                best_item = dict(consensus)
+                # A deterministic quality + RR precheck avoids AI calls on weak setups.
+                det_conf = float(best_item.get("confidence") or 0)
+                rr_candidates = []
+                for c in group:
+                    it = c.get("item") or {}
+                    if str(it.get("signal") or "").upper() == str(consensus.get("signal") or "").upper():
+                        try:
+                            rr = float(it.get("risk_reward") or 0)
+                        except Exception:
+                            rr = 0.0
+                        if rr > 0: rr_candidates.append(rr)
+                best_rr = max(rr_candidates, default=float(consensus.get("risk_reward") or 0))
+                if det_conf < AI_PREVALIDATION_MIN_CONFIDENCE or best_rr < AI_PREVALIDATION_MIN_RR:
+                    return consensus, {"mode":"skipped","signal":consensus.get("signal","WAIT"),"confidence":0,"agreement":0,"validation":False,
+                                      "risk_flags":["Deterministic pre-validation did not meet AI trigger threshold"],
+                                      "reasoning":f"AI skipped: deterministic confidence={det_conf:.0f}, RR={best_rr:.2f}."}
+                ai = await ai_validate_module_signal("AI Consensus", "XAU/USD", tf, candle_time, best_item)
+                return consensus, ai
+            except Exception as exc:
+                return consensus, {"mode":"unavailable","signal":"WAIT","confidence":0,"agreement":0,"validation":False,
+                                   "risk_flags":["AI validation exception"],"reasoning":str(exc)[:280]}
+
+        validation_results = {}
+        groups_seen = 0
+        for (tf, candle_time), group in sorted(candidate_groups.items(), key=lambda kv: (kv[0][0], kv[0][1])):
+            if groups_seen >= AI_MAX_CONSENSUS_EVENTS_PER_CYCLE:
+                break
+            consensus, ai = await _validate_group(tf, candle_time, group)
+            validation_results[(tf, candle_time)] = (consensus, ai)
+            if ai and ai.get("mode") not in {"skipped"}:
+                groups_seen += 1
+
+        for c in candidates:
+            tf = str(c.get("interval") or "").strip().lower()
+            item = dict(c.get("item") or {})
+            direction = str(item.get("signal") or item.get("direction") or "WAIT").upper()
+            if tf not in {"5min", "15min", "30min", "1h", "4h", "1day"} or direction not in {"BUY", "SELL"}:
+                continue
+            candles = live_by_tf.get(tf, ([], "error", None))[0]
+            if len(candles) < 40:
+                continue
+            closed_candle = candles[-2] if len(candles) > 1 else candles[-1]
+            candle_time = _normalize_history_candle_time(closed_candle.get("time"))
+            source = _normalize_history_source(c.get("source") or HISTORY_DEFAULT_SOURCE)
+            original_direction = direction
+            original_item = dict(item)
+            group_key = (tf, candle_time)
+            consensus, consensus_ai = validation_results.get(group_key, (None, None))
+
+            # Reuse ONE AI decision for every module inside this timeframe/candle.
+            # Only the deterministic consensus candidate triggers an AI request.
+            if consensus_ai is not None and consensus is not None:
+                ai = dict(consensus_ai)
+                consensus_direction = str(consensus.get("signal") or "WAIT").upper()
+                if original_direction != consensus_direction:
+                    ai = {**ai, "signal": "WAIT", "validation": False,
+                          "reasoning": f"Opposite to deterministic consensus {consensus_direction}; AI result reserved for consensus side."}
+            else:
+                ai = {"mode":"skipped","signal":"WAIT","confidence":0,"agreement":0,"validation":False,
+                      "risk_flags":["No consensus / AI trigger"],"reasoning":"AI skipped because this module/candle did not meet the deterministic AI trigger gate."}
+            smart = _smart_module_gate(original_item, ai, candles, original_direction)
+            item["ai_validation"] = ai
+            item["ai_assisted"] = True
+            item["ai_layer"] = f"Per-module AI Validation ({source})"
+            item["smart_validation"] = smart
+
+            # Hard pipeline: Signal -> AI/Market Quality -> Geometry -> Target -> Risk -> AutoTrade.
+            # AI/market quality failure is History-only; it never deletes the module signal.
+            # A skipped AI check is a deliberate token-saving outcome, not a failed signal.
+            # Keep it in History and continue through geometry/target/risk, but NEVER let
+            # it reach AutoTrade without a live AI consensus decision.
+            if not smart.get("ok") and str(ai.get("mode") or "") != "skipped":
+                item.update({"signal":original_direction,"auto_trade_eligible":False,
+                             "execution_state":"AI_VALIDATION_FAILED",
+                             "execution_reason":smart.get("reason") or "AI_VALIDATION_FAILED",
+                             "live_levels_verified":False})
+                payload = {"source":source,"module_signal":item,"symbol":key,"interval":tf,
+                           "candle_time":candle_time,"live_generated":True,
+                           "execution_gate":{"state":"AI_VALIDATION_FAILED","reason":smart.get("reason"),
+                                             "ai_checked":True,"geometry_checked":False,"target_checked":False,
+                                             "risk_checked":False,"auto_trade":False}}
+                recent = session.scalars(select(SignalHistory).where(
+                    SignalHistory.user_id == user.id, SignalHistory.symbol == key,
+                    SignalHistory.interval == tf, SignalHistory.candle_time == candle_time,
+                    SignalHistory.source == source,
+                ).order_by(SignalHistory.id.desc())).first()
+                if recent is None:
+                    history_row = SignalHistory(user_id=user.id,symbol=key,interval=tf,direction=original_direction,
+                        headline=f"{source} · {original_direction} · AI {int(ai.get('confidence') or 0)}% · AI VALIDATION",price=float(item.get("entry") or 0),
+                        payload=json.dumps(payload,ensure_ascii=False,default=str),outcome="CANCELLED",status="CANCELLED",
+                        created_at=now,source=source,candle_time=candle_time)
+                    session.add(history_row)
+                    created_history.append({"source":source,"symbol":key,"interval":tf,"direction":original_direction,
+                                            "confidence":float(item.get("confidence") or item.get("trend_power") or 0),
+                                            "module_history":True,"auto_trade_eligible":False,
+                                            "execution_state":"AI_VALIDATION_FAILED","reason":smart.get("reason")})
+                continue
+
+            # Preserve the module direction; merge only the AI metadata. Since the
+            # Smart Gate already required agreement, merge_ai_validation cannot turn
+            # a valid candidate into a tradable opposite-side signal.
+            item = merge_ai_validation(original_item, ai)
+            item["ai_validation"] = ai
+            item["ai_assisted"] = True
+            item["ai_layer"] = f"Per-module AI Validation ({source})"
+            item["smart_validation"] = smart
+            direction = original_direction
+
+            # Geometry is checked against the ORIGINAL module values before normalization.
+            gate = _execution_gate(item, direction, candles)
+            entry = gate.get("entry")
+            sl = gate.get("sl")
+            tp = list(gate.get("tp") or [])
+            repaired = bool(gate.get("repaired"))
+            conf = float(item.get("confidence") or item.get("trend_power") or 0)
+
+            if gate.get("state") == "CANCELLED":
+                reason = str(gate.get("reason") or "EXECUTION_GATE_FAILED")
+                item.update({
+                    "signal": direction, "entry": entry, "stop_loss": sl, "take_profit": tp,
+                    "auto_trade_eligible": False, "execution_state": "CANCELLED",
+                    "execution_reason": reason, "risk_reward": None,
+                    "live_levels_verified": True,
+                })
+                payload = {"source":source,"module_signal":item,"symbol":key,"interval":tf,
+                           "candle_time":candle_time,"live_generated":True,
+                           "execution_gate":{"state":"CANCELLED","reason":reason,"geometry_checked":True,
+                                             "target_checked":True,"risk_checked":True,"auto_trade":False}}
+                recent = session.scalars(select(SignalHistory).where(
+                    SignalHistory.user_id == user.id, SignalHistory.symbol == key,
+                    SignalHistory.interval == tf, SignalHistory.candle_time == candle_time,
+                    SignalHistory.source == source,
+                ).order_by(SignalHistory.id.desc())).first()
+                if recent is None:
+                    history_row = SignalHistory(user_id=user.id,symbol=key,interval=tf,direction=direction,
+                        headline=f"{source} · {direction} · {conf:.1f}% · {reason}",price=float(entry or 0),
+                        payload=json.dumps(payload,ensure_ascii=False,default=str),outcome="CANCELLED",status="CANCELLED",
+                        created_at=now,source=source,candle_time=candle_time)
+                    session.add(history_row)
+                    created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction,
+                                            "confidence":conf,"module_history":True,"auto_trade_eligible":False,
+                                            "execution_state":"CANCELLED","reason":reason})
+                continue
+
+            target_reached = gate.get("state") == "TARGET_REACHED"
+            rr_value = float(gate.get("r_multiple") or 0)
+            autotrade_rr_ok = bool(rr_value >= (AUTOTRADE_MIN_RR - 1e-9))
+            if target_reached:
+                item.update({"signal":"WAIT","original_signal":direction,"setup":"TARGET_REACHED",
+                             "entry":entry,"stop_loss":sl,"take_profit":[],"target_state":"TARGET_REACHED",
+                             "auto_trade_eligible":False,"execution_state":"TARGET_REACHED",
+                             "risk_reward":None,"live_levels_verified":True,"levels_repaired_from_live_chart":repaired})
+                direction_history = "WAIT"
+            else:
+                item.update({"entry":entry,"stop_loss":sl,"take_profit":tp,"live_levels_verified":True,
+                             "levels_repaired_from_live_chart":repaired,"auto_trade_eligible":bool(smart.get("ok") and gate.get("ok") and autotrade_rr_ok),
+                             "execution_state":"READY" if smart.get("ok") else "HISTORY_ONLY_AI_NOT_TRIGGERED",
+                             "execution_reason":"ALL_GATES_PASSED" if (smart.get("ok") and autotrade_rr_ok) else ("AI_NOT_TRIGGERED" if not smart.get("ok") else "HISTORY_ONLY_RR_BELOW_1.40"),
+                             "risk_reward":gate.get("r_multiple"),"auto_trade_rr_ok":autotrade_rr_ok,"ai_token_saved":str(ai.get("mode") or "") == "skipped"})
+                direction_history = direction
+
+            payload = {"source":source,"module_signal":item,"symbol":key,"interval":tf,"candle_time":candle_time,
+                       "live_generated":True,"execution_gate":{
+                           "state":gate.get("state"),"reason":gate.get("reason"),"geometry_checked":True,
+                           "target_checked":True,"risk_checked":not target_reached,
+                           "auto_trade":bool(smart.get("ok") and gate.get("ok") and autotrade_rr_ok),
+                           "risk_reward":gate.get("r_multiple"),"autotrade_rr_min":AUTOTRADE_MIN_RR,"ai_required_for_autotrade":True,
+                           "risk":gate.get("risk"),"max_risk":gate.get("max_risk"),
+                           "levels_repaired":repaired},"auto_trade":{"queued":False}}
+            recent = session.scalars(select(SignalHistory).where(
+                SignalHistory.user_id == user.id, SignalHistory.symbol == key,
+                SignalHistory.interval == tf, SignalHistory.candle_time == candle_time,
+                SignalHistory.source == source,
+            ).order_by(SignalHistory.id.desc())).first()
+            history_row = None
+            if recent is None:
+                history_row = SignalHistory(
+                    user_id=user.id, symbol=key, interval=tf, direction=direction_history,
+                    headline=f"{source} · {direction_history} · {conf:.1f}%", price=float(entry or 0),
+                    payload=json.dumps(payload, ensure_ascii=False, default=str),
+                    outcome=("TARGET_REACHED" if target_reached else "OPEN"),
+                    status=("TARGET_REACHED" if target_reached else "ACTIVE"),
+                    created_at=now, source=source, candle_time=candle_time
+                )
+                session.add(history_row)
+                created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction_history,
+                                        "confidence":conf,"module_history":True,
+                                        "auto_trade_eligible":bool(smart.get("ok") and gate.get("ok") and autotrade_rr_ok),
+                                        "execution_state":gate.get("state"),"risk_reward":gate.get("r_multiple"),
+                                        "auto_trade_rr_ok":autotrade_rr_ok})
+                print(f"[SIGNAL HISTORY] MODULE RECORDED source={source} market={key} tf={tf} dir={direction_history} state={gate.get('state')}")
+            elif str(recent.status or "ACTIVE").upper() in {"ACTIVE","TP1 HIT","OPEN"} and str(recent.outcome or "OPEN").upper() in {"OPEN","TP1 HIT"}:
+                recent.direction = direction_history
+                recent.price = float(entry or 0)
+                recent.headline = f"{source} · {direction_history} · {conf:.1f}%"
+                recent.payload = json.dumps(payload, ensure_ascii=False, default=str)
+                _history_sync_row(recent, payload)
+
+            order = None
+            if direction in {"BUY", "SELL"} and tp and bool(gate.get("ok")) and autotrade_rr_ok:
+                # Ensure the newly-created History row has its generated signal_uid
+                # before the order is queued. EA reports can then update the same row.
+                target_row = recent if recent is not None else history_row
+                if target_row is not None and not getattr(target_row, "signal_uid", None):
+                    session.flush()
+                signal_uid = str(getattr(target_row, "signal_uid", "") or "") if target_row is not None else ""
+                order = _queue_autotrade_order(
+                    symbol=key, source=source, interval=tf, direction=direction,
+                    entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
+                    confidence=conf, candle_time=candle_time, risk_reward=rr_value,
+                    signal_id=signal_uid,
+                    user_id=user.id,
+                )
+            if order is not None:
+                payload["auto_trade"]["queued"] = True
+                target_row = recent if recent is not None else history_row
+                if target_row is not None:
+                    target_row.payload = json.dumps(payload, ensure_ascii=False, default=str)
+                queued.append(order)
+                module_signal_count += 1
+                print(f"[AUTO TRADE QUEUE] MODULE QUEUED source={source} market={key} tf={tf} dir={direction} candle={candle_time}")
+
+    await asyncio.gather(*(process_symbol(k) for k in symbols))
+    if created_history:
+        session.commit()
+    rows = await refresh_signal_outcomes(session, user.id, limit=80)
+    return {
+        "enabled": True,
+        "symbols": symbols,
+        "count": len(created_history),
+        "queued": len(queued),
+        "module_autotrade_queued": module_signal_count,
+        "history_count": len(rows),
+        "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
+        "forward_mode": "DETERMINISTIC 24/7; ONE AI CONSENSUS VALIDATION PER CLOSED CANDLE/TIMEFRAME; MT5 requires RR >= 1.40",
+        "ai_token_policy": {"once_per_closed_candle": AI_VALIDATION_ONCE_PER_CANDLE, "prevalidation_min_confidence": AI_PREVALIDATION_MIN_CONFIDENCE, "prevalidation_min_rr": AI_PREVALIDATION_MIN_RR, "max_consensus_events_per_cycle": AI_MAX_CONSENSUS_EVENTS_PER_CYCLE},
+        "excluded_sources": ["Signals", "Signal Engine", "Signal Lab", "AlgoTrade", "Book + OpenAI", "M1 / 1min / 1m"],
+        "active_sources": ["Technical Analysis", "Classic Trade", "Auto Trend Line", "ICT Signals", "AI Smart Analysis", "MSAI/SNR", "SMC", "Algo/SMC", "Patterns", "Trend Channel Engine", "Fibonacci", "Yangi Strategiya"],
+        "items": created_history,
+        "user_id": int(user.id),
+    }
+
+
+_AUTOTRADE_WORKER_STARTED = False
+
+async def _autotrade_worker() -> None:
+    """Generate live BUY/SELL signals into the MT5 queue without browser login."""
+    global _AUTOTRADE_WORKER_STARTED
+    if _AUTOTRADE_WORKER_STARTED:
+        return
+    _AUTOTRADE_WORKER_STARTED = True
+    await asyncio.sleep(3)

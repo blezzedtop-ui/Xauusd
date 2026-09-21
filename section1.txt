@@ -1,0 +1,396 @@
+
+    # OB/FVG confirmation can also be recent (last 5 completed candles).
+    zone_ok=False
+    for idx in range(max(2,len(candles)-6), len(candles)-1):
+        c1,c2,c3=candles[idx-2],candles[idx-1],candles[idx]
+        c3_open=float(c3["open"]); c3_close=float(c3["close"])
+        bull_fvg=float(c3["low"])>float(c1["high"]); bear_fvg=float(c3["high"])<float(c1["low"])
+        ob_body=abs(c3_close-c3_open)
+        ob_bull=float(c2["close"])<float(c2["open"]) and c3_close>c3_open and ob_body>=a*0.8
+        ob_bear=float(c2["close"])>float(c2["open"]) and c3_close<c3_open and ob_body>=a*0.8
+        if (direction=="BUY" and (bull_fvg or ob_bull)) or (direction=="SELL" and (bear_fvg or ob_bear)):
+            zone_ok=True; break
+    add("OB / FVG",10,zone_ok,"recent institutional zone/imbalance confirmation")
+    # Volatility must be tradable, not dead market or extreme shock.
+    ranges=[abs(float(c["high"])-float(c["low"])) for c in candles[-20:]]
+    avg_range=sum(ranges)/max(len(ranges),1); vol_ratio=avg_range/a
+    vol_ok=0.55<=vol_ratio<=2.75
+    add("Volatility",5,vol_ok,f"range/ATR={vol_ratio:.2f}")
+    # News is a hard block for lower TFs; higher TF keeps the setup visible but no AutoTrade.
+    if news_blocked and interval in {"5min","15min","30min"}:
+        add("News Guard",8,False,"high-impact news blackout")
+    else:
+        add("News Guard",8,True,"news clear / higher-TF context")
+    confirmed=(direction in {"BUY","SELL"} and score>=profile["min_score"] and confirms>=profile["min_confirmations"] and not (news_blocked and interval in {"5min","15min","30min"}))
+    # Structural risk + informational RR.
+    # RR is reported for analytics only and is NOT an AutoTrade eligibility gate.
+    if direction=="BUY":
+        sl=min(rl,float(c2["low"]),float(last["low"]))-a*0.18; risk=price-sl
+        target=rh
+    elif direction=="SELL":
+        sl=max(rh,float(c2["high"]),float(last["high"]))+a*0.18; risk=sl-price
+        target=rl
+    else: sl=price; target=price; risk=0
+    risk_ok=0<risk<=a*profile["max_risk_atr"]
+    if direction=="BUY" and risk_ok:
+        t1=max(price+risk*1.5,target); t2=max(price+risk*2.5,t1+risk*0.5)
+        rr=(t1-price)/max(risk,1e-9)
+    elif direction=="SELL" and risk_ok:
+        t1=min(price-risk*1.5,target); t2=min(price-risk*2.5,t1-risk*0.5)
+        rr=(price-t1)/max(risk,1e-9)
+    else:
+        t1=t2=price; rr=0
+    add("Structural Risk",5,risk_ok,f"risk={risk/a:.2f} ATR")
+    # RR is informational only; it does not decide whether a valid signal is tradable.
+    add("Risk/Reward (info)",0,True,f"execution RR={rr:.2f} (informational)")
+    confirmed=confirmed and risk_ok
+    direction_out=direction if confirmed else "WAIT"
+    return {"signal":direction_out,"score":score,"confidence":min(99,score),"confirmed":confirmed,
+            "entry":round(price,4),"stop_loss":round(sl,4),"take_profit":[round(t1,4),round(t2,4)],"risk_reward":round(rr,2),
+            "strategy_engine":"SignalX Strategic Pro","strategy_version":"TF-SP1","timeframe":interval,
+            "profile":profile,"parent_timeframe":parent,"parent_bias":parent_bias,"local_bias":local_bias,
+            "checks":checks,"reason":"; ".join(dict.fromkeys(reasons)) or "All Strategic Pro gates passed",
+            "session_filter":session_ok,"volatility_ratio":round(vol_ratio,2)}
+
+def _autotrade_source_excluded(source: str) -> bool:
+    # Retired legacy sources are never forwarded to AutoTrade.
+    normalized = re.sub(r"[\s_\-/]+", " ", str(source or "").strip().lower()).strip()
+    blocked = {
+        "book + openai", "book openai", "book/openai", "book-openai",
+        "signal lab", "algotrade", "signals", "signal engine",
+    }
+    return normalized in blocked or "book" in normalized and "openai" in normalized
+
+
+
+def _mark_signal_execution_history(signal_id: str, state: str, *, reason: str = "",
+                                    ticket: str = "", price: float | None = None,
+                                    profit: float | None = None, order_type: str = "") -> bool:
+    """Synchronize MT5 execution lifecycle into Signal History.
+
+    Pending/market execution states are kept on the same SignalHistory row so the
+    journal shows the complete lifecycle without creating duplicate signal records.
+    """
+    sid = str(signal_id or "").strip()
+    if not sid:
+        return False
+    state = str(state or "").upper().strip()
+    allowed = {
+        "PENDING_CREATED", "PENDING_TRIGGERED", "MARKET_OPENED",
+        "TP1_HIT", "TP2_HIT", "SL_HIT", "CANCELLED",
+        "CANCELLED_SETUP_INVALID", "CANCELLED_SETUP_EXPIRED",
+        "INVALID_LEVEL_GEOMETRY", "AUTO_TRADE_REJECTED",
+    }
+    if state not in allowed:
+        return False
+    try:
+        with SessionLocal() as session:
+            row = session.scalar(select(SignalHistory).where(SignalHistory.signal_uid == sid))
+            if row is None:
+                return False
+            payload = {}
+            try:
+                payload = json.loads(row.payload or "{}")
+                if not isinstance(payload, dict):
+                    payload = {}
+            except Exception:
+                payload = {}
+            execution = payload.get("execution") if isinstance(payload.get("execution"), dict) else {}
+            timeline = execution.get("timeline") if isinstance(execution.get("timeline"), dict) else {}
+            now = datetime.now(timezone.utc)
+            timeline[state] = now.isoformat()
+            execution.update({
+                "state": state,
+                "ticket": str(ticket or execution.get("ticket") or ""),
+                "reason": str(reason or execution.get("reason") or ""),
+                "timeline": timeline,
+            })
+            if order_type:
+                execution["order_type"] = str(order_type).upper()
+                payload["order_type"] = str(order_type).upper()
+                payload["pending"] = str(order_type).upper() in {"BUY_STOP","SELL_STOP","BUY_LIMIT","SELL_LIMIT"}
+            payload["execution"] = execution
+            if price is not None:
+                payload["execution_price"] = float(price)
+            if profit is not None:
+                payload["execution_profit"] = float(profit)
+
+            terminal = state in {
+                "TP2_HIT", "SL_HIT", "CANCELLED",
+                "CANCELLED_SETUP_INVALID", "CANCELLED_SETUP_EXPIRED",
+                "INVALID_LEVEL_GEOMETRY", "AUTO_TRADE_REJECTED",
+            }
+            if state in {"CANCELLED_SETUP_INVALID", "CANCELLED_SETUP_EXPIRED", "INVALID_LEVEL_GEOMETRY", "AUTO_TRADE_REJECTED"}:
+                row.status = "CANCELLED"
+                row.outcome = "CANCELLED"
+                row.result = reason or state
+                row.closed_at = row.closed_at or now
+            elif state == "CANCELLED":
+                row.status = "CANCELLED"
+                row.outcome = "CANCELLED"
+                row.result = reason or "CANCELLED"
+                row.closed_at = row.closed_at or now
+            else:
+                row.status = state
+                if state in {"TP2_HIT", "SL_HIT"}:
+                    row.outcome = "TP HIT" if state == "TP2_HIT" else "SL HIT"
+                    row.result = state
+                    row.closed_at = row.closed_at or now
+                    if profit is not None:
+                        row.profit_loss = float(profit)
+                elif state in {"PENDING_CREATED", "PENDING_TRIGGERED", "MARKET_OPENED", "TP1_HIT"}:
+                    row.outcome = "OPEN"
+                    if state == "TP1_HIT":
+                        row.result = "TP1 HIT"
+            if ticket:
+                execution["ticket"] = str(ticket)
+            payload["execution"] = execution
+            row.payload = json.dumps(payload, ensure_ascii=False, default=str)
+            session.commit()
+            return True
+    except Exception as exc:
+        print(f"[SIGNAL HISTORY] execution sync skipped signal_id={sid}: {type(exc).__name__}: {exc}")
+        return False
+
+
+def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction: str,
+                           entry: float, sl: float, tp: list[float], volume: float,
+                           confidence: float | None, candle_time: str,
+                           risk_reward: float | None = None, user_id: int | None = None,
+                           order_type: str = "MARKET",
+                           expires_at: str | None = None,
+                           signal_id: str = "") -> dict[str, Any] | None:
+    """Put one eligible signal into the in-memory MT5 queue exactly once.
+
+    The queue key is symbol/source/timeframe/closed-candle/direction. Retired modules are
+    explicitly excluded. All values are copied from the freshly validated signal.
+    """
+    if not MT5_AUTO_TRADING or not AUTO_ENTRY_ENABLED or _autotrade_source_excluded(source):
+        return None
+    order_type = str(order_type or "MARKET").upper()
+    if order_type not in {"MARKET", "BUY_STOP", "SELL_STOP", "BUY_LIMIT", "SELL_LIMIT"}:
+        return None
+    if order_type == "BUY_STOP" and direction.upper() != "BUY":
+        return None
+    if order_type == "SELL_STOP" and direction.upper() != "SELL":
+        return None
+    if order_type == "BUY_LIMIT" and direction.upper() != "BUY":
+        return None
+    if order_type == "SELL_LIMIT" and direction.upper() != "SELL":
+        return None
+    # AutoTrade hard filter: only setups with RR >= AUTOTRADE_MIN_RR may reach MT5.
+    # Calculate it from the final levels when the caller did not provide it, so no
+    # execution path can bypass the minimum by omitting the metadata.
+    try:
+        rr_eval = float(risk_reward) if risk_reward is not None else None
+        if rr_eval is None:
+            risk_abs = abs(float(entry) - float(sl))
+            first_tp = float(tp[0]) if tp else None
+            if risk_abs <= 0 or first_tp is None:
+                return None
+            rr_eval = ((first_tp - float(entry)) / risk_abs) if str(direction).upper() == "BUY" else ((float(entry) - first_tp) / risk_abs)
+        if rr_eval < (AUTOTRADE_MIN_RR - 1e-9):
+            print(f"[AUTO TRADE QUEUE] RR BLOCKED market={symbol} source={source} tf={interval} rr={rr_eval:.2f}")
+            return None
+    except Exception:
+        return None
+    # M1 is analysis/history-only. Never allow 1-minute signals into AutoTrade.
+    if str(interval).strip().lower() in {"1min", "1m", "m1"}:
+        print(f"[AUTO TRADE QUEUE] M1 BLOCKED market={symbol} source={source} tf={interval}")
+        return None
+    market = _mt5_market_key(symbol)
+    if market != "XAU/USD":
+        return None
+    key = (market, source.strip(), interval, str(candle_time), direction.upper())
+    # Once an order for this exact market/source/timeframe/candle/direction is reported
+    # successful, do not open the same signal again during the same process lifetime.
+    if key in MT5_EXECUTED_KEYS:
+        print(f"[AUTO TRADE QUEUE] EXECUTED KEY BLOCKED market={market} source={source} tf={interval} candle={candle_time} dir={direction}")
+        return None
+    for q in MT5_ORDER_QUEUE:
+        qkey = (_mt5_market_key(q.get("symbol") or q.get("market")),
+                str(q.get("source") or "").strip(), str(q.get("interval") or ""),
+                str(q.get("candle_time") or ""), str(q.get("direction") or "").upper())
+        if qkey == key:
+            return q
+        # Never allow BUY and SELL for the same XAUUSD source/timeframe/candle
+        # to coexist in the queue. A live candle may recalculate while open; the
+        # first accepted consensus owns that candle until it expires/executes.
+        if qkey[:4] == key[:4] and qkey[4] != key[4]:
+            print(f"[AUTO TRADE QUEUE] OPPOSITE SIGNAL BLOCKED market={market} source={source} tf={interval} candle={candle_time}")
+            return None
+    order_id = secrets.token_hex(8)
+    order = {
+        "id": order_id,
+        "symbol": market,
+        "market": market,
+        "execution_symbol": "XAUUSDm",
+        "interval": interval,
+        "direction": direction.upper(),
+        "order_type": order_type,
+        "entry": float(entry),
+        "sl": float(sl),
+        "tp": [float(x) for x in tp[:2]],
+        "volume": float(volume or MT5_LOT_SIZE),
+        "source": source.strip(),
+        "signal_id": str(signal_id or ""),
+        "user_id": int(user_id) if user_id is not None else None,
+        "confidence": float(confidence or 0),
+        "risk_reward": float(rr_eval),
+        "candle_time": str(candle_time),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "expires_at": str(expires_at or ""),
+        "claimed": False,
+        "status": "QUEUED",
+        "queue_key": [market, source.strip(), interval, str(candle_time), direction.upper()],
+    }
+    MT5_ORDER_ATTEMPTS[order_id] = 0
+    MT5_ORDER_QUEUE.append(order)
+    if signal_id and order_type != "MARKET":
+        _mark_signal_execution_history(signal_id, "PENDING_CREATED",
+                                       ticket=order_id, reason="Pending order queued for MT5",
+                                       order_type=order_type)
+    print(f"[AUTO TRADE QUEUE] QUEUED market={market} source={source} tf={interval} dir={direction} entry={entry} sl={sl} tp={tp}")
+    return order
+
+def _ensure_mt5_order_history(session: Session, item: dict[str, Any], *, state: str = "QUEUED", reason: str = "") -> SignalHistory | None:
+    """Guarantee that every MT5-queued/received signal has a Signal History row.
+
+    Signal generation and MT5 execution are separate lifecycles. If a deployment,
+    UI refresh, or legacy queue path produced an order without a persisted history
+    row, recover the row from the queue payload before the order reaches the EA.
+    This is intentionally idempotent by signal_uid and by the live history identity.
+    """
+    try:
+        sid = str(item.get("signal_id") or "").strip()
+        uid = int(item.get("user_id") or 0)
+        row = session.scalar(select(SignalHistory).where(SignalHistory.signal_uid == sid)) if sid else None
+        if row is not None:
+            # Backfill queue metadata so the same history row can be updated by
+            # the subsequent MT5 report, even when the queued item came from an
+            # older deployment that did not carry signal_id/user_id.
+            if not item.get("signal_id"):
+                item["signal_id"] = str(row.signal_uid or "")
+            if not item.get("user_id"):
+                item["user_id"] = int(row.user_id or 0)
+            return row
+        # Legacy queue items created before History↔MT5 sync may have no user_id.
+        # Recover them under the internal/admin SignalX user instead of dropping
+        # the history record. This keeps old queued Fibonacci/ICT/SMC/etc. signals
+        # visible in the same History journal.
+        if uid <= 0:
+            admin_user = session.scalar(select(User).where(User.username == ADMIN_LOGIN))
+            uid = int(admin_user.id) if admin_user is not None else 0
+            if uid > 0:
+                item["user_id"] = uid
+        if uid <= 0:
+            return None
+        symbol = clean_symbol(str(item.get("symbol") or item.get("market") or "XAU/USD"))
+        if symbol != "XAU/USD":
+            return None
+        source = _normalize_history_source(str(item.get("source") or HISTORY_DEFAULT_SOURCE))
+        interval = validate_interval(str(item.get("interval") or DEFAULT_INTERVAL))
+        direction = str(item.get("direction") or "WAIT").upper()
+        if direction not in {"BUY", "SELL"}:
+            return None
+        candle_time = _normalize_history_candle_time(item.get("candle_time"))
+        # When signal_uid is missing, recover an existing live-history row by the
+        # same identity tuple instead of creating a duplicate record.
+        existing = session.scalar(select(SignalHistory).where(
+            SignalHistory.user_id == uid,
+            SignalHistory.symbol == symbol,
+            SignalHistory.interval == interval,
+            SignalHistory.source == source,
+            SignalHistory.candle_time == candle_time,
+        ).order_by(SignalHistory.id.desc())) if candle_time else None
+        if existing is not None:
+            item["signal_id"] = str(existing.signal_uid or "")
+            item["user_id"] = uid
+            return existing
+        entry = float(item.get("entry") or 0)
+        sl = float(item.get("sl") or 0)
+        raw_tp = item.get("tp") or []
+        if not isinstance(raw_tp, (list, tuple)):
+            raw_tp = [raw_tp]
+        tps = [float(x) for x in raw_tp[:2] if x not in (None, "")]
+        rr = item.get("risk_reward")
+        try:
+            rr = float(rr) if rr is not None else None
+        except Exception:
+            rr = None
+        conf = item.get("confidence")
+        try:
+            conf = float(conf) if conf is not None else None
+        except Exception:
+            conf = None
+        payload = {
+            "source": source, "symbol": symbol, "interval": interval,
+            "candle_time": candle_time, "live_generated": True,
+            "module_signal": {
+                "signal": direction, "entry": entry, "stop_loss": sl,
+                "take_profit": tps, "confidence": conf, "risk_reward": rr,
+            },
+            "risk_reward": rr, "rr": rr,
+            "auto_trade": {"queued": True, "order_id": str(item.get("id") or ""), "risk_reward": rr},
+            "execution": {"state": state, "reason": reason, "timeline": {state: datetime.now(timezone.utc).isoformat()}},
+            "mt5_history_recovered": True,
+        }
+        row = SignalHistory(
+            user_id=uid, symbol=symbol, interval=interval, direction=direction,
+            headline=f"{source} · {direction} · {conf:.1f}%" if conf is not None else f"{source} · {direction}",
+            price=entry, payload=json.dumps(payload, ensure_ascii=False, default=str),
+            outcome="OPEN", status="ACTIVE", created_at=datetime.now(timezone.utc),
+            source=source, candle_time=candle_time,
+        )
+        _history_sync_row(row, payload)
+        session.add(row)
+        session.commit()
+        session.refresh(row)
+        print(f"[SIGNAL HISTORY] MT5 RECOVERED source={source} signal_id={row.signal_uid} order_id={item.get('id')}")
+        return row
+    except Exception as exc:
+        try: session.rollback()
+        except Exception: pass
+        print(f"[SIGNAL HISTORY] MT5 recovery skipped: {type(exc).__name__}: {exc}")
+        return None
+
+
+@app.post("/api/v1/signals/auto-record")
+async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    """Forward all active SignalX strategy families into History and the MT5 queue.
+
+    Active sources include Technical Analysis, Classic Trade, Auto Trend Line,
+    ICT Signals, AI Smart Analysis, MSAI/SNR, SMC, Algo/SMC, Patterns, Trend Channel Engine,
+    Fibonacci and Yangi Strategiya. Removed modules remain blocked. AutoTrade additionally
+    requires non-M1, valid geometry/risk, AI/market validation and RR >= 1.40.
+    """
+    require_admin(authorization, session)
+    user = current_user(authorization, session)
+    selected_interval = validate_interval(interval)
+    requested = clean_symbol(symbol)
+    if requested != "XAU/USD":
+        raise HTTPException(status_code=404, detail="Only XAU/USD is supported")
+    symbols = ["XAU/USD"]
+    market_gate = market_gate_status(requested)
+    if not market_gate.get("open"):
+        return {"enabled": True, "count": 0, "queued": 0, "symbols": symbols, "mode": "market_closed",
+                "market_gate": market_gate, "forward_mode": "MARKET CLOSED → no new signals, no AI validation, no AutoTrade"}
+    # History is independent from AutoEntry. When AutoEntry is disabled we still
+    # generate/persist signal snapshots; _queue_autotrade_order() blocks MT5 execution.
+    now = datetime.now(timezone.utc)
+    excluded = {"book + openai", "book/openai", "book-openai", "book openai", "signal lab", "algotrade"}
+    created_history = []
+    queued = []
+    module_signal_count = 0
+    seen_queue_keys = set()
+
+    async def load_symbol_candidates(key: str) -> tuple[list[dict[str, Any]], dict[str, tuple[list[dict[str, Any]], str, str | None]]]:
+        candidates: list[dict[str, Any]] = []
+        # One canonical live candle series per timeframe. Every module below consumes
+        # the same timeframe candles, so the signal chain cannot mix symbols or TF data.
+        intervals=["5min","15min","30min","1h","4h","1day"]
+        live_by_tf: dict[str, tuple[list[dict[str, Any]],str,str|None]] = {}
+        async def load_tf(tf: str):
+            try:
+                live_by_tf[tf]=await get_candles(key,tf,260)
+            except Exception:
