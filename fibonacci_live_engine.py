@@ -3,6 +3,7 @@
 ICT stays independent. No implicit fallback, no manufactured levels to meet RR.
 """
 from __future__ import annotations
+from candle_diagnostics import attach_candle_diagnostics
 import math
 import time
 from fibonacci_strategy import _atr, _swings, _trend
@@ -21,7 +22,7 @@ def analyze_fibonacci_live(bars_by_tf, *, live_price=None, now=None, min_rr=MIN_
         out['reason']=reason
         return out
     if any(len(bars_by_tf.get(tf) or []) < n for tf,n in (('4h',55),('1h',65),('15min',90))):
-        return wait('INSUFFICIENT_CLOSED_CANDLES')
+        return attach_candle_diagnostics(wait("INSUFFICIENT_CLOSED_CANDLES"), bars_by_tf, (('4h', 55), ('1h', 65), ('15min', 90)))
     if now-(candles[-1]['time']+900)>960:
         return wait('STALE_M15_CANDLE')
     if any(now-(bars_by_tf[tf][-1]['time']+TF_SECONDS[tf])>2.5*TF_SECONDS[tf] for tf in ('4h','1h')):

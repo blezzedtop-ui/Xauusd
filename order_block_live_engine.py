@@ -5,6 +5,7 @@ opposite M15 candle -> FIRST closed M5 retest/rejection -> observed target -> RR
 This identifies price-action zones, not actual institutional resting orders.
 """
 from __future__ import annotations
+from candle_diagnostics import attach_candle_diagnostics
 import math
 import time
 from ict_engine import TF_SECONDS, _atr, _bias
@@ -41,7 +42,7 @@ def analyze_order_block_live(frames, *, live_price=None, now=None, min_rr=MIN_RR
         return out
     needed=(('4h',55),('1h',80),('15min',95),('5min',100))
     if any(len(frames.get(tf) or [])<n for tf,n in needed):
-        return wait('INSUFFICIENT_CLOSED_CANDLES')
+        return attach_candle_diagnostics(wait("INSUFFICIENT_CLOSED_CANDLES"), frames, (('4h', 55), ('1h', 80), ('15min', 95), ('5min', 100)))
     if any(any(bar['time']<=seq[i-1]['time'] for i,bar in enumerate(seq[1:],1))
            for seq in (frames[tf] for tf,_ in needed)):
         return wait('NON_MONOTONIC_CANDLES')

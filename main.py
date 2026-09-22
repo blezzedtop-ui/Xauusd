@@ -5578,7 +5578,7 @@ _ICT_SCAN_INTERVALS = ("4h", "1h", "30min", "15min", "5min")
 
 async def _ict_snapshot(symbol: str) -> dict[str, Any]:
     """Read the same live market series as the chart, and use CLOSED bars for signals."""
-    raw = await asyncio.gather(*(get_candles(symbol, tf, 260) for tf in _ICT_SCAN_INTERVALS), return_exceptions=True)
+    raw = await asyncio.gather(*(get_candles(symbol, tf, 320) for tf in _ICT_SCAN_INTERVALS), return_exceptions=True)
     bars = {}
     warnings = []
     for tf, item in zip(_ICT_SCAN_INTERVALS, raw):

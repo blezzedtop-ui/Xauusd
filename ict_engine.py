@@ -5,6 +5,7 @@ must be retested on the most recently CLOSED M5 candle. Price targets must be
 observed historical liquidity, not fabricated RR levels. All failures -> WAIT.
 """
 from __future__ import annotations
+from candle_diagnostics import attach_candle_diagnostics
 import math
 import time
 from datetime import datetime, timezone
@@ -62,7 +63,7 @@ def analyze_ict(closed_by_tf, *, live_price=None, now=None, min_rr=MIN_RR):
         result["reason"] = reason
         return result
     if any(len(closed_by_tf.get(tf,[])) < minimum for tf,minimum in (("4h",55),("1h",65),("30min",65),("15min",35),("5min",90))):
-        return wait("INSUFFICIENT_CLOSED_CANDLES")
+        return attach_candle_diagnostics(wait("INSUFFICIENT_CLOSED_CANDLES"), closed_by_tf, (('4h', 55), ('1h', 65), ('30min', 65), ('15min', 35), ('5min', 90)))
     if now - (m5[-1]["time"]+300) > 360: return wait("STALE_M5_CANDLE")
     if any(now - (closed_by_tf[tf][-1]["time"]+TF_SECONDS[tf]) > TF_SECONDS[tf]*2.5 for tf in ("4h","1h","30min","15min")):
         return wait("STALE_HIGHER_TIMEFRAME")

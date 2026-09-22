@@ -4,6 +4,7 @@ No I/O, database, AI, order placement or invented targets. The old Classic Trade
 engine is deliberately not imported: that source remains retired.
 """
 from __future__ import annotations
+from candle_diagnostics import attach_candle_diagnostics
 import math
 import time
 from ict_engine import _atr, _bias, TF_SECONDS
@@ -33,7 +34,7 @@ def analyze_classic_live(frames, *, live_price=None, now=None, min_rr=MIN_RR):
         out['reason']=reason
         return out
     needs=(('4h',55),('1h',75),('30min',65),('15min',85),('5min',85))
-    if any(len(frames.get(tf) or [])<minimum for tf,minimum in needs):return wait('INSUFFICIENT_CLOSED_CANDLES')
+    if any(len(frames.get(tf) or [])<minimum for tf,minimum in needs):return attach_candle_diagnostics(wait("INSUFFICIENT_CLOSED_CANDLES"), frames, (('4h', 55), ('1h', 75), ('30min', 65), ('15min', 85), ('5min', 85)))
     for tf,_ in needs:
         seq=frames[tf]
         if any(seq[i]['time']<=seq[i-1]['time'] for i in range(1,len(seq))):return wait('NON_MONOTONIC_CANDLES')

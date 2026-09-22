@@ -5,6 +5,7 @@ closed-candle bounce or breakout/retest. Observed opposing zones are TP targets.
 All missing evidence is WAIT. A heuristic score is NOT a win probability.
 """
 from __future__ import annotations
+from candle_diagnostics import attach_candle_diagnostics
 import math
 import time
 from ict_engine import TF_SECONDS, _atr, _bias
@@ -70,7 +71,7 @@ def analyze_snr_live(bars_by_tf, *, live_price=None, now=None, min_rr=MIN_RR):
         return out
     required = (('4h',55),('1h',105),('15min',55),('5min',90))
     if any(len(bars_by_tf.get(tf) or []) < count for tf,count in required):
-        return wait('INSUFFICIENT_CLOSED_CANDLES')
+        return attach_candle_diagnostics(wait("INSUFFICIENT_CLOSED_CANDLES"), bars_by_tf, (('4h', 55), ('1h', 105), ('15min', 55), ('5min', 90)))
     if any(any(x['time'] <= b[i-1]['time'] for i,x in enumerate(b[1:],1))
            for b in (bars_by_tf[tf] for tf,_ in required)):
         return wait('NON_MONOTONIC_CANDLES')

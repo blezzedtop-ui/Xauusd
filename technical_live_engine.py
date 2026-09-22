@@ -5,6 +5,7 @@ This module has no network, database, AI or broker side effects. All levels must
 come from observed OHLC and trade geometry must satisfy RR >= 1.40.
 """
 from __future__ import annotations
+from candle_diagnostics import attach_candle_diagnostics
 import math
 import time
 from ict_engine import _ema, _atr, TF_SECONDS
@@ -45,7 +46,7 @@ def analyze_technical_live(frames, *, live_price=None, now=None, min_rr=MIN_RR):
         out['reason']=reason
         return out
     needs=(('1h',215),('15min',95),('5min',85))
-    if any(len(frames.get(tf) or []) < n for tf,n in needs):return wait('INSUFFICIENT_CLOSED_CANDLES')
+    if any(len(frames.get(tf) or []) < n for tf,n in needs):return attach_candle_diagnostics(wait("INSUFFICIENT_CLOSED_CANDLES"), frames, (('1h', 215), ('15min', 95), ('5min', 85)))
     for tf,_ in needs:
         b=frames[tf]
         if any(b[i]['time']<=b[i-1]['time'] for i in range(1,len(b))):return wait('NON_MONOTONIC_CANDLES')
