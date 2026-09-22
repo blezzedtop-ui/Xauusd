@@ -1,0 +1,2 @@
+SignalX 13 bo‘lim: Overview, Live Chart, AI Fallback Network, Economic Calendar, Market Sessions, Aktiv seanslar, Signal History, MetaTrader 5, ICT, Fibonacci, SNR Analysis, Order Block Analysis, Trendline Analysis.
+Yangi faol source: ICT Signals, Fibonacci, SNR Analysis, Order Block Analysis, Trendline Analysis. Eski Auto Trend Line/Trend Channel hamda boshqa retired source History/MT5 yo‘liga qaytarilmagan.

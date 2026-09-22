@@ -19,7 +19,8 @@ input int    MaxSpreadPoints=80; // XAUUSDm maximum bid/ask spread in points
 input string BridgeClientId=""; // blank = account-specific client id
 input bool   SingleSession=true; // only one EA instance per MT5 terminal/account
 input int    SessionLeaseSeconds=15;
-input int    MaxOpenPositionsPerSymbol=3; // Aggregate limit across all nine SignalX modules
+input int    MaxOpenPositionsPerSymbol=0; // 0=unlimited; counts SignalX magic positions only
+input bool   EnableTP1PartialClose=true; // manage TP1/TP2 only when both levels are supplied
 
 string Url(string path){ return ApiBase+path; }
 datetime g_last_state=0;
@@ -175,26 +176,12 @@ string FindBrokerXAU()
 
 bool IsBlockedSource(string source)
 {
+   // A source can execute only when it belongs to one of the six active strategies.
    string x=source;
+   StringTrimLeft(x);
+   StringTrimRight(x);
    StringToLower(x);
-   StringTrimLeft(x); StringTrimRight(x);
-   return !(x=="ict ai pro" || x=="snr" || x=="ai analysis" || x=="trend" ||
-            x=="trend liniya" || x=="technical analysis" || x=="classic trade" ||
-            x=="ob trade" || x=="fibonacci trade");
-}
-
-bool ValidExecutionRR(string symbol,string direction,string orderType,double entry,double sl,double tp)
-{
-   MqlTick tick;
-   if(!SymbolInfoTick(symbol,tick)) return false;
-   double point=SymbolInfoDouble(symbol,SYMBOL_POINT);
-   double fill=entry;
-   if(orderType=="MARKET")
-      fill=(direction=="BUY" ? tick.ask+MaxDeviationPoints*point : tick.bid-MaxDeviationPoints*point);
-   if(!MathIsValidNumber(fill) || !MathIsValidNumber(sl) || !MathIsValidNumber(tp) || fill<=0 || sl<=0 || tp<=0) return false;
-   double risk=(direction=="BUY" ? fill-sl : sl-fill);
-   double reward=(direction=="BUY" ? tp-fill : fill-tp);
-   return (risk>0 && reward>0 && reward/risk>=1.0-0.00000001);
+   return !(x=="ict signals" || x=="fibonacci" || x=="snr analysis" || x=="order block analysis" || x=="trendline analysis" || x=="texnik analysis" || x=="classik analysis");
 }
 
 string OrderGuardKey(string order_id)
@@ -205,7 +192,6 @@ string OrderGuardKey(string order_id)
 bool GuardAllows(string order_id)
 {
    if(order_id=="") return false;
-   if(GlobalVariableCheck(OrderGuardKey(order_id)+".done")) return false;
    string key=OrderGuardKey(order_id);
    if(!GlobalVariableCheck(key)) return true;
    double last=GlobalVariableGet(key);
@@ -725,7 +711,7 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
 
       if(IsBlockedSource(source))
       {
-         SendReport(order_id,dir,"ORDER_FAILED",expectedSymbol,"BLOCKED: source outside the nine-module allowlist");
+         SendReport(order_id,dir,"ORDER_FAILED",expectedSymbol,"BLOCKED_SOURCE: only active ICT/Fibonacci/SNR/Order Block/Trendline/Texnik sources are allowed");
          pos+=MathMax(1,StringLen(order_id));
          continue;
       }
@@ -743,8 +729,8 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
       UpperInPlace(mkt);
       UpperInPlace(expected);
 
-      bool marketMatches=(Canonical(mkt)=="XAU/USD");
-      bool symbolMatches=(Canonical(req)=="XAU/USD");
+      bool marketMatches=(StringFind(mkt,"XAU")>=0);
+      bool symbolMatches=(StringFind(req,"XAUUSD")>=0);
       if(!marketMatches || !symbolMatches)
       {
          SendReport(order_id,dir,"ORDER_FAILED",expectedSymbol,"BLOCKED: cross-symbol order rejected by EA");
@@ -887,13 +873,6 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
          }
          sl=NormalizePrice(execSymbol,sl);
          tp=NormalizePrice(execSymbol,tp);
-         tp2=tp; // Execute the exact TP used for the RR check, never a hidden target.
-         if(!ValidExecutionRR(execSymbol,dir,order_type,entry,sl,tp))
-         {
-            desc="BLOCKED: final broker reward/risk below 1 or invalid geometry";
-            retcode=TRADE_RETCODE_INVALID_STOPS;
-            break;
-         }
          if(!ValidSignalLevels(execSymbol,dir,sl,tp))
          {
             desc="SL/TP became invalid against refreshed broker price";
@@ -954,7 +933,9 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
 
          bool transient=(retcode==TRADE_RETCODE_REQUOTE ||
                           retcode==TRADE_RETCODE_PRICE_CHANGED ||
-                          retcode==TRADE_RETCODE_PRICE_OFF);
+                          retcode==TRADE_RETCODE_PRICE_OFF ||
+                          retcode==TRADE_RETCODE_TIMEOUT ||
+                          retcode==TRADE_RETCODE_CONNECTION);
          if(!transient || attempt+1>=attempts) break;
          Sleep(150);
       }
@@ -969,7 +950,6 @@ bool PollMarket(string requestedMarket,string expectedSymbol)
             " order=",(long)ord);
       if(brokerAccepted)
       {
-         GlobalVariableSet(OrderGuardKey(order_id)+".done",(double)TimeCurrent());
          MarkOrderGuard(order_id);
          Print("[AUTO TRADE] ORDER_SENT order_id=",order_id," symbol=",execSymbol," retcode=",retcode," deal=",(long)deal," order=",(long)ord);
          SendReport(order_id,dir,"ORDER_SENT",execSymbol,StringFormat("retcode=%u deal=%I64u order=%I64u %s",retcode,deal,ord,desc));

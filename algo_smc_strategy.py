@@ -490,7 +490,7 @@ def analyze_algo_smc(
         tp2 = target2 if target2 and target2 < tp1 else price - risk * 3.0
         rr = (price - tp1) / risk
 
-    hard_ready = all([liquidity_ok, shift_ok, poi_ok, confirmation_ok, mtf_ok, fake_ok, rr >= 1.40])
+    hard_ready = all([liquidity_ok, shift_ok, poi_ok, confirmation_ok, mtf_ok, fake_ok, rr >= 1.5])
     signal = direction if hard_ready and score >= 70 else "WAIT"
 
     money_transfer = "BUY_SIDE_DELIVERY" if sweep.get("side") == "SELL_SIDE" and direction == "BUY" else "SELL_SIDE_DELIVERY" if sweep.get("side") == "BUY_SIDE" and direction == "SELL" else "NONE"
@@ -547,7 +547,7 @@ def analyze_algo_smc(
         "engulfing_confirmation": modules["engulfing_confirmation"],
         "ping_pong": modules["ping_pong"],
         "mtf_alignment": mtf_ok,
-        "rr_ok": rr >= 1.40,
+        "rr_ok": rr >= 1.5,
         "hard_deterministic_gate": hard_ready,
     }
 

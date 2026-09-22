@@ -10,7 +10,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, inspect, select, text, update, or_
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, inspect, select, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 import main as core
@@ -237,9 +237,6 @@ def _sync_core_queue(session):
     setups are reconciled against SignalHistory so a setup that becomes CANCELLED
     in SignalX is also cancelled at the MT5 gateway level.
     """
-    from strategy_service import TRANSPORT, authorized_order, _uid
-    if TRANSPORT != "gateway" or not core.MT5_AUTO_TRADING or not core.AUTO_ENTRY_ENABLED:
-        return 0
     queue = list(getattr(core, "MT5_ORDER_QUEUE", []) or [])
     accounts = list(session.scalars(select(MT5Account).where(MT5Account.auto_trade_enabled == True)))
     now = _utc()
@@ -252,6 +249,18 @@ def _sync_core_queue(session):
         MTOrder.status.in_(["PENDING", "SENT"])
     )))
     for row in existing:
+        # Never deliver orders persisted by strategies removed from the dashboard.
+        # A pending MT5 limit/stop from one of them must receive a cancellation.
+        if str(row.source or "") not in {"ICT Signals", "Fibonacci", "SNR Analysis", "Order Block Analysis", "Trendline Analysis", "Texnik Analysis", "Classik Analysis"}:
+            row.status = "CANCELLED_RETIRED_MODULE"
+            row.claim_until = None
+            row.cancel_sent = False
+            continue
+        if not bool(core.MT5_AUTO_TRADING):
+            row.status = "CANCELLED_AUTOTRADE_OFF"
+            row.claim_until = None
+            row.cancel_sent = False
+            continue
         if row.expires_at and _as_utc(row.expires_at) <= now:
             row.status = "CANCELLED_SETUP_EXPIRED"
             row.claim_until = None
@@ -286,19 +295,8 @@ def _sync_core_queue(session):
                 row.claim_until = None
                 row.cancel_sent = False
         for o in queue:
-            if not authorized_order(str(o.get("source") or ""),str(o.get("direction") or ""),o.get("entry"),o.get("sl"),o.get("tp",[]),str(o.get("signal_id") or "")):
+            if not bool(core.MT5_AUTO_TRADING) or str(o.get("source") or "") not in {"ICT Signals", "Fibonacci", "SNR Analysis", "Order Block Analysis", "Trendline Analysis", "Texnik Analysis", "Classik Analysis"}:
                 continue
-            from strategy_suite import reward_risk
-            actual_rr = reward_risk(o.get("direction"), o.get("entry"), o.get("sl"), o.get("tp", []))
-            if actual_rr is None or actual_rr < 1.0 - 1e-8:
-                continue
-            # Account execution reports must update that account owner's History.
-            owner_history = session.scalar(select(core.SignalHistory).where(core.SignalHistory.user_id == account.user_id,
-                core.SignalHistory.source == o.get("source"),core.SignalHistory.symbol == "XAU/USD",
-                core.SignalHistory.interval == o.get("interval"),core.SignalHistory.candle_time == str(o.get("candle_time"))))
-            if owner_history is None:
-                continue
-            o = {**o, "signal_id": owner_history.signal_uid}
             if str(o.get("interval") or "").lower() in {"1m", "1min", "m1"}:
                 continue
             direction = str(o.get("direction") or "").upper()
@@ -325,7 +323,7 @@ def _sync_core_queue(session):
             if isinstance(tps, (int, float, str)):
                 tps = [tps]
             tp = float(tps[0]) if tps else 0
-            volume = float(account.lot or getattr(core, "MT5_LOT_SIZE", 0.01))
+            volume = float(o.get("volume") or account.lot or getattr(core, "MT5_LOT_SIZE", 0.01))
             if min(entry, sl, tp, volume) <= 0:
                 continue
 
@@ -619,8 +617,7 @@ async def poll(authorization: str | None = Header(default=None), session=Depends
         return {"orders": [], "cancel_orders": cancel_out,
                 "reason": market_gate.get("reason"), "market_gate": market_gate}
 
-    from strategy_service import TRANSPORT
-    if TRANSPORT != "gateway" or not core.MT5_AUTO_TRADING or not core.AUTO_ENTRY_ENABLED or not a.auto_trade_enabled or not a.trade_allowed:
+    if not bool(core.MT5_AUTO_TRADING) or not a.auto_trade_enabled or not a.trade_allowed:
         if cancel_out:
             session.commit()
         return {"orders": [], "cancel_orders": cancel_out,
@@ -632,10 +629,8 @@ async def poll(authorization: str | None = Header(default=None), session=Depends
     ).order_by(MTOrder.id.asc()).limit(10)))
     out = []
     for row in rows:
-        from strategy_suite import SOURCES, reward_risk
-        actual_rr = reward_risk(row.direction, row.entry, row.stop_loss, [row.take_profit])
-        if row.source not in SOURCES or actual_rr is None or actual_rr < 1.0 - 1e-8:
-            row.status = "CANCELLED_SETUP_INVALID"
+        if str(row.source or "") not in {"ICT Signals", "Fibonacci", "SNR Analysis", "Order Block Analysis", "Trendline Analysis", "Texnik Analysis", "Classik Analysis"}:
+            row.status = "CANCELLED_RETIRED_MODULE"
             row.cancel_sent = False
             continue
         if row.expires_at and _as_utc(row.expires_at) <= now:
@@ -644,10 +639,7 @@ async def poll(authorization: str | None = Header(default=None), session=Depends
             continue
         if row.claim_until and (_as_utc(row.claim_until) or now) > now:
             continue
-        claimed = session.execute(update(MTOrder).where(MTOrder.id == row.id, MTOrder.status == "PENDING",
-            or_(MTOrder.claim_until.is_(None), MTOrder.claim_until <= now)).values(claim_until=now+timedelta(seconds=CLAIM_SECONDS)))
-        if claimed.rowcount != 1:
-            continue
+        row.claim_until = now + timedelta(seconds=CLAIM_SECONDS)
         out.append({
             "order_id": row.id,
             "canonical_symbol": row.canonical_symbol,
@@ -664,8 +656,6 @@ async def poll(authorization: str | None = Header(default=None), session=Depends
             "expires_at": row.expires_at.isoformat() if row.expires_at else "",
             "expiry_epoch": int(_as_utc(row.expires_at).timestamp()) if row.expires_at else 0,
         })
-        # The EA executes one order per poll, so never lease ten unseen orders.
-        break
     # If an order expired in this pass, expose its cancellation immediately.
     expired = list(session.scalars(select(MTOrder).where(
         MTOrder.account_id == a.id,
@@ -692,8 +682,6 @@ async def report(body: ReportRequest, authorization: str | None = Header(default
     if not row: raise HTTPException(404, "Order not found")
     allowed = {"SENT", "FILLED", "REJECTED", "FAILED", "CANCELLED", "PENDING_PLACED"}
     normalized = body.status.upper()
-    if row.status in {"SENT","FILLED","PENDING_PLACED"} and normalized in {"REJECTED","FAILED"}:
-        return {"ok":True,"ignored":"late_failure_after_broker_acceptance"}
     row.status = normalized if normalized in allowed else "FAILED"
     if normalized == "CANCELLED":
         row.claim_until = None
@@ -701,15 +689,6 @@ async def report(body: ReportRequest, authorization: str | None = Header(default
     row.broker_retcode = body.broker_retcode[:100]
     row.broker_message = body.broker_message[:2000]
     row.claim_until = None
-    hist=session.scalar(select(core.SignalHistory).where(core.SignalHistory.signal_uid==row.signal_id,core.SignalHistory.user_id==a.user_id))
-    if hist is not None:
-        payload=json.loads(hist.payload or "{}")
-        executions=payload.setdefault("executions_by_account",{})
-        executions[str(a.id)]={"status":row.status,"order_id":row.id,"ticket":row.broker_ticket,
-                               "reason":row.broker_message,"updated_at":_utc().isoformat()}
-        # Per-account execution belongs to the same module's journal row. A
-        # different account's rejected order must not overwrite its signal outcome.
-        hist.payload=json.dumps(payload,ensure_ascii=False)
     session.commit()
     return {"ok": True}
 

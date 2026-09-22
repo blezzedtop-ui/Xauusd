@@ -1,143 +1,58 @@
-# SignalX — 9 independent strategies (SX9-1)
+# SignalX
 
-This is the complete existing FastAPI/Railway website with its frontend, assets,
-MT5 EAs and tests. The nine strategy pages now use a new isolated strategy suite.
-It is not deployed by downloading this ZIP.
+XAUUSD dashboard with eight retained sections plus ICT, Fibonacci, SNR, Order Block, Trendline, Texnik Analysis and Classik Analysis (15 sections total). Only these seven isolated strategy sources can generate new signals; AI-approved signals use Signal History and the existing MT5 gateway.
 
-## Sidebar and strategies
+## Required Railway variables
 
-| # | Section | Independent entry model |
-|---|---|---|
-| 3 | ICT AI Pro | M30 bias, M5 liquidity sweep, displacement/MSS, first FVG retest |
-| 4 | SNR | Confirmed swing clusters, S/R rejection, opposing-level target check |
-| 5 | AI Analysis | Efficiency-ratio regime; trend Donchian breakout or range Bollinger re-entry |
-| 6 | Trend | Higher-timeframe alignment, EMA20/50 trend, EMA20 pullback rejection |
-| 7 | Trend liniya | Two confirmed swing anchors, intact line, third-touch rejection |
-| 8 | Technical Analysis | Bollinger squeeze breakout with RSI and MACD momentum |
-| 9 | Classic Trade | Confirmed double top/bottom, neckline break and later retest |
-| 10 | OB Trade | Structure-breaking displacement, fresh opposing-candle OB, first retest |
-| 11 | Fibonacci Trade | Confirmed impulse, 50–61.8% retracement, rejection and HTF alignment |
+Set these before deploying:
 
-Full sidebar: Dashboard, Chart, ICT AI Pro, SNR, AI Analysis, Trend, Trend liniya,
-Technical Analysis, Classic Trade, OB Trade, Fibonacci Trade, MT5, History.
-ICT Signals and the old consensus scanner are retired. Strategies do not vote
-on, merge with, or change each other's decisions.
+- `ADMIN_LOGIN`
+- `ADMIN_PASSWORD` (12+ characters)
+- `SECRET_KEY` (stable random secret; do not rotate on every deploy)
+- `DATABASE_URL` (PostgreSQL recommended for production)
 
-## RR settings
+Configure AI/market/MT5 API keys only for providers and integrations you actually use. See `.env.example` for the supported variable names.
 
-Each section has its own server-persisted Target RR and timeframe configuration.
-Admins can enter **any finite RR >= 1**, e.g. 1, 1.05, 1.4, 1.5, 2, 2.7 or 10.
-Default target RR is 2. There is no arbitrary upper cap. A structural obstacle,
-nonpositive target, invalid geometry or excessive risk can still make the
-strategy return WAIT; a large requested RR cannot force a valid setup.
+## Security notes
 
-ICT uses M5 with M30 context. Other sections support M5, M15, M30, H1 and H4.
-M1 remains chart-only. Changes apply to the next newly evaluated candle; an
-already evaluated signal and its History levels are never rewritten.
+- No production SQLite database is shipped in the release archive.
+- No admin password is embedded in source code.
+- Session signing requires a stable `SECRET_KEY` from the environment.
+- `__pycache__`, bytecode, backup files, and patch-note README files are excluded from the production container.
+- MT5 account credentials are not stored by the current gateway UI; use the EA pairing flow.
 
-AutoTrade accepts actual reward/risk >= 1, recomputed from Entry, SL and TP.
-Old AUTOTRADE_MIN_RR=1.40 / AI_PREVALIDATION_MIN_RR values no longer override this
-floor. One TP is used for both History and execution. The broker EA recomputes
-RR after tick normalization and using bid/ask plus the configured deviation
-allowance. A nominal 1:1 setup may therefore be rejected after spread or adverse
-price movement. No post-fill RR guarantee is possible under broker slippage.
 
-## Signal and History contract
+## AI Router recovery
+The AI router uses short transient cooldowns and a real-request recovery path for Groq/Gemini. Billing/auth/model errors are not retried until reset.
 
-- Only TradingView, RealMarketAPI or Twelve Data live-provider snapshots enter
-  the suite. Yahoo/demo fallbacks, malformed OHLC, recent data gaps and stale
-  bars return WAIT. Freshness is based on provider bar timestamps, not proof of
-  zero quote latency.
-- Only completed entry and higher-timeframe candles determine the setup.
-- Every directional candidate gets its own real AI provider veto. Matching
-  direction, boolean validation=true, confidence >= 85, agreement >= 70 and no
-  blocking risk flags are mandatory. No AI key, errors or fallback means WAIT.
-  These model scores are not measured win probabilities.
-- One durable evaluation per module/symbol/timeframe/closed candle, including
-  failed AI decisions. Concurrent refreshes and process restarts do not cause
-  another AI validation of the same event.
-- The server scanner runs without an open browser and writes separate History
-  rows for each registered user and module, even while AutoTrade is OFF.
-- History has source filters and per-module statistics. SX9 signal IDs isolate
-  current results from old algorithms. Older rows are preserved in the database
-  but excluded from the new suite's History/statistics. Upgrades do not clear it.
-- Browser-posted prices, RR, direction and AI claims cannot create an order:
-  the server recalculates the canonical module result.
-- The durable outbox keeps gateway delivery deduplicated across restarts.
-  Legacy delivery uses an atomic at-most-once claim; ambiguous lost responses
-  are not blindly replayed. Such cases require terminal reconciliation.
-- Gateway execution replies are retained under the correct user's module row
-  and account ID. Signal-level chart outcomes and broker account execution
-  reports are distinct; chart-derived price differences are not broker P&L.
-- A signal may remain in History while execution is disabled, expired, rejected
-  by spread/RR checks, or blocked by account limits.
+## ICT, Fibonacci and SNR signal flow
+The background worker independently scans closed candles for ICT (liquidity sweep → MSS → FVG retest), Fibonacci (swing → retracement → confirmation) and SNR (confirmed zones → bounce/retest). All candidates require structural SL, observed TP targets, fresh entry and RR >= 1.40. The AI fallback network must return an explicit approval (confidence >= 85 and agreement >= 70; SNR also requires STRONG zone quality). AI provider failures fail closed; deterministic candidates never execute alone. Each approved candle is recorded in Signal History once per source. MT5 AutoTrade defaults OFF and must be explicitly enabled by an admin; while ON, the bridge and account-scoped gateway allow ICT Signals, Fibonacci and SNR Analysis only. Use a demo account to test end-to-end before live deployment. See `ICT_INTEGRATION_UZ.md`, `FIBONACCI_INTEGRATION_UZ.md`, `SNR_INTEGRATION_UZ.md`.
 
-## Railway setup
+## Market Gate / 24-7 token saving
+The deterministic strategy layer may run continuously, but automated new-signal creation, AI validation/provider calls, and MT5 AutoTrade are blocked while the Market Gate is closed. The gate first checks the configured daily technical-maintenance window (`Asia/Tashkent`, default 02:00–03:00), then fresh MT5 symbol trading-session telemetry from the EA. When MT5 session telemetry is unavailable, the service uses a conservative weekend fallback. Closed-market provider calls are prevented at the shared AI router, so provider token usage is effectively zero during a closed gate.
 
-Required variables: ADMIN_LOGIN, ADMIN_PASSWORD (12+ characters), SECRET_KEY
-(stable random value), DATABASE_URL (persistent PostgreSQL recommended).
-See .env.example. Preserve the existing database and take a backup before
-replacing application files. Deploy using the supplied Dockerfile/railway.json
-and the existing main:app entry point. Database additions are additive tables.
+The MT5 EAs report `SymbolInfoSessionTrade` session state in broker server time.
 
-Configure valid market/AI provider keys and model IDs for your own accounts.
-The new suite never fabricates market data or substitutes rule-only AI approval.
-Market Gate blocks new evaluation/AI/orders during closed sessions.
+## Fibonacci Analysis
 
-## MT5 setup
+The Fibonacci module independently scans closed M15 candles plus H1/H4 bias, confirmed structural A→B swings, 0.500–0.618 retracement with a closed-candle bounce, and fixed 1.272/1.618 extension targets. A signal requires live-entry deviation and RR >= 1.40. Its AI confirmation is fail-closed and only approved setups are saved in Signal History. The same approved signal is placed in the existing MT5 queue if AutoTrade is enabled. Other strategy APIs remain 410 and their records are never forwarded. See `FIBONACCI_INTEGRATION_UZ.md`. Live broker/EA execution is not verified by synthetic tests.
 
-Use exactly one transport:
+## SNR Analysis
 
-1. **Existing bridge (default)**: MT5_EXECUTION_TRANSPORT=legacy.
-   Compile and attach mt5/SignalX_XAUUSD_EA.mq5 in MetaEditor. Set ApiBase and
-   BridgeToken to your existing server and MT5_BRIDGE_TOKEN.
-2. **Account gateway**: MT5_EXECUTION_TRANSPORT=gateway.
-   Compile and attach mt5/SignalX_MultiBroker_Gateway_EA.mq5. Use the site's
-   pairing flow and enable AutoTrade for the chosen account.
+Isolated SNR Analysis uses confirmed clustered H1 pivots, H4/H1 directional bias, M15 context, closed M5 bounce or breakout/retest, and actual opposing SNR targets. Mandatory independent AI validation and 1.40 RR guard precede new Signal History writes. Only when explicitly enabled does MT5 receive SNR Analysis orders. The retired source `SNR` remains excluded. See `SNR_INTEGRATION_UZ.md`. Synthetic tests do not prove live broker execution or profitability.
 
-Set MT5_AUTO_TRADING=true and AUTO_ENTRY_ENABLED=true only when ready; the
-distributed environment defaults to AutoTrade OFF. Enable terminal Algo Trading
-and allow WebRequest for your API domain. Install the updated EA, not an old
-compiled EX5: both EAs now allow exactly the nine active sources and check RR >= 1.
-The aggregate EA default is at most 3 open SignalX positions per symbol; lot,
-spread and deviation controls remain configurable. The gateway honors each
-account's configured lot. Account authorization and broker margin/stops checks
-remain in place.
+## Order Block Analysis
 
-Do not run both EAs for the same strategy/account. The server enables only the
-selected transport, avoiding duplicate delivery through two integrations.
+An independent M15 confirmed-swing/BOS/displacement detector waits for a fresh OB first M5 rejection. The live validator rejects stale data, bad geometry, RR under 1.40, and missing independent AI approval. New history source and the MT5 source whitelist include only `Order Block Analysis` (not retired `Order Block`). See ORDER_BLOCK_INTEGRATION_UZ.md. Synthetic tests do not prove broker execution or profitability.
 
-## Verification and limitations
+## Trendline Analysis
 
-Current release checks are in STRATEGY_SUITE_RELEASE.md. Run:
+Independent closed-candle M5 confirmed-swing scanner + M30/H1/H4 gate: 3rd touch or breakout/first retest, observed H1 target and RR >= 1.40. Strict provider AI confirmation required before History or MT5 queue. New source `Trendline Analysis` is distinct from retired legacy `Auto Trend Line`. See TRENDLINE_INTEGRATION_UZ.md. Demo test required before any live use.
 
-```bash
-python -m pip install -r requirements.txt pytest
-python -m pytest tests -q
-node --check app.js
-node --check assets/strategy-suite.js
-# Install jsdom in a temporary development directory, then:
-NODE_PATH=/path/to/node_modules node tests/test_strategy_ui.cjs
-```
+## Texnik Analysis
 
-The Python tests create a temporary database, synthetic market fixtures and mock
-AI/MT5 responses. They neither trade nor measure profitability. DOM tests verify
-all navigation links and the nine separate panels and RR forms.
+Independent H1 EMA50/200 trend + confirmed M15 support/resistance pivot + M5 closed engulfing/pin-bar, EMA50 and RSI14 analysis. The technical engine never invents entry, stop or TP: it uses fresh live price, the tested M15 pivot and the nearest observed H1 price target. RR must be >=1.40. AI approval is mandatory and fails closed, and every accepted closed candle is saved once per source in Signal History. MT5 queueing requires the administrator to enable Auto Trading; the gateway and both EA source filters allow only the six active names. Retired `Technical Analysis` remains blocked (new source is `Texnik Analysis`). Convergent technical/other-strategy setups with the same entry, SL and TP share a single MT5 queue slot. See `TEXNIK_INTEGRATION_UZ.md`. Synthetic tests are not live broker execution or financial performance evidence.
 
-No historical performance backtest, real provider acceptance test, MetaEditor
-compilation or live/demo terminal fill test is claimed for this release. Run a
-cost-aware historical backtest and demo forward test before real account use.
-There is no substantiated “world's strongest” or guaranteed-profit claim.
+## Classik Analysis (new, legacy Classic Trade still disabled)
 
-Historical 2026-09-19 audit files in the archive describe older builds; they are
-not verification of SX9-1.
-
-## Reference concepts
-
-The rule sets above are explicit implementation choices, not endorsed systems.
-Background references:
-- CME technical analysis: https://www.cmegroup.com/education/courses/technical-analysis
-- CME risk/reward examples: https://www.cmegroup.com/education/courses/trade-and-risk-management/the-2-percent-rule
-- MQL5 order result checks: https://www.mql5.com/en/docs/trading/ordersend
-
-No credentials or production database is included in this distribution.
+Independent closed-candle H4/H1/M30 trend alignment; confirmed H1 swing S/R pivot; M15 closed-body breakout followed by its first retest; M5 closed engulfing or pin-bar rejection. Stops are beyond the retest invalidation, and the TP is the nearest *observed* H1 opposing price. No invented target to force RR. RR >= 1.40 and <= 6, live quote freshness, AI validation, no conflicting evidence, and one History record per module+closed M5 candle. New routes `/api/v1/classik-analysis-live/XAU%2FUSD` and `/api/v1/classik-analysis/process` require admin. The existing aggregate `/api/v1/signals/auto-record` now includes seven active engines. MT5 queue and both EA source allowlists include `Classik Analysis` (not the retired `Classic Trade`), and matching orders across sources are deduplicated while preserving distinct History rows. Auto Trading remains OFF until enabled by admin. See `CLASSIK_INTEGRATION_UZ.md`. Synthetic tests do not establish live market profitability or broker execution.
