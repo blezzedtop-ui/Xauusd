@@ -919,8 +919,9 @@ TV_CANDLE_CACHE: dict[tuple[str,str], tuple[float, list[dict[str,Any]]]] = {}
 TV_CANDLE_LOCKS: dict[tuple[str,str], asyncio.Lock] = {}
 TV_CANDLE_LOCKS_GUARD = asyncio.Lock()
 # Canonical snapshot cache shared by every strategy and endpoint. The cache key is
-# strictly symbol + timeframe, so Technical Analysis, Algo/SMC, SMC, Fibonacci,
-# Trend Channel, MSAI and MTF reuse identical OHLC data for the same request.
+# symbol + timeframe, so callers reuse identical OHLC only when the cached
+# snapshot has at least the history length requested. A quote may request 80
+# bars while a strategy needs 260; never reuse the shorter data for that strategy.
 MARKET_SNAPSHOT_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
 MARKET_SNAPSHOT_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
 MARKET_SNAPSHOT_LOCKS_GUARD = asyncio.Lock()
@@ -1910,7 +1911,7 @@ async def get_market_snapshot(symbol: str, interval: str, limit: int = 220) -> d
     cache_key = (key, interval)
     now_mono = asyncio.get_running_loop().time()
     cached = MARKET_SNAPSHOT_CACHE.get(cache_key)
-    if cached and now_mono - cached[0] < MARKET_SNAPSHOT_TTL:
+    if cached and now_mono - cached[0] < MARKET_SNAPSHOT_TTL and len(cached[1].get("candles") or []) >= limit:
         return cached[1]
 
     async with MARKET_SNAPSHOT_LOCKS_GUARD:
@@ -1918,7 +1919,7 @@ async def get_market_snapshot(symbol: str, interval: str, limit: int = 220) -> d
     async with lock:
         now_mono = asyncio.get_running_loop().time()
         cached = MARKET_SNAPSHOT_CACHE.get(cache_key)
-        if cached and now_mono - cached[0] < MARKET_SNAPSHOT_TTL:
+        if cached and now_mono - cached[0] < MARKET_SNAPSHOT_TTL and len(cached[1].get("candles") or []) >= limit:
             return cached[1]
 
         errors: list[dict[str, str]] = []
@@ -2500,14 +2501,14 @@ async def fetch_tradingview_candles(symbol: str, interval: str, limit: int = TRA
     key = (symbol, interval)
     now = asyncio.get_running_loop().time()
     cached = TV_CANDLE_CACHE.get(key)
-    if cached and cached[1] and now - cached[0] < TRADINGVIEW_CACHE_TTL:
+    if cached and cached[1] and len(cached[1]) >= min(limit, TRADINGVIEW_BARS) and now - cached[0] < TRADINGVIEW_CACHE_TTL:
         return cached[1][-limit:]
     async with TV_CANDLE_LOCKS_GUARD:
         lock = TV_CANDLE_LOCKS.setdefault(key, asyncio.Lock())
     async with lock:
         now = asyncio.get_running_loop().time()
         cached = TV_CANDLE_CACHE.get(key)
-        if cached and cached[1] and now - cached[0] < TRADINGVIEW_CACHE_TTL:
+        if cached and cached[1] and len(cached[1]) >= min(limit, TRADINGVIEW_BARS) and now - cached[0] < TRADINGVIEW_CACHE_TTL:
             return cached[1][-limit:]
         last_exc = None
         bars = []
@@ -2523,7 +2524,7 @@ async def fetch_tradingview_candles(symbol: str, interval: str, limit: int = TRA
         if not bars:
             if allow_stale:
                 stale = TV_CANDLE_CACHE.get(key)
-                if stale and stale[1]:
+                if stale and stale[1] and len(stale[1]) >= min(limit, TRADINGVIEW_BARS):
                     return stale[1][-limit:]
             if last_exc:
                 raise last_exc
