@@ -16,7 +16,7 @@ input int MaxSpreadPoints=80;
 input int ExecutionRetries=2;
 input string XAUTradeSymbol="XAUUSDm";
 input int DuplicateCooldownSeconds=30;
-input int MaxOpenPositionsPerSymbol=0; // 0=unlimited; counts SignalX magic positions only
+input int MaxOpenPositionsPerSymbol=3; // Aggregate limit across all nine modules
 
 string g_token="";
 datetime g_last_poll=0, g_last_state=0;
@@ -147,15 +147,24 @@ bool IsBlockedSource(string source)
 {
    string x=source;
    StringToLower(x);
-   StringReplace(x,"+"," ");
-   StringReplace(x,"-"," ");
-   StringReplace(x,"_"," ");
-   while(StringFind(x,"  ")>=0) StringReplace(x,"  "," ");
-   if(StringFind(x,"book")>=0 && StringFind(x,"openai")>=0) return true;
-   if(StringFind(x,"signal lab")>=0) return true;
-   if(StringFind(x,"algotrade")>=0) return true;
-   if(x=="signals" || StringFind(x,"signals")>=0) return true;
-   return false;
+   StringTrimLeft(x); StringTrimRight(x);
+   return !(x=="ict ai pro" || x=="snr" || x=="ai analysis" || x=="trend" ||
+            x=="trend liniya" || x=="technical analysis" || x=="classic trade" ||
+            x=="ob trade" || x=="fibonacci trade");
+}
+
+bool ValidExecutionRR(string symbol,string direction,string orderType,double entry,double sl,double tp)
+{
+   MqlTick tick;
+   if(!SymbolInfoTick(symbol,tick)) return false;
+   double point=SymbolInfoDouble(symbol,SYMBOL_POINT);
+   double fill=entry;
+   if(orderType=="MARKET")
+      fill=(direction=="BUY" ? tick.ask+MaxDeviationPoints*point : tick.bid-MaxDeviationPoints*point);
+   if(!MathIsValidNumber(fill) || !MathIsValidNumber(sl) || !MathIsValidNumber(tp) || fill<=0 || sl<=0 || tp<=0) return false;
+   double risk=(direction=="BUY" ? fill-sl : sl-fill);
+   double reward=(direction=="BUY" ? tp-fill : fill-tp);
+   return (risk>0 && reward>0 && reward/risk>=1.0-0.00000001);
 }
 
 string OrderGuardKey(string order_id)
@@ -166,6 +175,7 @@ string OrderGuardKey(string order_id)
 bool GuardAllows(string order_id)
 {
    if(order_id=="") return false;
+   if(GlobalVariableCheck(OrderGuardKey(order_id)+".done")) return false;
    string key=OrderGuardKey(order_id);
    if(!GlobalVariableCheck(key)) return true;
    double last=GlobalVariableGet(key);
@@ -209,8 +219,6 @@ bool IsTransientRetcode(uint retcode)
    return (retcode==TRADE_RETCODE_REQUOTE ||
            retcode==TRADE_RETCODE_PRICE_CHANGED ||
            retcode==TRADE_RETCODE_PRICE_OFF ||
-           retcode==TRADE_RETCODE_TIMEOUT ||
-           retcode==TRADE_RETCODE_CONNECTION ||
            retcode==TRADE_RETCODE_TOO_MANY_REQUESTS);
 }
 
@@ -499,9 +507,11 @@ bool ParseAndExecute(string json){
    if(e<0) return false;
    string o=StringSubstr(json,p,e-p+1);
    string order_id=JsonString(o,"order_id");
+   if(order_id=="") order_id=IntegerToString((long)JsonNumber(o,"order_id"));
    string symbol=JsonString(o,"execution_symbol");
    symbol=ExecSymbol(symbol);
    string direction=JsonString(o,"direction");
+   string source=JsonString(o,"source");
    string order_type=JsonString(o,"order_type");
    if(order_type=="") order_type="MARKET";
    StringToUpper(order_type);
@@ -513,7 +523,11 @@ bool ParseAndExecute(string json){
     double tp2=JsonNumber(o,"tp2");
     if(tp2<=0) tp2=tp;
     if(tp<=0) tp=tp2;
-   if(order_id=="" || symbol=="" || (direction!="BUY" && direction!="SELL")) return false;
+   if(order_id=="" || order_id=="0" || symbol=="" || (direction!="BUY" && direction!="SELL")) return false;
+   if(IsBlockedSource(source)){
+      string report="{\"order_id\":\""+JsonEscape(order_id)+"\",\"status\":\"REJECTED\",\"broker_message\":\"SOURCE_NOT_ALLOWED\"}";
+      string rr; Http("POST","/api/v1/mt5/gateway/report",report,rr); return false;
+   }
    if(order_type!="MARKET" && !IsPendingOrderType(order_type)) return false;
    if(!IsExactAllowedSymbol(symbol)){
       string report="{\"order_id\":\""+JsonEscape(order_id)+"\",\"status\":\"REJECTED\",\"broker_message\":\"Unsupported execution symbol\"}";
@@ -586,6 +600,10 @@ bool ParseAndExecute(string json){
 
    for(int attempt=0;attempt<attempts && !sent;attempt++){
       ResetLastError();
+      sl=NormalizePrice(symbol,sl);
+      tp=NormalizePrice(symbol,tp);
+      tp2=tp;
+      if(!ValidExecutionRR(symbol,direction,order_type,entry,sl,tp)){ last="RR_BELOW_1_OR_INVALID_GEOMETRY"; break; }
       if(IsPendingOrderType(order_type))
       {
          if(!PendingEntryValid(symbol,order_type,entry)){ last="INVALID_PENDING_ENTRY"; break; }
@@ -604,8 +622,9 @@ bool ParseAndExecute(string json){
          if(direction=="BUY") sent=trade.Buy(volume,symbol,0,sl,tp2,"SignalX "+order_id);
          else sent=trade.Sell(volume,symbol,0,sl,tp2,"SignalX "+order_id);
       }
+      uint rc=trade.ResultRetcode();
+      sent=sent && (rc==TRADE_RETCODE_DONE || rc==TRADE_RETCODE_DONE_PARTIAL || rc==TRADE_RETCODE_PLACED);
       if(sent) SXStoreTPLevels(order_id,tp1,tp2);
-       uint rc=trade.ResultRetcode();
       if(!sent){
          last=trade.ResultRetcodeDescription();
          if(!IsTransientRetcode(rc)) break;
@@ -617,6 +636,7 @@ bool ParseAndExecute(string json){
    string status=!sent?"FAILED":(IsPendingOrderType(order_type)?"PENDING_PLACED":(deal_ticket>0?"FILLED":"SENT"));
    string report="{\"order_id\":"+order_id+",\"status\":\""+status+"\",\"broker_ticket\":\""+IntegerToString((long)(deal_ticket>0?deal_ticket:order_ticket));
    report+="\",\"broker_retcode\":\""+IntegerToString((int)trade.ResultRetcode())+"\",\"broker_message\":\""+JsonEscape(sent?"ORDER_SENT":last)+"\"}";
+   if(sent) GlobalVariableSet(OrderGuardKey(order_id)+".done",(double)TimeCurrent());
    string rr; Http("POST","/api/v1/mt5/gateway/report",report,rr);
    if(sent) MarkOrderGuard(order_id);
    Print("[SIGNALX GATEWAY] ",status," order=",order_id," symbol=",symbol," direction=",direction," volume=",DoubleToString(volume,2));
