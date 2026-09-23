@@ -60,7 +60,6 @@ class MT5Account(core.Base):
     trade_allowed: Mapped[bool] = mapped_column(Boolean, default=False)
     connected: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     auto_trade_enabled: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    pending_trade_enabled: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
     lot: Mapped[float] = mapped_column(Float, default=0.01)
     account_token_hash: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True, index=True)
     token_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -102,7 +101,6 @@ class MTOrder(core.Base):
     canonical_symbol: Mapped[str] = mapped_column(String(50))
     execution_symbol: Mapped[str] = mapped_column(String(100))
     direction: Mapped[str] = mapped_column(String(10))
-    order_type: Mapped[str] = mapped_column(String(20), default="MARKET", index=True)
     volume: Mapped[float] = mapped_column(Float)
     entry: Mapped[float] = mapped_column(Float)
     stop_loss: Mapped[float] = mapped_column(Float)
@@ -112,8 +110,6 @@ class MTOrder(core.Base):
     candle_time: Mapped[str | None] = mapped_column(String(50), nullable=True)
     status: Mapped[str] = mapped_column(String(30), default="PENDING", index=True)
     claim_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
-    cancel_sent: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     broker_ticket: Mapped[str | None] = mapped_column(String(100), nullable=True)
     broker_retcode: Mapped[str | None] = mapped_column(String(100), nullable=True)
     broker_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -137,23 +133,11 @@ def initialize_gateway_tables() -> None:
             MTOrder.__table__,
         ],
     )
-    # Backward-compatible migrations for existing deployments.
-    with core.engine.begin() as conn:
-        acct_columns = {c["name"] for c in inspect(core.engine).get_columns(MT5Account.__tablename__)}
-        if "lot" not in acct_columns:
+    # Backward-compatible migration for existing deployments.
+    columns = {c["name"] for c in inspect(core.engine).get_columns(MT5Account.__tablename__)}
+    if "lot" not in columns:
+        with core.engine.begin() as conn:
             conn.execute(text("ALTER TABLE mt5_accounts ADD COLUMN lot FLOAT DEFAULT 0.01"))
-        if "pending_trade_enabled" not in acct_columns:
-            conn.execute(text("ALTER TABLE mt5_accounts ADD COLUMN pending_trade_enabled BOOLEAN DEFAULT TRUE"))
-        order_columns = {c["name"] for c in inspect(core.engine).get_columns(MTOrder.__tablename__)}
-        expiry_ddl = "TIMESTAMP WITH TIME ZONE" if core.engine.dialect.name == "postgresql" else "DATETIME"
-        additions = {
-            "order_type": "VARCHAR(20) DEFAULT 'MARKET'",
-            "expires_at": expiry_ddl,
-            "cancel_sent": "BOOLEAN DEFAULT FALSE",
-        }
-        for col, ddl in additions.items():
-            if col not in order_columns:
-                conn.execute(text(f"ALTER TABLE mt5_gateway_orders ADD COLUMN {col} {ddl}"))
 
 
 class MTState(BaseModel):
@@ -171,7 +155,6 @@ class MTState(BaseModel):
     terminal_build: str = ""
     ea_version: str = ""
     symbols: list[dict[str, Any]] = Field(default_factory=list)
-    markets: dict[str, dict[str, Any]] = Field(default_factory=dict)
 
 class PairRequest(BaseModel):
     label: str = Field(default="MT5 Account", max_length=120)
@@ -204,7 +187,7 @@ def _account_dict(a: MT5Account) -> dict[str, Any]:
         "free_margin": a.free_margin, "margin": a.margin,
         "trade_allowed": a.trade_allowed,
         "connected": bool(a.connected and age is not None and age <= 45),
-        "last_seen_seconds": age, "auto_trade_enabled": a.auto_trade_enabled, "pending_trade_enabled": a.pending_trade_enabled, "lot": float(a.lot or 0.01),
+        "last_seen_seconds": age, "auto_trade_enabled": a.auto_trade_enabled, "lot": float(a.lot or 0.01),
         "terminal_build": a.terminal_build, "ea_version": a.ea_version,
     }
 
@@ -223,7 +206,6 @@ def _fingerprint(order: dict[str, Any], account_id: int) -> str:
         "tf": order.get("interval"),
         "candle": order.get("candle_time"),
         "direction": order.get("direction"),
-        "order_type": order.get("order_type") or order.get("pending_type") or "MARKET",
         "entry": order.get("entry"),
         "sl": order.get("sl") or order.get("stop_loss"),
         "tp": order.get("tp") or order.get("take_profit"),
@@ -231,147 +213,41 @@ def _fingerprint(order: dict[str, Any], account_id: int) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 def _sync_core_queue(session):
-    """Synchronize the core AutoTrade queue into account-scoped MT orders.
-
-    Pending setup orders carry their order_type/expiry metadata. Existing queued
-    setups are reconciled against SignalHistory so a setup that becomes CANCELLED
-    in SignalX is also cancelled at the MT5 gateway level.
-    """
     queue = list(getattr(core, "MT5_ORDER_QUEUE", []) or [])
     accounts = list(session.scalars(select(MT5Account).where(MT5Account.auto_trade_enabled == True)))
-    now = _utc()
     created = 0
-
-    # First invalidate already-queued setups whose source signal is no longer active
-    # or whose explicit expiry has elapsed. This is what drives the EA cancellation
-    # command for an already-placed pending order.
-    existing = list(session.scalars(select(MTOrder).where(
-        MTOrder.status.in_(["PENDING", "SENT"])
-    )))
-    for row in existing:
-        # Never deliver orders persisted by strategies removed from the dashboard.
-        # A pending MT5 limit/stop from one of them must receive a cancellation.
-        if str(row.source or "") not in {"ICT Signals", "Fibonacci", "SNR Analysis", "Order Block Analysis", "Trendline Analysis", "Texnik Analysis", "Classik Analysis"}:
-            row.status = "CANCELLED_RETIRED_MODULE"
-            row.claim_until = None
-            row.cancel_sent = False
-            continue
-        if not bool(core.MT5_AUTO_TRADING):
-            row.status = "CANCELLED_AUTOTRADE_OFF"
-            row.claim_until = None
-            row.cancel_sent = False
-            continue
-        if row.expires_at and _as_utc(row.expires_at) <= now:
-            row.status = "CANCELLED_SETUP_EXPIRED"
-            row.claim_until = None
-            row.cancel_sent = False
-            continue
-        if row.signal_id:
-            hist = session.scalar(select(core.SignalHistory).where(
-                core.SignalHistory.signal_uid == str(row.signal_id)
-            ))
-            if hist is not None:
-                hstatus = str(getattr(hist, "status", "") or "").upper()
-                houtcome = str(getattr(hist, "outcome", "") or "").upper()
-                if hstatus not in {"ACTIVE", "OPEN", "READY", "QUEUED"} or houtcome in {
-                    "CANCELLED", "INVALID", "SL HIT", "TP HIT", "CLOSED", "EXPIRED"
-                }:
-                    row.status = "CANCELLED_SETUP_INVALID"
-                    row.claim_until = None
-                    row.cancel_sent = False
-
     for account in accounts:
-        # Account-level pending-order gate. MARKET orders remain controlled by
-        # auto_trade_enabled; pending orders have their own independent switch.
-        pending_types = {"BUY_STOP","SELL_STOP","BUY_LIMIT","SELL_LIMIT"}
-        if not bool(account.pending_trade_enabled):
-            stale_pending = list(session.scalars(select(MTOrder).where(
-                MTOrder.account_id == account.id,
-                MTOrder.order_type.in_(list(pending_types)),
-                MTOrder.status.in_(["PENDING","SENT"])
-            )))
-            for row in stale_pending:
-                row.status = "CANCELLED_PENDING_DISABLED"
-                row.claim_until = None
-                row.cancel_sent = False
         for o in queue:
-            if not bool(core.MT5_AUTO_TRADING) or str(o.get("source") or "") not in {"ICT Signals", "Fibonacci", "SNR Analysis", "Order Block Analysis", "Trendline Analysis", "Texnik Analysis", "Classik Analysis"}:
-                continue
             if str(o.get("interval") or "").lower() in {"1m", "1min", "m1"}:
                 continue
             direction = str(o.get("direction") or "").upper()
             if direction not in {"BUY", "SELL"}:
                 continue
             canonical = _canonical(o.get("symbol") or "XAU/USD")
-            mapping = session.scalar(select(MTSymbol).where(
-                MTSymbol.account_id == account.id,
-                MTSymbol.canonical_symbol == canonical
-            ))
+            mapping = session.scalar(select(MTSymbol).where(MTSymbol.account_id == account.id, MTSymbol.canonical_symbol == canonical))
             if not mapping or not mapping.broker_symbol:
                 continue
-
-            order_type = str(o.get("order_type") or o.get("pending_type") or "MARKET").upper()
-            allowed_types = {"MARKET", "BUY_STOP", "SELL_STOP", "BUY_LIMIT", "SELL_LIMIT"}
-            if order_type not in allowed_types:
-                continue
-            if order_type in pending_types and not bool(account.pending_trade_enabled):
-                continue
-
             entry = float(o.get("entry") or 0)
             sl = float(o.get("sl") or o.get("stop_loss") or 0)
             tps = o.get("tp") or o.get("take_profit") or []
-            if isinstance(tps, (int, float, str)):
-                tps = [tps]
+            if isinstance(tps, (int, float, str)): tps = [tps]
             tp = float(tps[0]) if tps else 0
             volume = float(o.get("volume") or account.lot or getattr(core, "MT5_LOT_SIZE", 0.01))
             if min(entry, sl, tp, volume) <= 0:
                 continue
-
-            expires_at = None
-            raw_expiry = o.get("expires_at") or o.get("expiry_at") or o.get("expiry")
-            if raw_expiry:
-                try:
-                    if isinstance(raw_expiry, (int, float)):
-                        expires_at = datetime.fromtimestamp(float(raw_expiry), tz=timezone.utc)
-                    else:
-                        raw = str(raw_expiry).replace("Z", "+00:00")
-                        expires_at = _as_utc(datetime.fromisoformat(raw))
-                except Exception:
-                    expires_at = None
-            elif o.get("expiry_seconds"):
-                try:
-                    expires_at = now + timedelta(seconds=max(1, int(o.get("expiry_seconds"))))
-                except Exception:
-                    expires_at = None
-
             fp = _fingerprint(o, account.id)
-            exists = session.scalar(select(MTOrder).where(
-                MTOrder.account_id == account.id,
-                MTOrder.source_fingerprint == fp
-            ))
+            exists = session.scalar(select(MTOrder).where(MTOrder.account_id == account.id, MTOrder.source_fingerprint == fp))
             if exists:
                 continue
-
             session.add(MTOrder(
-                account_id=account.id,
-                source_fingerprint=fp,
-                canonical_symbol=canonical,
-                execution_symbol=mapping.broker_symbol,
-                direction=direction,
-                order_type=order_type,
-                volume=volume,
-                entry=entry,
-                stop_loss=sl,
-                take_profit=tp,
-                source=str(o.get("source") or "Consensus"),
-                signal_id=str(o.get("signal_id") or o.get("id") or ""),
+                account_id=account.id, source_fingerprint=fp, canonical_symbol=canonical,
+                execution_symbol=mapping.broker_symbol, direction=direction, volume=volume,
+                entry=entry, stop_loss=sl, take_profit=tp,
+                source=str(o.get("source") or "Consensus"), signal_id=str(o.get("signal_id") or o.get("id") or ""),
                 candle_time=str(o.get("candle_time") or ""),
-                expires_at=expires_at,
-                cancel_sent=False,
             ))
             created += 1
-
-    if created or existing:
+    if created:
         session.commit()
     return created
 
@@ -404,28 +280,6 @@ async def toggle(account_id: int, body: ToggleRequest, authorization: str | None
     session.commit()
     return {"ok": True, "account": _account_dict(a)}
 
-@router.post("/accounts/{account_id}/pending-trade")
-async def toggle_pending_trade(account_id: int, body: ToggleRequest, authorization: str | None = Header(default=None), session=Depends(core.db)):
-    user = _user(authorization, session)
-    a = session.scalar(select(MT5Account).where(MT5Account.id == account_id, MT5Account.user_id == user.id))
-    if not a:
-        raise HTTPException(404, "MT5 account not found")
-    if body.enabled and not a.connected:
-        raise HTTPException(409, "MT5 account is not connected")
-    a.pending_trade_enabled = bool(body.enabled)
-    if not a.pending_trade_enabled:
-        pending = list(session.scalars(select(MTOrder).where(
-            MTOrder.account_id == account_id,
-            MTOrder.order_type.in_(["BUY_STOP","SELL_STOP","BUY_LIMIT","SELL_LIMIT"]),
-            MTOrder.status.in_(["PENDING","SENT"])
-        )))
-        for row in pending:
-            row.status = "CANCELLED_PENDING_DISABLED"
-            row.claim_until = None
-            row.cancel_sent = False
-    session.commit()
-    return {"ok": True, "account": _account_dict(a)}
-
 @router.post("/accounts/{account_id}/lot")
 async def set_account_lot(account_id: int, body: LotRequest, authorization: str | None = Header(default=None), session=Depends(core.db)):
     user = _user(authorization, session)
@@ -449,42 +303,16 @@ async def set_account_lot(account_id: int, body: LotRequest, authorization: str 
     session.commit()
     return {"ok": True, "account": _account_dict(a)}
 
-@router.post("/accounts/{account_id}/disconnect")
+@router.delete("/accounts/{account_id}")
 async def disconnect(account_id: int, authorization: str | None = Header(default=None), session=Depends(core.db)):
-    """Safely disconnect an MT5 account without deleting its saved account record.
-
-    Disconnect revokes the EA token, disables AutoTrade, and cancels any queued
-    orders belonging to the account. A fresh pairing is required to reconnect.
-    """
     user = _user(authorization, session)
     a = session.scalar(select(MT5Account).where(MT5Account.id == account_id, MT5Account.user_id == user.id))
-    if not a:
-        raise HTTPException(404, "MT5 account not found")
-    pending = list(session.scalars(select(MTOrder).where(MTOrder.account_id == account_id, MTOrder.status == "PENDING")))
-    for row in pending:
-        row.status = "CANCELLED_ACCOUNT_DISCONNECTED"
-        row.claim_until = None
+    if not a: raise HTTPException(404, "MT5 account not found")
     a.connected = False
     a.auto_trade_enabled = False
-    a.pending_trade_enabled = False
     a.account_token_hash = None
-    a.token_expires_at = None
     session.commit()
-    return {"ok": True, "disconnected": True, "account_id": account_id, "cancelled_orders": len(pending)}
-
-@router.delete("/accounts/{account_id}")
-async def delete_account(account_id: int, authorization: str | None = Header(default=None), session=Depends(core.db)):
-    """Permanently remove an MT5 account and its account-scoped records."""
-    user = _user(authorization, session)
-    a = session.scalar(select(MT5Account).where(MT5Account.id == account_id, MT5Account.user_id == user.id))
-    if not a:
-        raise HTTPException(404, "MT5 account not found")
-    # Explicit child cleanup keeps this safe on SQLite where FK cascades may be disabled.
-    session.query(MTOrder).filter(MTOrder.account_id == account_id).delete(synchronize_session=False)
-    session.query(MTSymbol).filter(MTSymbol.account_id == account_id).delete(synchronize_session=False)
-    session.delete(a)
-    session.commit()
-    return {"ok": True, "deleted": True, "account_id": account_id}
+    return {"ok": True}
 
 @router.post("/register")
 async def register(body: RegisterRequest, session=Depends(core.db)):
@@ -505,26 +333,6 @@ async def register(body: RegisterRequest, session=Depends(core.db)):
     )
     session.add(a)
     session.flush()
-    if body.markets:
-        now_iso = _utc().isoformat()
-        core.MT5_BRIDGE_STATE.setdefault("markets", {})
-        for raw_key, raw_market in body.markets.items():
-            if not isinstance(raw_market, dict):
-                continue
-            canonical = _canonical(str(raw_key))
-            if not canonical:
-                continue
-            core.MT5_BRIDGE_STATE["markets"][canonical] = {
-                "connected": True,
-                "account": body.login or None,
-                "server": body.server or None,
-                "last_seen": now_iso,
-                "symbol": canonical,
-                "session_open": raw_market.get("session_open"),
-                "session_source": raw_market.get("session_source") or "MT5_SYMBOL_TRADE_SESSION",
-                "server_time": raw_market.get("server_time") or "",
-            }
-        core.MT5_BRIDGE_STATE.update({"connected": True, "account": body.login or None, "server": body.server or None, "login": body.login or None, "last_seen": now_iso})
     for s in body.symbols:
         canonical = _canonical(str(s.get("canonical_symbol") or s.get("symbol") or ""))
         broker_symbol = str(s.get("broker_symbol") or s.get("symbol") or "")
@@ -580,99 +388,25 @@ async def state(body: MTState, authorization: str | None = Header(default=None),
 async def poll(authorization: str | None = Header(default=None), session=Depends(core.db)):
     token = authorization.split(" ", 1)[1].strip() if authorization and authorization.lower().startswith("bearer ") else authorization
     a = _auth_account(token, session)
+    if not a.auto_trade_enabled or not a.trade_allowed:
+        return {"orders": [], "reason": "autotrade_disabled_or_trading_not_allowed"}
     _sync_core_queue(session)
     now = _utc()
-
-    # Cancellation commands are delivered separately from new orders. This is
-    # critical for pending BUY/SELL STOP/LIMIT orders that may already exist in MT5.
-    cancel_rows = list(session.scalars(select(MTOrder).where(
-        MTOrder.account_id == a.id,
-        MTOrder.status.like("CANCELLED_%"),
-        MTOrder.cancel_sent == False,
-    ).order_by(MTOrder.id.asc()).limit(20)))
-    cancel_out = []
-    for row in cancel_rows:
-        cancel_out.append({
-            "order_id": row.id,
-            "order_type": row.order_type,
-            "signal_id": row.signal_id or "",
-            "reason": row.status,
-            "broker_ticket": row.broker_ticket or "",
-        })
-        row.cancel_sent = True
-        row.claim_until = now + timedelta(seconds=30)
-
-    market_gate = core.market_gate_status("XAU/USD")
-    if not market_gate.get("open"):
-        pending = list(session.scalars(select(MTOrder).where(
-            MTOrder.account_id == a.id,
-            MTOrder.status == "PENDING"
-        )))
-        for row in pending:
-            row.status = "CANCELLED_MARKET_CLOSED"
-            row.claim_until = None
-            row.cancel_sent = False
-        if pending or cancel_out:
-            session.commit()
-        return {"orders": [], "cancel_orders": cancel_out,
-                "reason": market_gate.get("reason"), "market_gate": market_gate}
-
-    if not bool(core.MT5_AUTO_TRADING) or not a.auto_trade_enabled or not a.trade_allowed:
-        if cancel_out:
-            session.commit()
-        return {"orders": [], "cancel_orders": cancel_out,
-                "reason": "autotrade_disabled_or_trading_not_allowed"}
-
-    rows = list(session.scalars(select(MTOrder).where(
-        MTOrder.account_id == a.id,
-        MTOrder.status == "PENDING"
-    ).order_by(MTOrder.id.asc()).limit(10)))
+    rows = list(session.scalars(select(MTOrder).where(MTOrder.account_id == a.id, MTOrder.status == "PENDING").order_by(MTOrder.id.asc()).limit(10)))
     out = []
     for row in rows:
-        if str(row.source or "") not in {"ICT Signals", "Fibonacci", "SNR Analysis", "Order Block Analysis", "Trendline Analysis", "Texnik Analysis", "Classik Analysis"}:
-            row.status = "CANCELLED_RETIRED_MODULE"
-            row.cancel_sent = False
-            continue
-        if row.expires_at and _as_utc(row.expires_at) <= now:
-            row.status = "CANCELLED_SETUP_EXPIRED"
-            row.cancel_sent = False
-            continue
         if row.claim_until and (_as_utc(row.claim_until) or now) > now:
             continue
         row.claim_until = now + timedelta(seconds=CLAIM_SECONDS)
         out.append({
-            "order_id": row.id,
-            "canonical_symbol": row.canonical_symbol,
-            "execution_symbol": row.execution_symbol,
-            "direction": row.direction,
-            "order_type": row.order_type or "MARKET",
-            "volume": row.volume,
-            "entry": row.entry,
-            "stop_loss": row.stop_loss,
-            "take_profit": row.take_profit,
-            "source": row.source,
-            "signal_id": row.signal_id,
+            "order_id": row.id, "canonical_symbol": row.canonical_symbol,
+            "execution_symbol": row.execution_symbol, "direction": row.direction,
+            "volume": row.volume, "entry": row.entry, "stop_loss": row.stop_loss,
+            "take_profit": row.take_profit, "source": row.source, "signal_id": row.signal_id,
             "candle_time": row.candle_time,
-            "expires_at": row.expires_at.isoformat() if row.expires_at else "",
-            "expiry_epoch": int(_as_utc(row.expires_at).timestamp()) if row.expires_at else 0,
         })
-    # If an order expired in this pass, expose its cancellation immediately.
-    expired = list(session.scalars(select(MTOrder).where(
-        MTOrder.account_id == a.id,
-        MTOrder.status == "CANCELLED_SETUP_EXPIRED",
-        MTOrder.cancel_sent == False,
-    ).limit(20)))
-    for row in expired:
-        cancel_out.append({
-            "order_id": row.id, "order_type": row.order_type,
-            "signal_id": row.signal_id or "", "reason": row.status,
-            "broker_ticket": row.broker_ticket or "",
-        })
-        row.cancel_sent = True
-        row.claim_until = now + timedelta(seconds=30)
-
     session.commit()
-    return {"orders": out, "cancel_orders": cancel_out, "account_id": a.id}
+    return {"orders": out, "account_id": a.id}
 
 @router.post("/report")
 async def report(body: ReportRequest, authorization: str | None = Header(default=None), session=Depends(core.db)):
@@ -680,11 +414,8 @@ async def report(body: ReportRequest, authorization: str | None = Header(default
     a = _auth_account(token, session)
     row = session.scalar(select(MTOrder).where(MTOrder.id == body.order_id, MTOrder.account_id == a.id))
     if not row: raise HTTPException(404, "Order not found")
-    allowed = {"SENT", "FILLED", "REJECTED", "FAILED", "CANCELLED", "PENDING_PLACED"}
-    normalized = body.status.upper()
-    row.status = normalized if normalized in allowed else "FAILED"
-    if normalized == "CANCELLED":
-        row.claim_until = None
+    allowed = {"SENT", "FILLED", "REJECTED", "FAILED", "CANCELLED"}
+    row.status = body.status.upper() if body.status.upper() in allowed else "FAILED"
     row.broker_ticket = body.broker_ticket[:100]
     row.broker_retcode = body.broker_retcode[:100]
     row.broker_message = body.broker_message[:2000]

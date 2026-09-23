@@ -2680,68 +2680,6 @@ def merge_ai_validation(deterministic: dict[str, Any], ai: dict[str, Any]) -> di
     return out
 
 
-def _smart_module_gate(item: dict[str, Any], ai: dict[str, Any], candles: list[dict[str, Any]], direction: str) -> dict[str, Any]:
-    """Cross-module AI + market-structure quality gate for AutoTrade.
-
-    The gate is intentionally independent of RR and TP2. It protects execution by
-    requiring directional AI agreement, reasonable AI confidence/agreement, and no
-    obvious regime/structure conflict. If the AI provider is unavailable, the
-    deterministic engine remains usable but still has to pass the execution risk gate.
-    """
-    direction = str(direction or "WAIT").upper()
-    ai_signal = str(ai.get("signal") or "WAIT").upper()
-    ai_conf = int(ai.get("confidence") or 0)
-    ai_agree = int(ai.get("agreement") or 0)
-    mode = str(ai.get("mode") or "fallback")
-    deterministic_conf = int(item.get("confidence") or item.get("strategy_quality") or item.get("trend_power") or item.get("score") or 0)
-    reasons=[]
-    checks=[]
-
-    def add(name: str, ok: bool, reason: str):
-        checks.append({"name":name,"status":"PASS" if ok else "MISS"})
-        if ok: reasons.append(reason)
-
-    if direction not in {"BUY","SELL"}:
-        return {"ok":False,"state":"WAIT","score":0,"checks":checks,"reason":"NO_DIRECTION"}
-
-    # Deterministic regime/structure check. This is separate from RR.
-    regime = item.get("market_regime") if isinstance(item.get("market_regime"), dict) else _adaptive_regime(candles)
-    regime_name = str((regime or {}).get("regime") or "RANGE")
-    regime_conflict = (direction=="BUY" and regime_name=="TRENDING_DOWN") or (direction=="SELL" and regime_name=="TRENDING_UP")
-    add("Market Regime", not regime_conflict, f"regime={regime_name}")
-
-    try:
-        structure=_structure_state(candles)
-    except Exception:
-        structure={}
-    struct_dir = "BUY" if structure.get("bos")=="BULLISH" or structure.get("choch")=="BULLISH" else "SELL" if structure.get("bos")=="BEARISH" or structure.get("choch")=="BEARISH" else "WAIT"
-    strong_opposite = (direction=="BUY" and structure.get("prior_structure")=="BEARISH" and struct_dir!="BUY") or (direction=="SELL" and structure.get("prior_structure")=="BULLISH" and struct_dir!="SELL")
-    add("Structure", not strong_opposite, f"structure={structure.get('prior_structure','MIXED')}/{struct_dir}")
-
-    # Real AI providers are a hard validation layer; deterministic fallback is not
-    # falsely presented as live AI. In fallback mode, deterministic quality remains the gate.
-    live_ai = mode not in {"fallback","rule_based"}
-    if live_ai:
-        ai_ok = ai_signal == direction and ai_conf >= 65 and ai_agree >= 55
-        add("AI Direction", ai_signal==direction, f"AI={ai_signal}")
-        add("AI Confidence", ai_conf>=65, f"AI confidence={ai_conf}%")
-        add("AI Agreement", ai_agree>=55, f"AI agreement={ai_agree}%")
-    else:
-        ai_ok = True
-        add("AI Availability", True, f"AI mode={mode}; deterministic fallback retained")
-
-    det_ok = deterministic_conf >= 60
-    add("Deterministic Quality", det_ok, f"deterministic quality={deterministic_conf}")
-    ok = (not regime_conflict) and (not strong_opposite) and ai_ok and det_ok
-    # A provider-unavailable fallback is allowed only because the independent
-    # execution gate below still enforces geometry, valid TP1 and maximum SL risk.
-    score = round((deterministic_conf*0.45) + (ai_conf*0.35 if live_ai else deterministic_conf*0.20) + (ai_agree*0.20 if live_ai else 20))
-    return {"ok":ok,"state":"READY" if ok else "AI_VALIDATION_FAILED","score":max(0,min(100,score)),
-            "ai_live":live_ai,"ai_signal":ai_signal,"ai_confidence":ai_conf,"ai_agreement":ai_agree,
-            "deterministic_quality":deterministic_conf,"market_regime":regime,"structure":structure,
-            "checks":checks,"reason":"; ".join(reasons) if ok else "AI/market quality validation failed"}
-
-
 async def _module_ai_advisory(source: str, symbol: str, interval: str, candle_time: Any, module_result: dict[str, Any]) -> dict[str, Any]:
     """Shared AI advisory for individual dashboard modules.
     It assists analysis but never acts as an AutoTrade quality gate.
@@ -3776,7 +3714,7 @@ async def get_snr(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> dict[
         candle_time=candles[-2].get("time") if len(candles)>1 else candles[-1].get("time")
         snr=_snr_zone_analysis(candles)
         regime=_adaptive_regime(candles)
-        ai_advisory = await _module_ai_advisory("SNR", symbol, interval, candle_time, snr)
+        ai_advisory = await _module_ai_advisory("SNR", symbol, interval, candle_time, {**snr, "signal": "WAIT"})
         snr["ai_validation"] = ai_advisory
         snr["strategy_engine"]="Adaptive Institutional SNR"
         snr["market_regime"]=regime
@@ -3828,7 +3766,7 @@ async def get_analysis(symbol: str, interval: str = Query(DEFAULT_INTERVAL)) -> 
         setup = build_key_level_signal(candles_data, levels, news_blocked=False)
         technical = technical_analysis(candles_data, levels, setup)
         candle_time=candles_data[-2].get("time") if len(candles_data)>1 else candles_data[-1].get("time")
-        technical["ai_validation"] = await _module_ai_advisory("Technical Analysis", symbol, interval, candle_time, technical)
+        technical["ai_validation"] = None
         return {
             "ok": True, "symbol": symbol, "interval": interval, "mode": "tradingview",
             "provider": "TradingView", "source": tv_symbol_for(symbol),
@@ -3878,7 +3816,8 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 5
     never treated as a new signal.
     """
     rows = list(session.scalars(select(SignalHistory).where(
-        SignalHistory.user_id == user_id
+        SignalHistory.user_id == user_id,
+        SignalHistory.status.in_(["ACTIVE", "TP1 HIT", "OPEN"])
     ).order_by(SignalHistory.created_at.desc(), SignalHistory.id.desc()).limit(limit)).all())
 
     def parse_dt(value: Any) -> datetime | None:
@@ -3932,13 +3871,7 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 5
                     "message": "Entry/SL/TP levels are inconsistent with signal direction."
                 }
                 row.payload = json.dumps(payload, ensure_ascii=False)
-                row.profit_loss = None
-                row.r_multiple = None
                 changed = True
-                continue
-
-            # Terminal valid rows must never be re-resolved.
-            if str(row.status or "").upper() in {"TP2 HIT", "SL HIT", "CANCELLED", "EXPIRED"} or str(row.outcome or "").upper() in {"TP2 HIT", "TP HIT", "SL HIT", "CANCELLED", "EXPIRED"}:
                 continue
 
             try:
@@ -4260,7 +4193,7 @@ async def get_ict_signals(symbol: str) -> dict[str, Any]:
         c5,mode5,w5=await get_candles(symbol,"5min",260)
         result=build_ict_m30_m5(c30,c5)
         candle_time=c5[-2].get("time") if len(c5)>1 else c5[-1].get("time")
-        result["ai_validation"] = await _module_ai_advisory("ICT Signals", symbol, "30min", candle_time, result)
+        result["ai_validation"] = None
         result["candle_time"]=candle_time
         return {"ok":True,"symbol":symbol,"mode":"live","source":"TradingView/OANDA canonical candle series",
                 "m30_candles":len(c30),"m5_candles":len(c5),"warnings":[x for x in (w30,w5) if x],
@@ -4285,81 +4218,8 @@ async def advanced_signals(symbol: str, authorization: str | None = Header(defau
     return result
 
 
-def _target_candidates_from_item(item: dict[str, Any], direction: str) -> list[float]:
-    """Collect structural targets supplied by a module, in directional order."""
-    vals: list[float] = []
-    def add(v: Any):
-        try:
-            if v is not None:
-                vals.append(float(v))
-        except (TypeError, ValueError):
-            pass
-    def walk(v: Any):
-        if isinstance(v, dict):
-            for key, value in v.items():
-                k=str(key).lower()
-                if any(x in k for x in ("resistance", "support", "target", "take_profit", "tp", "extension", "r1", "r2", "r3", "s1", "s2", "s3")):
-                    if isinstance(value, (list, tuple)):
-                        for x in value: walk(x)
-                    elif isinstance(value, dict):
-                        walk(value)
-                    else: add(value)
-                elif isinstance(value, (dict, list, tuple)):
-                    walk(value)
-        elif isinstance(v, (list, tuple)):
-            for x in v: walk(x)
-    walk(item)
-    # De-duplicate while preserving numeric order later.
-    out=[]; seen=set()
-    for v in vals:
-        key=round(v,4)
-        if key not in seen:
-            seen.add(key); out.append(v)
-    return out
-
-
-def _structural_target_ladder(item: dict[str, Any], candles: list[dict[str, Any]], direction: str, entry: float, atr_now: float) -> list[float]:
-    """Find the next real structural targets; never invent a target from risk math."""
-    candidates=_target_candidates_from_item(item,direction)
-    # Always include the live pivot ladder so a stale/invalid R1/S1 is skipped in
-    # favour of the next valid resistance/support (R2/R3 or S2/S3).
-    try:
-        ref=candles[-2] if len(candles)>1 else candles[-1]
-        levels=calculate_pivot_levels(float(ref["high"]),float(ref["low"]),float(ref["close"]),entry)
-        candidates.extend([levels.get("r1"), levels.get("r2"), levels.get("r3")] if direction=="BUY" else [levels.get("s1"), levels.get("s2"), levels.get("s3")])
-    except Exception:
-        pass
-    if direction=="BUY":
-        candidates=[v for v in candidates if v is not None and v>entry]
-    else:
-        candidates=[v for v in candidates if v is not None and v<entry]
-    # Add recent confirmed swing levels as fallback resistance/support.
-    try:
-        lookback=candles[-80:-1] if len(candles)>2 else candles
-        highs=sorted({round(float(c["high"]),4) for c in lookback if float(c["high"])>entry}, reverse=False)
-        lows=sorted({round(float(c["low"]),4) for c in lookback if float(c["low"])<entry}, reverse=True)
-        candidates.extend(highs if direction=="BUY" else lows)
-    except Exception:
-        pass
-    # Filter out levels too close to entry to avoid treating noise as a target.
-    min_gap=max(atr_now*0.20, abs(entry)*0.00025)
-    candidates=[v for v in candidates if abs(v-entry)>=min_gap]
-    if direction=="BUY":
-        candidates=sorted(set(round(v,4) for v in candidates))
-    else:
-        candidates=sorted(set(round(v,4) for v in candidates), reverse=True)
-    return candidates[:2]
-
-
 def _normalize_auto_trade_levels(item: dict[str, Any], candles: list[dict[str, Any]], direction: str, interval: str | None = None) -> tuple[float, float, list[float], bool]:
-    """Prepare execution levels after geometry has passed.
-
-    IMPORTANT: this function does not repair a wrong-side Entry/SL. Geometry is a
-    hard gate and is checked by _execution_gate before this function is called.
-    A missing SL may still be derived from recent structure; an existing invalid SL
-    is never silently moved to make a bad signal tradable. Invalid/missing targets are
-    handled separately by searching the next structural resistance/support.
-    """
+    """Validate/repair Entry/SL/TP against the current live TradingView chart."""
     if not candles:
         raise MarketDataError("No live candles available for auto-trade levels")
     current=float(candles[-1]["close"])
@@ -4368,94 +4228,32 @@ def _normalize_auto_trade_levels(item: dict[str, Any], candles: list[dict[str, A
     try: entry=float(item.get("entry")) if item.get("entry") is not None else current
     except Exception: entry=current
     repaired=False
+    if str(interval or "").lower() == "5min":
+        # Preserve the Strategic Pro structural levels unless they are invalid on the live candle.
+        try:
+            s_sl=float(item.get("stop_loss")) if item.get("stop_loss") is not None else None
+            s_tp=[float(v) for v in (item.get("take_profit") or []) if v is not None]
+            if entry>0 and s_sl is not None and s_tp and ((direction=="BUY" and s_sl<entry and all(v>entry for v in s_tp)) or (direction=="SELL" and s_sl>entry and all(v<entry for v in s_tp))):
+                return round(entry,4),round(s_sl,4),[round(v,4) for v in s_tp[:2]],False
+        except Exception:
+            pass
     if entry<=0 or abs(entry-current)>max(atr_now*2.5,current*0.0025):
         entry=current; repaired=True
     try: sl=float(item.get("stop_loss")) if item.get("stop_loss") is not None else None
     except Exception: sl=None
-    if sl is None:
-        if direction=="BUY":
-            lows=[float(c["low"]) for c in candles[-5:]]
-            buf=max(atr_now*1.15,entry*0.0005)
-            sl=min(lows)-buf
-        else:
-            highs=[float(c["high"]) for c in candles[-5:]]
-            buf=max(atr_now*1.15,entry*0.0005)
-            sl=max(highs)+buf
-        repaired=True
-
-    try: original_tps=[float(v) for v in (item.get("take_profit") or []) if v is not None]
-    except Exception: original_tps=[]
+    try: tps=[float(v) for v in (item.get("take_profit") or []) if v is not None]
+    except Exception: tps=[]
+    lows=[float(c["low"]) for c in candles[-5:]]; highs=[float(c["high"]) for c in candles[-5:]]
+    buf=max(atr_now*1.15,entry*0.0005)
     if direction=="BUY":
-        valid_original=sorted({round(v,4) for v in original_tps if v>entry})
+        if sl is None or not (0<sl<entry): sl=min(lows)-buf; repaired=True
+        risk=max(entry-sl,buf)
+        if not tps or not all(v>entry for v in tps): tps=[entry+risk*1.5,entry+risk*2.5]; repaired=True
     else:
-        valid_original=sorted({round(v,4) for v in original_tps if v<entry}, reverse=True)
-    if valid_original:
-        return round(entry,4),round(sl,4),valid_original[:2],repaired
-
-    # Invalid/missing TP: skip R1/S1 when it is on the wrong side and search the
-    # next valid structural resistance/support (R2/R3, S2/S3, Fib, swings).
-    structural=_structural_target_ladder(item,candles,direction,entry,atr_now)
-    return round(entry,4),round(sl,4),structural,repaired
-
-
-def _execution_gate(item: dict[str, Any], direction: str, candles: list[dict[str, Any]]) -> dict[str, Any]:
-    """Hard execution gate: Geometry -> Target -> Risk.
-
-    Returns a machine-readable decision. No failed gate is allowed into MT5.
-    """
-    direction=str(direction or "WAIT").upper()
-    if direction not in {"BUY","SELL"}:
-        return {"ok":False,"state":"WAIT","reason":"NO_DIRECTION"}
-    if not candles:
-        return {"ok":False,"state":"CANCELLED","reason":"NO_LIVE_CANDLES"}
-
-    # Geometry is checked against the module's original values BEFORE any repair.
-    try: entry=float(item.get("entry")) if item.get("entry") is not None else None
-    except Exception: entry=None
-    try: sl=float(item.get("stop_loss")) if item.get("stop_loss") is not None else None
-    except Exception: sl=None
-    try: raw_tps=[float(v) for v in (item.get("take_profit") or []) if v is not None]
-    except Exception: raw_tps=[]
-
-    if entry is not None and sl is not None:
-        geometry_ok=(sl < entry) if direction=="BUY" else (sl > entry)
-        if not geometry_ok:
-            return {"ok":False,"state":"CANCELLED","reason":"INVALID_LEVEL_GEOMETRY",
-                    "entry":entry,"sl":sl,"tp":raw_tps,"r_multiple":None}
-    if any(v<=0 for v in ([entry] if entry is not None else [])+[sl] if v is not None):
-        return {"ok":False,"state":"CANCELLED","reason":"INVALID_LEVEL_GEOMETRY","r_multiple":None}
-    if entry is not None:
-        bad_tp=any((v<=entry if direction=="BUY" else v>=entry) for v in raw_tps)
-        # Wrong-side TP is not itself a cancellation: Target Check will search the
-        # next valid structural level.
-    else:
-        bad_tp=False
-
-    # Normalize levels only after geometry has passed.
-    entry2, sl2, tp, repaired = _normalize_auto_trade_levels(item,candles,direction)
-    if not tp:
-        return {"ok":False,"state":"TARGET_REACHED","reason":"TARGET_REACHED",
-                "entry":entry2,"sl":sl2,"tp":[],"repaired":repaired,"r_multiple":None}
-
-    # Risk gate uses the exact SL/TP that will be sent to MT5.
-    avg_range=sum(abs(float(c["high"])-float(c["low"])) for c in candles[-20:])/max(1,min(20,len(candles)))
-    atr_now=max(avg_range,entry2*0.00015)
-    risk=abs(entry2-sl2)
-    max_risk=max(atr_now*2.5,entry2*0.0015)
-    if risk<=0 or risk>max_risk:
-        return {"ok":False,"state":"CANCELLED","reason":"RISK_CHECK_FAILED",
-                "entry":entry2,"sl":sl2,"tp":tp,"repaired":repaired,"r_multiple":None,
-                "risk":risk,"max_risk":max_risk}
-    if direction=="BUY":
-        rr=(tp[0]-entry2)/risk
-    else:
-        rr=(entry2-tp[0])/risk
-    # RR is informational only. It must NEVER block AutoTrade.
-    # Risk protection is independent of RR: geometry, valid TP side, and adaptive
-    # maximum SL distance are the hard execution constraints.
-    return {"ok":True,"state":"READY","reason":"ALL_GATES_PASSED",
-            "entry":entry2,"sl":sl2,"tp":tp,"repaired":repaired,"r_multiple":rr,
-            "risk":risk,"max_risk":max_risk}
+        if sl is None or not sl>entry: sl=max(highs)+buf; repaired=True
+        risk=max(sl-entry,buf)
+        if not tps or not all(v<entry for v in tps): tps=[entry-risk*1.5,entry-risk*2.5]; repaired=True
+    return round(entry,4),round(sl,4),[round(v,4) for v in tps[:2]],repaired
 
 
 
@@ -4580,8 +4378,8 @@ def _m5_strategic_pro(c5: list[dict[str, Any]], c15: list[dict[str, Any]],
         tp2=entry-risk*2.5
         if target and target<tp1: tp2=min(tp2,target)
         rr=(entry-tp1)/risk
-    add("Risk/Reward (info)",0,True,f"RR {rr:.2f} (informational)")
-    confirmed=score>=85
+    add("RR >= 1.5",5,rr>=1.5,f"RR {rr:.2f}")
+    confirmed=score>=85 and rr>=1.5
     return {
         "signal":direction if confirmed else "WAIT","score":score,"confidence":min(99,score),"confirmed":confirmed,
         "entry":round(entry,4),"stop_loss":round(sl,4),"take_profit":[round(tp1,4),round(tp2,4)],"risk_reward":round(rr,2),
@@ -4708,8 +4506,12 @@ def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[di
     else:
         add("News Guard",8,True,"news clear / higher-TF context")
     confirmed=(direction in {"BUY","SELL"} and score>=profile["min_score"] and confirms>=profile["min_confirmations"] and not (news_blocked and interval in {"5min","15min","30min"}))
-    # Structural risk + informational RR.
-    # RR is reported for analytics only and is NOT an AutoTrade eligibility gate.
+    # Structural risk + EXECUTION RR.
+    # The previous implementation measured RR against the nearest structural target
+    # and rejected the setup before building the actual 1.5R/2.5R execution ladder.
+    # That made valid high-confluence setups impossible to queue whenever the nearest
+    # liquidity target was closer than 1.5R. Build the real execution targets first,
+    # then validate RR against the target that MT5 will actually receive.
     if direction=="BUY":
         sl=min(rl,float(c2["low"]),float(last["low"]))-a*0.18; risk=price-sl
         target=rh
@@ -4726,10 +4528,10 @@ def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[di
         rr=(price-t1)/max(risk,1e-9)
     else:
         t1=t2=price; rr=0
+    rr_ok=rr>=1.5
     add("Structural Risk",5,risk_ok,f"risk={risk/a:.2f} ATR")
-    # RR is informational only; it does not decide whether a valid signal is tradable.
-    add("Risk/Reward (info)",0,True,f"execution RR={rr:.2f} (informational)")
-    confirmed=confirmed and risk_ok
+    add("RR >= 1.5",8,rr_ok,f"execution RR={rr:.2f}")
+    confirmed=confirmed and risk_ok and rr_ok
     direction_out=direction if confirmed else "WAIT"
     return {"signal":direction_out,"score":score,"confidence":min(99,score),"confirmed":confirmed,
             "entry":round(price,4),"stop_loss":round(sl,4),"take_profit":[round(t1,4),round(t2,4)],"risk_reward":round(rr,2),
@@ -4824,7 +4626,6 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     excluded = {"book + openai", "book/openai", "book-openai", "book openai"}
     created_history = []
     queued = []
-    module_signal_count = 0
     seen_queue_keys = set()
 
     async def load_symbol_candidates(key: str) -> tuple[list[dict[str, Any]], dict[str, tuple[list[dict[str, Any]], str, str | None]]]:
@@ -5010,17 +4811,16 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         }
 
     async def process_symbol(key: str):
-        nonlocal created_history, queued, module_signal_count
+        nonlocal created_history, queued
         candidates, live_by_tf = await load_symbol_candidates(key)
         print(f"[SIGNAL FLOW] candidates={len(candidates)} market={key}")
 
-        # Persist AND queue every confirmed module signal independently.
-        # M1 remains excluded; Book + OpenAI is excluded by the common queue guard.
-        # Each module gets its own History row and its own AutoTrade queue key.
-        # This intentionally does NOT collapse module signals into a single consensus order.
+        # Persist valid module-level BUY/SELL signals independently of the stricter
+        # execution gate. This guarantees Signal History remains populated even when
+        # the final AutoTrade consensus is WAIT/BLOCKED.
         for c in candidates:
-            tf = str(c.get("interval") or "").strip().lower()
-            item = dict(c.get("item") or {})
+            tf = str(c.get("interval") or "")
+            item = c.get("item") or {}
             direction = str(item.get("signal") or item.get("direction") or "WAIT").upper()
             if tf not in {"5min", "15min", "30min", "1h", "4h", "1day"} or direction not in {"BUY", "SELL"}:
                 continue
@@ -5028,162 +4828,186 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             if len(candles) < 40:
                 continue
             candle_time = _normalize_history_candle_time(candles[-1].get("time"))
+            entry = item.get("entry")
+            sl = item.get("stop_loss")
+            tp = item.get("take_profit") or []
+            if entry is None or sl is None or not tp:
+                continue
             source = _normalize_history_source(c.get("source") or "Signals")
-            original_direction = direction
-            original_item = dict(item)
-
-            # Every AutoTrade-capable module now gets its own AI validation on the
-            # same live candle. AI is used as a quality layer, while History keeps
-            # the original module signal even when AI rejects AutoTrade.
-            try:
-                ai = await ai_validate_module_signal(source, key, tf, candle_time, original_item)
-            except Exception as exc:
-                ai = {"mode":"fallback","signal":original_direction,"confidence":0,"agreement":0,
-                      "risk_flags":["AI validation exception"],"reasoning":str(exc)[:240]}
-            smart = _smart_module_gate(original_item, ai, candles, original_direction)
-            item["ai_validation"] = ai
-            item["ai_assisted"] = True
-            item["ai_layer"] = f"Per-module AI Validation ({source})"
-            item["smart_validation"] = smart
-
-            # Hard pipeline: Signal -> AI/Market Quality -> Geometry -> Target -> Risk -> AutoTrade.
-            # AI/market quality failure is History-only; it never deletes the module signal.
-            if not smart.get("ok"):
-                item.update({"signal":original_direction,"auto_trade_eligible":False,
-                             "execution_state":"AI_VALIDATION_FAILED",
-                             "execution_reason":smart.get("reason") or "AI_VALIDATION_FAILED",
-                             "live_levels_verified":False})
-                payload = {"source":source,"module_signal":item,"symbol":key,"interval":tf,
-                           "candle_time":candle_time,"live_generated":True,
-                           "execution_gate":{"state":"AI_VALIDATION_FAILED","reason":smart.get("reason"),
-                                             "ai_checked":True,"geometry_checked":False,"target_checked":False,
-                                             "risk_checked":False,"auto_trade":False}}
-                recent = session.scalars(select(SignalHistory).where(
-                    SignalHistory.user_id == user.id, SignalHistory.symbol == key,
-                    SignalHistory.interval == tf, SignalHistory.candle_time == candle_time,
-                    SignalHistory.source == source,
-                ).order_by(SignalHistory.id.desc())).first()
-                if recent is None:
-                    history_row = SignalHistory(user_id=user.id,symbol=key,interval=tf,direction=original_direction,
-                        headline=f"{source} · {original_direction} · AI {int(ai.get('confidence') or 0)}% · AI VALIDATION",price=float(item.get("entry") or 0),
-                        payload=json.dumps(payload,ensure_ascii=False,default=str),outcome="CANCELLED",status="CANCELLED",
-                        created_at=now,source=source,candle_time=candle_time)
-                    session.add(history_row)
-                    created_history.append({"source":source,"symbol":key,"interval":tf,"direction":original_direction,
-                                            "confidence":float(item.get("confidence") or item.get("trend_power") or 0),
-                                            "module_history":True,"auto_trade_eligible":False,
-                                            "execution_state":"AI_VALIDATION_FAILED","reason":smart.get("reason")})
-                continue
-
-            # Preserve the module direction; merge only the AI metadata. Since the
-            # Smart Gate already required agreement, merge_ai_validation cannot turn
-            # a valid candidate into a tradable opposite-side signal.
-            item = merge_ai_validation(original_item, ai)
-            item["ai_validation"] = ai
-            item["ai_assisted"] = True
-            item["ai_layer"] = f"Per-module AI Validation ({source})"
-            item["smart_validation"] = smart
-            direction = original_direction
-
-            # Geometry is checked against the ORIGINAL module values before normalization.
-            gate = _execution_gate(item, direction, candles)
-            entry = gate.get("entry")
-            sl = gate.get("sl")
-            tp = list(gate.get("tp") or [])
-            repaired = bool(gate.get("repaired"))
-            conf = float(item.get("confidence") or item.get("trend_power") or 0)
-
-            if gate.get("state") == "CANCELLED":
-                reason = str(gate.get("reason") or "EXECUTION_GATE_FAILED")
-                item.update({
-                    "signal": direction, "entry": entry, "stop_loss": sl, "take_profit": tp,
-                    "auto_trade_eligible": False, "execution_state": "CANCELLED",
-                    "execution_reason": reason, "risk_reward": None,
-                    "live_levels_verified": True,
-                })
-                payload = {"source":source,"module_signal":item,"symbol":key,"interval":tf,
-                           "candle_time":candle_time,"live_generated":True,
-                           "execution_gate":{"state":"CANCELLED","reason":reason,"geometry_checked":True,
-                                             "target_checked":True,"risk_checked":True,"auto_trade":False}}
-                recent = session.scalars(select(SignalHistory).where(
-                    SignalHistory.user_id == user.id, SignalHistory.symbol == key,
-                    SignalHistory.interval == tf, SignalHistory.candle_time == candle_time,
-                    SignalHistory.source == source,
-                ).order_by(SignalHistory.id.desc())).first()
-                if recent is None:
-                    history_row = SignalHistory(user_id=user.id,symbol=key,interval=tf,direction=direction,
-                        headline=f"{source} · {direction} · {conf:.1f}% · {reason}",price=float(entry or 0),
-                        payload=json.dumps(payload,ensure_ascii=False,default=str),outcome="CANCELLED",status="CANCELLED",
-                        created_at=now,source=source,candle_time=candle_time)
-                    session.add(history_row)
-                    created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction,
-                                            "confidence":conf,"module_history":True,"auto_trade_eligible":False,
-                                            "execution_state":"CANCELLED","reason":reason})
-                continue
-
-            target_reached = gate.get("state") == "TARGET_REACHED"
-            if target_reached:
-                item.update({"signal":"WAIT","original_signal":direction,"setup":"TARGET_REACHED",
-                             "entry":entry,"stop_loss":sl,"take_profit":[],"target_state":"TARGET_REACHED",
-                             "auto_trade_eligible":False,"execution_state":"TARGET_REACHED",
-                             "risk_reward":None,"live_levels_verified":True,"levels_repaired_from_live_chart":repaired})
-                direction_history = "WAIT"
-            else:
-                item.update({"entry":entry,"stop_loss":sl,"take_profit":tp,"live_levels_verified":True,
-                             "levels_repaired_from_live_chart":repaired,"auto_trade_eligible":True,
-                             "execution_state":"READY","execution_reason":"ALL_GATES_PASSED",
-                             "risk_reward":gate.get("r_multiple")})
-                direction_history = direction
-
-            payload = {"source":source,"module_signal":item,"symbol":key,"interval":tf,"candle_time":candle_time,
-                       "live_generated":True,"execution_gate":{
-                           "state":gate.get("state"),"reason":gate.get("reason"),"geometry_checked":True,
-                           "target_checked":True,"risk_checked":not target_reached,"auto_trade":bool(gate.get("ok")),
-                           "risk_reward":gate.get("r_multiple"),"risk":gate.get("risk"),"max_risk":gate.get("max_risk"),
-                           "levels_repaired":repaired},"auto_trade":{"queued":False}}
             recent = session.scalars(select(SignalHistory).where(
-                SignalHistory.user_id == user.id, SignalHistory.symbol == key,
-                SignalHistory.interval == tf, SignalHistory.candle_time == candle_time,
+                SignalHistory.user_id == user.id,
+                SignalHistory.symbol == key,
+                SignalHistory.interval == tf,
+                SignalHistory.candle_time == candle_time,
                 SignalHistory.source == source,
             ).order_by(SignalHistory.id.desc())).first()
-            history_row = None
+            conf = float(item.get("confidence") or item.get("trend_power") or 0)
+            payload = {"source": source, "module_signal": item, "symbol": key, "interval": tf, "candle_time": candle_time, "live_generated": True}
             if recent is None:
-                history_row = SignalHistory(
-                    user_id=user.id, symbol=key, interval=tf, direction=direction_history,
-                    headline=f"{source} · {direction_history} · {conf:.1f}%", price=float(entry or 0),
-                    payload=json.dumps(payload, ensure_ascii=False, default=str),
-                    outcome=("TARGET_REACHED" if target_reached else "OPEN"),
-                    status=("TARGET_REACHED" if target_reached else "ACTIVE"),
+                session.add(SignalHistory(
+                    user_id=user.id, symbol=key, interval=tf, direction=direction,
+                    headline=f"{source} · {direction} · {conf:.1f}%", price=float(entry),
+                    payload=json.dumps(payload, ensure_ascii=False, default=str), outcome="OPEN",
                     created_at=now, source=source, candle_time=candle_time
+                ))
+                created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction,"confidence":conf,"module_history":True})
+                print(f"[SIGNAL HISTORY] MODULE RECORDED source={source} market={key} tf={tf} dir={direction} candle={candle_time}")
+            elif str(recent.status or "ACTIVE").upper() in {"ACTIVE","TP1 HIT","OPEN"} and str(recent.outcome or "OPEN").upper() in {"OPEN","TP1 HIT"}:
+                recent.direction = direction; recent.price=float(entry); recent.headline=f"{source} · {direction} · {conf:.1f}%"; recent.payload=json.dumps(payload,ensure_ascii=False,default=str); _history_sync_row(recent,payload)
+
+        # Final AutoTrade decision: one consensus signal per timeframe and live candle.
+        # Reuse the exact live candle snapshots already used to build candidates.
+        # This prevents a second fetch from drifting to another candle and fixes the
+        # Strategic-Pro scope bug that previously left Signal History empty.
+        intervals = ["5min", "15min", "30min", "1h", "4h", "1day"]
+        for tf in intervals:
+            current_candles = live_by_tf.get(tf, ([], "error", None))[0]
+            if len(current_candles) < 40:
+                continue
+            candle_time = _normalize_history_candle_time(current_candles[-1].get("time"))
+            consensus = _build_consensus(candidates, tf, candle_time)
+
+            # Execution fallback: when ensemble consensus is unavailable, the dedicated
+            # timeframe Strategic Pro engine can still authorize AutoTrade only when it
+            # is fully confirmed AND at least one independent module agrees on direction.
+            # This prevents a dead queue caused by an over-strict ensemble while keeping
+            # a structural, RR-validated execution gate.
+            if not consensus:
+                try:
+                    strategic_probe = _strategic_pro_for_timeframe(tf, {k:v[0] for k,v in live_by_tf.items()}, news_blocked=False)
+                except Exception as exc:
+                    strategic_probe = {"signal":"WAIT","confirmed":False,"reason":f"probe_error={exc}"}
+                if strategic_probe.get("confirmed") and strategic_probe.get("signal") in {"BUY","SELL"}:
+                    strategic_dir = str(strategic_probe.get("signal"))
+                    agreeing = []
+                    for c in candidates:
+                        if str(c.get("interval")) != tf:
+                            continue
+                        item = c.get("item") or {}
+                        d = str(item.get("signal") or item.get("direction") or "WAIT").upper()
+                        if d == strategic_dir:
+                            agreeing.append(c)
+                    families = {({"signal lab":"Signal Engine","signals":"Signal Engine"}.get(str(c.get("source") or "").strip().lower(), str(c.get("source") or "").strip())) for c in agreeing}
+                    families.discard("")
+                    if agreeing and len(families) >= 1:
+                        best = max(agreeing, key=lambda c: float((c.get("item") or {}).get("confidence") or (c.get("item") or {}).get("trend_power") or 0))
+                        bi = best.get("item") or {}
+                        consensus = {
+                            "signal": strategic_dir,
+                            "confidence": float(strategic_probe.get("confidence") or 0),
+                            "entry": strategic_probe.get("entry"),
+                            "stop_loss": strategic_probe.get("stop_loss"),
+                            "take_profit": strategic_probe.get("take_profit") or [],
+                            "risk_reward": strategic_probe.get("risk_reward") or 0,
+                            "reason": f"Strategic Pro + {len(families)} independent module family confirmed {strategic_dir}.",
+                            "consensus_agreement": 100.0,
+                            "consensus_families": sorted(families),
+                            "consensus_source": str(best.get("source") or "Signal Module"),
+                            "consensus_source_confidence": float(bi.get("confidence") or bi.get("trend_power") or 0),
+                            "candle_time": candle_time,
+                            "strategy_engine": f"SignalX {tf} Strategic Pro Execution Fallback",
+                            "strategy_version": "TF-SP-FB1",
+                            "decision_state": "CONFIRMED",
+                            "strategy_chain": _strategy_chain(tf),
+                            "strategic_pro": strategic_probe,
+                            "execution_fallback": True,
+                        }
+                        print(f"[SIGNAL FLOW] EXECUTION FALLBACK tf={tf} dir={strategic_dir} strategic_score={strategic_probe.get('score',0)} families={sorted(families)}")
+                if not consensus:
+                    print(f"[SIGNAL FLOW] WAIT tf={tf} candle={candle_time} reason=no_consensus_no_strategic_fallback")
+                    continue
+            direction = consensus["signal"]
+
+            # Persist every confirmed consensus signal to Signal History BEFORE the
+            # stricter AutoTrade Strategic-Pro gate. This keeps the history useful even
+            # when a high-quality signal is intentionally rejected for execution.
+            confidence = float(consensus.get("confidence") or 0)
+            entry = consensus.get("entry")
+            sl = consensus.get("stop_loss")
+            tp = consensus.get("take_profit") or []
+            if entry is None or sl is None or len(tp) < 1:
+                print(f"[SIGNAL FLOW] HISTORY BLOCKED tf={tf} dir={direction} reason=missing_levels entry={entry} sl={sl} tp={tp}")
+                continue
+            source = _normalize_history_source(consensus.get("consensus_source") or "Consensus")
+            payload = {"type":"CONSENSUS","signal":direction,"confidence":confidence,"strategy_engine":consensus.get("strategy_engine"),"strategy_version":consensus.get("strategy_version"),"reason":consensus.get("reason"),"consensus":consensus,"live_generated":True}
+            headline=f"CONSENSUS {direction} · {tf.upper()} · {confidence:.1f}%"
+            # Do not duplicate the same consensus history row on the 15-second worker cycle.
+            history_recent = session.scalars(select(SignalHistory).where(
+                SignalHistory.user_id == user.id,
+                SignalHistory.symbol == key,
+                SignalHistory.interval == tf,
+                SignalHistory.candle_time == candle_time,
+                SignalHistory.source == source,
+            ).order_by(SignalHistory.id.desc())).first()
+            if history_recent is None:
+                history_row = SignalHistory(
+                    user_id=user.id, symbol=key, interval=tf, direction=direction,
+                    headline=headline, price=float(entry), payload=json.dumps(payload, ensure_ascii=False),
+                    outcome="OPEN", status="ACTIVE", created_at=now, source=source, candle_time=candle_time
                 )
                 session.add(history_row)
-                created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction_history,
-                                        "confidence":conf,"module_history":True,
-                                        "auto_trade_eligible":bool(gate.get("ok")),
-                                        "execution_state":gate.get("state"),"risk_reward":gate.get("r_multiple")})
-                print(f"[SIGNAL HISTORY] MODULE RECORDED source={source} market={key} tf={tf} dir={direction_history} state={gate.get('state')}")
-            elif str(recent.status or "ACTIVE").upper() in {"ACTIVE","TP1 HIT","OPEN"} and str(recent.outcome or "OPEN").upper() in {"OPEN","TP1 HIT"}:
-                recent.direction = direction_history
-                recent.price = float(entry or 0)
-                recent.headline = f"{source} · {direction_history} · {conf:.1f}%"
-                recent.payload = json.dumps(payload, ensure_ascii=False, default=str)
-                _history_sync_row(recent, payload)
+                created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction,"confidence":confidence,"agreement":consensus["consensus_agreement"],"history_recorded":True})
+                print(f"[SIGNAL HISTORY] RECORDED market={key} tf={tf} dir={direction} confidence={confidence:.1f} candle={candle_time}")
+            elif str(history_recent.status or "ACTIVE").upper() in {"ACTIVE","TP1 HIT","OPEN"} and str(history_recent.outcome or "OPEN").upper() in {"OPEN","TP1 HIT"}:
+                history_recent.direction=direction; history_recent.headline=headline; history_recent.price=float(entry); history_recent.payload=json.dumps(payload,ensure_ascii=False,default=str); _history_sync_row(history_recent,payload)
+                print(f"[SIGNAL HISTORY] LIVE UPDATE market={key} tf={tf} dir={direction} candle={candle_time} existing_id={history_recent.id}")
+            else:
+                print(f"[SIGNAL HISTORY] FINALIZED KEEP market={key} tf={tf} candle={candle_time} existing_id={history_recent.id}")
 
-            order = None
-            if direction in {"BUY", "SELL"} and tp:
-                order = _queue_autotrade_order(
-                    symbol=key, source=source, interval=tf, direction=direction,
-                    entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
-                    confidence=conf, candle_time=candle_time,
+            # Consensus is the primary execution gate. The former second Strategic Pro
+            # gate could reject a valid consensus a second time and leave MT5 with no order.
+            # Keep Strategic Pro as diagnostic metadata only.
+            if direction in {"BUY","SELL"}:
+                try:
+                    strategic=_strategic_pro_for_timeframe(tf, {k:v[0] for k,v in live_by_tf.items()}, news_blocked=False)
+                    consensus["strategic_pro"]=strategic
+                    if strategic.get("signal") != direction or not strategic.get("confirmed"):
+                        print(f"[TF STRATEGIC PRO] DIAGNOSTIC ONLY tf={tf} consensus={direction} strategic={strategic.get('signal')} confirmed={strategic.get('confirmed')} score={strategic.get('score',0)} confirms={sum(1 for c in strategic.get('checks',[]) if c.get('ok'))} rr={strategic.get('risk_reward',0)} reason={strategic.get('reason','')}")
+                except Exception as exc:
+                    print(f"[TF STRATEGIC PRO] DIAGNOSTIC ERROR tf={tf}: {exc}")
+            try:
+                entry, sl, tp, repaired = _normalize_auto_trade_levels(consensus, current_candles, direction, tf)
+            except Exception:
+                continue
+            consensus.update({
+                "entry": entry, "stop_loss": sl, "take_profit": tp,
+                "current_price": float(current_candles[-1]["close"]),
+                "live_levels_verified": True,
+                "levels_repaired_from_live_chart": bool(repaired),
+            })
+            source = "Consensus"
+            confidence = float(consensus.get("confidence") or 0)
+            recent = session.scalars(select(SignalHistory).where(
+                SignalHistory.user_id == user.id,
+                SignalHistory.source == source,
+                SignalHistory.symbol == key,
+                SignalHistory.interval == tf,
+                SignalHistory.candle_time == candle_time,
+            ).order_by(SignalHistory.id.desc())).first()
+            payload = {
+                "source": source,
+                "mode": "consensus-all-strategies-except-book-openai",
+                "signal": consensus,
+                "entry": float(entry), "stop_loss": float(sl), "take_profit": [float(x) for x in tp],
+                "confidence_at_entry": confidence, "candle_time": candle_time,
+                "auto_entry": True, "xauusd_only": True,
+            }
+            if recent is None:
+                row = SignalHistory(
+                    user_id=user.id, symbol=key, interval=tf, direction=direction,
+                    headline=f"AUTO CONSENSUS {direction} · {tf.upper()} · {confidence:.1f}%",
+                    price=float(entry), payload=json.dumps(payload, ensure_ascii=False), outcome="OPEN",
+                    created_at=now, source=source, candle_time=candle_time
                 )
-            if order is not None:
-                payload["auto_trade"]["queued"] = True
-                target_row = recent if recent is not None else history_row
-                if target_row is not None:
-                    target_row.payload = json.dumps(payload, ensure_ascii=False, default=str)
+                session.add(row)
+                created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction,"confidence":confidence,"agreement":consensus["consensus_agreement"]})
+            order = _queue_autotrade_order(
+                symbol=key, source=source, interval=tf, direction=direction,
+                entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
+                confidence=confidence, candle_time=candle_time,
+            )
+            if order is not None and order not in queued:
                 queued.append(order)
-                module_signal_count += 1
-                print(f"[AUTO TRADE QUEUE] MODULE QUEUED source={source} market={key} tf={tf} dir={direction} candle={candle_time}")
 
     await asyncio.gather(*(process_symbol(k) for k in symbols))
     if created_history:
@@ -5194,11 +5018,10 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         "symbols": symbols,
         "count": len(created_history),
         "queued": len(queued),
-        "module_autotrade_queued": module_signal_count,
         "history_count": len(rows),
         "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
-        "forward_mode": "EVERY CONFIRMED MODULE SIGNAL EXCEPT M1 AND BOOK + OPENAI",
-        "excluded_sources": ["Book + OpenAI", "M1 / 1min / 1m"],
+        "forward_mode": "ONE CONSENSUS SIGNAL PER XAUUSD TIMEFRAME/CANDLE · BOOK + OPENAI EXCLUDED",
+        "excluded_sources": ["Book + OpenAI"],
         "items": created_history,
         "user_id": int(user.id),
     }
@@ -5481,10 +5304,9 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         live_candles, _, _ = await get_candles(symbol, interval, 260)
         entry, sl, tp, repaired = _normalize_auto_trade_levels({
             "entry": body.entry, "stop_loss": body.stop_loss, "take_profit": body.take_profit
-        }, live_candles, direction, interval)
+        }, live_candles, direction)
     except Exception as exc:
         return {"saved": False, "reason": f"LIVE_LEVELS_UNAVAILABLE: {exc}"}
-    target_reached = not bool(tp)
     live_candle_time = _normalize_history_candle_time(live_candles[-1].get("time"))
 
     # Exactly one record per module/timeframe/live candle. Direction is mutable while
@@ -5503,19 +5325,15 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     payload.update({
         "source": source, "symbol": symbol, "interval": interval, "confidence_at_entry": body.confidence,
         "setup": {"entry": entry, "stop_loss": sl, "take_profit": tp},
-        "signal": {"direction": ("WAIT" if target_reached else direction), "original_direction": direction, "confidence": body.confidence},
-        "target_state": "TARGET_REACHED" if target_reached else "ACTIVE", "candle_time": live_candle_time,
+        "signal": {"direction": direction, "confidence": body.confidence}, "candle_time": live_candle_time,
         "live_levels_verified": True, "levels_repaired_from_live_chart": bool(repaired),
         "setup_strength": setup_strength, "setup_grade": setup_grade, "strong_setup": strong_setup,
     })
     snapshot=_history_snapshot_payload(payload,source,symbol,interval,direction,body.confidence,entry,sl,tp,live_candle_time)
     payload["history_snapshot"]=snapshot
-    history_direction = "WAIT" if target_reached else direction
-    history_status = "CANCELLED" if target_reached else "ACTIVE"
-    history_outcome = "TARGET_REACHED" if target_reached else "OPEN"
     row = SignalHistory(
-        user_id=user.id, symbol=symbol, interval=interval, direction=history_direction, headline=(body.headline or f"{source} · {history_direction}")[:255],
-        price=float(entry), payload=json.dumps(payload, ensure_ascii=False), outcome=history_outcome, status=history_status, created_at=datetime.now(timezone.utc), source=source, candle_time=live_candle_time
+        user_id=user.id, symbol=symbol, interval=interval, direction=direction, headline=(body.headline or f"{source} · {direction}")[:255],
+        price=float(entry), payload=json.dumps(payload, ensure_ascii=False), outcome="OPEN", status="ACTIVE", created_at=datetime.now(timezone.utc), source=source, candle_time=live_candle_time
     )
     _history_sync_row(row,payload)
     if existing is None:
@@ -5536,13 +5354,11 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         _history_sync_row(existing, payload)
         session.commit()
 
-    order = None
-    if direction in {"BUY", "SELL"} and tp and not target_reached:
-        order = _queue_autotrade_order(
-            symbol=symbol, source=source, interval=interval, direction=direction,
-            entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
-            confidence=body.confidence, candle_time=live_candle_time,
-        )
+    order = _queue_autotrade_order(
+        symbol=symbol, source=source, interval=interval, direction=direction,
+        entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
+        confidence=body.confidence, candle_time=live_candle_time,
+    )
     if existing is not None:
         return {"saved": False, "updated": str(existing.status or "ACTIVE").upper() in {"ACTIVE", "TP1 HIT", "OPEN"}, "duplicate": True, "id": existing.id, "queued": bool(order),
                 "source": source, "symbol": symbol, "entry": existing.price, "stop_loss": existing.stop_loss,
@@ -5614,7 +5430,7 @@ async def signal_analytics(period: str = Query("all"), date: str | None = Query(
 
 
 # ---------------- Professional Signal History v2 ----------------
-HISTORY_STATUS_VALUES = {"ACTIVE", "TP1 HIT", "TP2 HIT", "SL HIT", "EXPIRED", "CANCELLED", "TARGET_REACHED"}
+HISTORY_STATUS_VALUES = {"ACTIVE", "TP1 HIT", "TP2 HIT", "SL HIT", "EXPIRED", "CANCELLED"}
 
 def _history_snapshot_payload(payload: Any, source: str, symbol: str, interval: str, direction: str, confidence: Any = None,
                              entry: Any = None, sl: Any = None, tp: Any = None, candle_time: Any = None) -> dict[str, Any]:
@@ -5683,7 +5499,6 @@ def _history_status(row: SignalHistory) -> str:
     if s == "OPEN": return "ACTIVE"
     if s == "TP HIT": return "TP2 HIT"
     if s == "AMBIGUOUS": return "CANCELLED"
-    if s == "TARGET_REACHED": return "TARGET_REACHED"
     return s or ("ACTIVE" if row.outcome == "OPEN" else row.outcome or "ACTIVE")
 
 def _history_v2_date_bounds(start_date: str | None, end_date: str | None):
@@ -5784,14 +5599,13 @@ async def signal_history_refresh_v2(authorization: str | None = Header(default=N
     try:
         await refresh_signal_outcomes(session, user.id, limit=2000)
         rows = list(session.scalars(select(SignalHistory).where(SignalHistory.user_id == user.id)).all())
-        counts = {"active": 0, "tp1": 0, "wins": 0, "losses": 0, "target_reached": 0, "cancelled": 0}
+        counts = {"active": 0, "tp1": 0, "wins": 0, "losses": 0, "cancelled": 0}
         for r in rows:
             st = _history_status(r)
             if st == "ACTIVE": counts["active"] += 1
             elif st == "TP1 HIT": counts["tp1"] += 1
             elif st == "TP2 HIT": counts["wins"] += 1
             elif st == "SL HIT": counts["losses"] += 1
-            elif st == "TARGET_REACHED": counts["target_reached"] += 1
             elif st in {"CANCELLED", "EXPIRED"}: counts["cancelled"] += 1
         return {"ok": True, "refreshed": len(rows), "counts": counts, "timezone": "Asia/Tashkent"}
     except Exception as exc:
