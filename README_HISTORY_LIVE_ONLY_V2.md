@@ -1,7 +1,15 @@
-# SignalX History — Live Only V2
+# SignalX History — Persistent Journal
 
-This build intentionally removes all legacy Signal History rows once, on first startup of version `live-only-2026-09-17-v3`. A persistent DB marker prevents the deletion from repeating on normal Railway restarts.
+Signal History is now preserved across application upgrades and Railway redeploys.
 
-New uniqueness rule: one History row per `user + symbol + timeframe + module + live candle`. Direction is not part of the identity, so a live candle that flips BUY/SELL updates the same row instead of creating a duplicate.
+Previous builds used a `HISTORY_LIVE_VERSION` migration that intentionally ran `DELETE FROM signal_history` once when the version changed. That behavior has been removed because it could make valid historical signals disappear from the journal.
 
-New History rows are generated from the current/live signal pipeline only. No old archive is retained. AutoTrade and strategy execution logic are not intentionally changed by this History cleanup.
+Current behavior:
+
+1. Existing `signal_history` rows are never cleared during startup.
+2. The runtime migration marker is metadata only and is non-destructive.
+3. A normal lookup index is used for `user + symbol + timeframe + module + live candle` so legacy rows are not deleted just to satisfy a uniqueness migration.
+4. The application still prevents normal duplicate module records by checking the same live-candle identity before insert.
+5. New History rows continue to come from the live signal pipeline and remain linked to the existing outcome/AutoTrade flow.
+
+Note: records already deleted by an older deployed build can only be restored from an older database/backup if one exists.
