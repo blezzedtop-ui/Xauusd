@@ -1042,6 +1042,21 @@ def require_admin(authorization: str | None, session: Session) -> User:
         raise HTTPException(status_code=403, detail="Bu bo‘lim faqat administrator uchun. Oddiy user AI tizimidan foydalana olmaydi.")
     return user
 
+def _history_visible_user_ids(user: User, session: Session) -> list[int]:
+    """Return the History ownership scope visible to the current user.
+
+    SignalX background workers write live strategy rows under the canonical/admin
+    account.  A browser session may belong to another administrator account.  Admins
+    therefore see the shared administrator trading journal, while normal users remain
+    strictly isolated to their own History rows.
+    """
+    if not is_admin_user(user):
+        return [int(user.id)]
+    ids = [int(x) for x in session.scalars(select(User.id).where(User.role == "admin")).all()]
+    if int(user.id) not in ids:
+        ids.append(int(user.id))
+    return sorted(set(ids))
+
 
 class AIChatBody(BaseModel):
     question: str = Field(min_length=2, max_length=1200)
@@ -5744,7 +5759,8 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
         await _maybe_refresh_history_v2(session, user.id)
     except Exception as exc:
         print(f"[HISTORY V2] outcome refresh skipped: {type(exc).__name__}: {exc}")
-    q = select(SignalHistory).where(SignalHistory.user_id == user.id)
+    visible_user_ids = _history_visible_user_ids(user, session)
+    q = select(SignalHistory).where(SignalHistory.user_id.in_(visible_user_ids))
     if symbol:
         q = q.where(SignalHistory.symbol == clean_symbol(symbol))
     if direction and direction.upper() in {"BUY", "SELL"}:
@@ -5813,7 +5829,8 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
         await _maybe_refresh_history_v2(session, user.id)
     except Exception as exc:
         print(f"[HISTORY V2 STATS] outcome refresh skipped: {type(exc).__name__}: {exc}")
-    q=select(SignalHistory).where(SignalHistory.user_id==user.id)
+    visible_user_ids=_history_visible_user_ids(user,session)
+    q=select(SignalHistory).where(SignalHistory.user_id.in_(visible_user_ids))
     if symbol: q=q.where(SignalHistory.symbol==clean_symbol(symbol))
     if direction.upper() in {"BUY","SELL"}: q=q.where(SignalHistory.direction==direction.upper())
     if module: q=q.where(SignalHistory.source==module)
