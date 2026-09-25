@@ -749,39 +749,43 @@ def ensure_admin_user() -> None:
         s.commit()
 
 
-HISTORY_LIVE_VERSION = os.getenv("HISTORY_LIVE_VERSION", "live-only-2026-09-17-v3").strip() or "live-only-2026-09-17-v3"
+HISTORY_LIVE_VERSION = os.getenv("HISTORY_LIVE_VERSION", "history-preserve-2026-09-25-v1").strip() or "history-preserve-2026-09-25-v1"
 
 def _prepare_live_history_once() -> None:
-    """Start the new journal from live data only, once per persistent DB version.
+    """Prepare Signal History metadata without deleting existing journal rows.
 
-    Existing history is intentionally removed because the journal schema/semantics have
-    been changed and legacy rows were not reliable live-signal records. A DB marker makes
-    this destructive cleanup one-time across Railway restarts.
+    History is user data and must survive application upgrades/redeploys.  Older builds
+    cleared the entire signal_history table when HISTORY_LIVE_VERSION changed; that made
+    valid historical records disappear from the UI.  The runtime-state marker is kept
+    only for migration/version tracking and is now strictly non-destructive.
     """
     with engine.begin() as conn:
         conn.exec_driver_sql("CREATE TABLE IF NOT EXISTS signal_history_runtime_state (key VARCHAR(100) PRIMARY KEY, value VARCHAR(255))")
         row = conn.exec_driver_sql("SELECT value FROM signal_history_runtime_state WHERE key='history_live_version'").fetchone()
         if row and str(row[0]) == HISTORY_LIVE_VERSION:
             return
-        conn.exec_driver_sql("DELETE FROM signal_history")
         backend = engine.url.get_backend_name()
         if backend == "sqlite":
             conn.exec_driver_sql("INSERT OR REPLACE INTO signal_history_runtime_state (key,value) VALUES (?,?)", ("history_live_version", HISTORY_LIVE_VERSION))
         else:
             conn.exec_driver_sql("DELETE FROM signal_history_runtime_state WHERE key='history_live_version'")
             conn.exec_driver_sql("INSERT INTO signal_history_runtime_state (key,value) VALUES (%s,%s)", ("history_live_version", HISTORY_LIVE_VERSION))
-    print(f"[HISTORY LIVE-ONLY] legacy history cleared; version={HISTORY_LIVE_VERSION}")
+    print(f"[HISTORY PRESERVE] existing history kept; version={HISTORY_LIVE_VERSION}")
 
 def _ensure_live_history_unique_index() -> None:
-    """Enforce one History row per user/symbol/timeframe/module/live-candle."""
-    # All legacy data has already been cleared by _prepare_live_history_once on the
-    # first boot of this version, so the unique index can be created safely.
+    """Keep History lookups fast without deleting legacy rows to satisfy uniqueness.
+
+    Application-level record checks already prevent normal duplicate inserts.  A unique
+    migration index can fail when an older database contains duplicate legacy candles,
+    so use a non-unique lookup index and preserve every existing journal row.
+    """
     with engine.begin() as conn:
-        try:
-            conn.exec_driver_sql("DROP INDEX IF EXISTS uq_signal_history_identity")
-        except Exception:
-            pass
-        conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_signal_history_live_identity ON signal_history (user_id, symbol, interval, source, candle_time)")
+        for idx in ("uq_signal_history_identity", "uq_signal_history_live_identity"):
+            try:
+                conn.exec_driver_sql(f"DROP INDEX IF EXISTS {idx}")
+            except Exception:
+                pass
+        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_signal_history_live_identity ON signal_history (user_id, symbol, interval, source, candle_time)")
 
 def initialize_database() -> None:
     ensure_schema()
