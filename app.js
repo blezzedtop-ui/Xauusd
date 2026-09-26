@@ -318,7 +318,7 @@ async function loadICTSignals(){
   }
 }
 
-async function loadAdvancedSignals(){if(!IS_ADMIN)return;$('advancedStatus').textContent='SIGNAL BLOCKED · analysis view only';$('advancedGrid').innerHTML='<div class="card">Analysis yuklanmoqda...</div>';try{const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);const order=['1min','5min','15min','30min','1h','4h','1day'];$('advancedGrid').innerHTML=order.map(tf=>{const x={...(d.timeframes?.[tf]||{}),signal:'WAIT',confidence:0,reason:'Signal Lab source blocked — analysis only'};return advCard(tf,x)}).join('');$('advancedStatus').textContent=`BLOCKED · ${symbol} · analysis only · History/AutoTrade OFF`; }catch(e){$('advancedStatus').textContent=e.message;$('advancedGrid').innerHTML='<div class="card">Signal Lab blocked.</div>'}}
+async function loadAdvancedSignals(){if(!IS_ADMIN)return;$('advancedStatus').textContent='SIGNAL BLOCKED · analysis view only';$('advancedGrid').innerHTML='<div class="card">Analysis yuklanmoqda...</div>';try{const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);const order=['1min','5min','15min','30min','1h','4h','1day'];$('advancedGrid').innerHTML=order.map(tf=>{const x={...(d.timeframes?.[tf]||{}),signal:'WAIT',confidence:0,entry:null,stop_loss:null,take_profit:[],risk_reward:null,reason:'Signal Lab source blocked — analysis only'};return advCard(tf,x)}).join('');$('advancedStatus').textContent=`BLOCKED · ${symbol} · analysis only · History/AutoTrade OFF`; }catch(e){$('advancedStatus').textContent=e.message;$('advancedGrid').innerHTML='<div class="card">Signal Lab blocked.</div>'}}
 document.addEventListener('click',e=>{ const b=e.target.closest('.history-period'); if(!b)return; historyPeriod=b.dataset.historyPeriod||'all'; localStorage.setItem('history_period',historyPeriod); syncHistoryPeriodButtons(); loadStats().catch(()=>{}); loadHistory().catch(()=>{});  });
 document.addEventListener('change',e=>{ const el=e.target.closest('#historyDate'); if(!el)return; historyDate=el.value||''; localStorage.setItem('history_date',historyDate); if(historyDate){historyPeriod='all'; localStorage.setItem('history_period','all'); syncHistoryPeriodButtons();} loadStats().catch(()=>{}); loadHistory().catch(()=>{}); });
 document.addEventListener('click',e=>{ const b=e.target.closest('#clearHistoryDate'); if(!b)return; historyDate=''; localStorage.removeItem('history_date'); syncHistoryDate(); loadStats().catch(()=>{}); loadHistory().catch(()=>{}); });
@@ -530,19 +530,19 @@ async function loadAlgoTrade(){
     const cls='wait';
     $('algoSignal').textContent='BLOCKED';
     $('algoSignal').className='signal-main wait';
-    $('algoScore').textContent=`${d.score??0} / 100`;
-    $('algoEntry').textContent=fmt(d.entry); $('algoSL').textContent=fmt(d.stop_loss);
-    $('algoTP1').textContent=fmt((d.take_profit||[])[0]); $('algoTP2').textContent=fmt((d.take_profit||[])[1]);
-    $('algoRR').textContent=d.risk_reward?`1 : ${d.risk_reward}`:'—';
+    $('algoScore').textContent=`${d.score??0} / 100 · ANALYSIS ONLY`;
+    $('algoEntry').textContent='—'; $('algoSL').textContent='—';
+    $('algoTP1').textContent='—'; $('algoTP2').textContent='—';
+    $('algoRR').textContent='—';
     $('algoMtf').textContent=d.checks?.mtf_match?'MATCH':'WAIT';
     $('algoM15').textContent=d.checks?.m15_confirmation?'OK':'WAIT';
     $('algoM5').textContent=d.checks?.m5_confirmation?'OK':'WAIT';
     $('algoReason').textContent='AlgoTrade signal source blocked · analysis only · History/AutoTrade OFF' + (d.reason?(' | '+d.reason):'');
     const order=[['4h','H4'],['1h','H1'],['15min','M15'],['5min','M5']];
     $('algoTimeframes').innerHTML=order.map(([tf,label])=>{
-      const x=d.timeframes?.[tf]||{}; const s=String(x.signal||'WAIT').toUpperCase(); const c=s==='BUY'?'buy':s==='SELL'?'sell':'wait';
+      const x=d.timeframes?.[tf]||{}; const s='WAIT'; const c='wait';
       const ch=x.checks||{};
-      return `<div class="advanced-card"><div class="advanced-head"><div><div class="mini">${label}</div><div class="advanced-signal ${c}">${s}</div></div><span class="pill">${x.confidence??0}%</span></div><div class="component-grid"><div class="component"><small>Trend</small><b>${x.trend||'—'}</b></div><div class="component"><small>Structure</small><b>${x.structure?.bos||x.structure?.choch||'—'}</b></div><div class="component"><small>Liquidity</small><b>${x.liquidity?.type||'NONE'}</b></div><div class="component"><small>OB / FVG</small><b>${x.order_block?.type||'NONE'} / ${x.fvg?.type||'NONE'}</b></div></div></div>`;
+      return `<div class="advanced-card"><div class="advanced-head"><div><div class="mini">${label}</div><div class="advanced-signal ${c}">BLOCKED</div></div><span class="pill">ANALYSIS</span></div><div class="component-grid"><div class="component"><small>Trend</small><b>${x.trend||'—'}</b></div><div class="component"><small>Structure</small><b>${x.structure?.bos||x.structure?.choch||'—'}</b></div><div class="component"><small>Liquidity</small><b>${x.liquidity?.type||'NONE'}</b></div><div class="component"><small>OB / FVG</small><b>${x.order_block?.type||'NONE'} / ${x.fvg?.type||'NONE'}</b></div></div></div>`;
     }).join('');
     if(status)status.textContent=`BLOCKED · analysis only · ${new Date(d.generated_at).toLocaleTimeString()}`;
   }catch(e){
