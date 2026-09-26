@@ -786,12 +786,70 @@ async function loadFibonacciEngine(){
     setText('fibEngineReason','Fibonacci Engine error: '+(e.message||'server error'));
   }
 }
+async function loadStrategyPerformance(){
+  if(!IS_ADMIN)return;
+  const root=$('strategyPerformanceGrid');
+  const kpis=$('strategyPerformanceKpis');
+  const analysis=$('strategyAnalysisPerformance');
+  const status=$('strategyPerformanceStatus');
+  if(status)status.textContent='HISTORY ANALYTICS yuklanmoqda…';
+  if(root)root.innerHTML='<div class="sx-empty">Strategiya statistikasi hisoblanmoqda…</div>';
+  try{
+    const d=await api('/api/v1/strategy-performance?symbol='+encodeURIComponent(symbol));
+    const o=d.overall||{};
+    const K=(l,v,c='')=>`<div class="sx-kpi"><small>${l}</small><b class="${c}">${v}</b></div>`;
+    if(kpis)kpis.innerHTML=[
+      K('TOTAL SIGNALS',o.signals??0),
+      K('COMPLETED',o.completed??0),
+      K('WIN RATE',`${Number(o.winrate||0).toFixed(2)}%`),
+      K('WINS',o.wins??0,'buy'),
+      K('LOSSES',o.losses??0,'sell'),
+      K('ACTIVE',o.active??0,'wait'),
+      K('BLOCKED',o.blocked??0,'sell'),
+      K('TOTAL R',`${Number(o.total_r||0)>=0?'+':''}${Number(o.total_r||0).toFixed(2)}R`)
+    ].join('');
 
-function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'Order Block',trendEngineSection:'Trend Engine',snrBreakoutSection:'SNR Breakout',ictLiquiditySection:'ICT Liquidity',obFvgSection:'OB / FVG Engine',momentumEngineSection:'Technical Momentum',fibonacciEngineSection:'Fibonacci Engine'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section'){loadMT5Status().catch(()=>{});loadMT5GatewayAccounts().catch(()=>{});}if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
-if(id==='algotradeSection')loadOrderBlock().catch(()=>{});if(id==='fibonacciEngineSection')loadFibonacciEngine().catch(()=>{});if(['trendEngineSection','snrBreakoutSection','ictLiquiditySection','obFvgSection','momentumEngineSection'].includes(id))loadProEngines().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
+    const card=x=>{
+      const best=x.best_timeframe||{};
+      const tf=best.timeframe?tfName(best.timeframe):'—';
+      const wr=Number(x.winrate||0);
+      const rr=Number(x.avg_rr||0);
+      const avgR=Number(x.avg_r||0);
+      const totalR=Number(x.total_r||0);
+      return `<div class="sx-module">
+        <div class="section-head" style="margin-bottom:8px"><div><small>${escapeHtml(x.source||'—')}</small><b style="display:block;margin-top:3px">${wr.toFixed(2)}% WIN RATE</b></div><span class="pill">${x.completed||0} completed</span></div>
+        <div class="grid4">
+          <div class="metric"><small>Signals</small><b>${x.signals||0}</b></div>
+          <div class="metric"><small>W / L</small><b>${x.wins||0} / ${x.losses||0}</b></div>
+          <div class="metric"><small>Blocked</small><b>${x.blocked||0}</b></div>
+          <div class="metric"><small>Active</small><b>${x.active||0}</b></div>
+        </div>
+        <div class="grid4" style="margin-top:8px">
+          <div class="metric"><small>Avg RR</small><b>${rr>0?`1:${rr.toFixed(2)}`:'—'}</b></div>
+          <div class="metric"><small>Avg R</small><b>${Number.isFinite(avgR)?(avgR>=0?'+':'')+avgR.toFixed(2)+'R':'—'}</b></div>
+          <div class="metric"><small>Total R</small><b>${totalR>=0?'+':''}${totalR.toFixed(2)}R</b></div>
+          <div class="metric"><small>Best TF</small><b>${tf}</b><div class="mini">${best.completed?`${Number(best.winrate||0).toFixed(2)}% · ${best.completed} completed`:'No completed trades'}</div></div>
+        </div>
+      </div>`;
+    };
+
+    const ats=d.autotrade_sources||[];
+    if(root)root.innerHTML=ats.length?ats.map(card).join(''):'<div class="sx-empty">AutoTrade source’lar uchun hali History statistikasi yetarli emas.</div>';
+    const ans=d.analysis_sources||[];
+    if(analysis)analysis.innerHTML=ans.length?ans.map(card).join(''):'<div class="sx-empty">Analysis-only source statistikasi yo‘q.</div>';
+    if(status)status.textContent=`${symbol} · Signal History source-of-truth · ${d.timezone||'Asia/Tashkent'} · ${new Date(d.generated_at).toLocaleString()}`;
+  }catch(e){
+    if(root)root.innerHTML=`<div class="sx-empty">Performance yuklanmadi: ${escapeHtml(e.message||'server error')}</div>`;
+    if(status)status.textContent='ERROR';
+  }
+}
+
+function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'Order Block',trendEngineSection:'Trend Engine',snrBreakoutSection:'SNR Breakout',ictLiquiditySection:'ICT Liquidity',obFvgSection:'OB / FVG Engine',momentumEngineSection:'Technical Momentum',strategyPerformanceSection:'Strategy Performance',fibonacciEngineSection:'Fibonacci Engine'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section'){loadMT5Status().catch(()=>{});loadMT5GatewayAccounts().catch(()=>{});}if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
+if(id==='strategyPerformanceSection')loadStrategyPerformance().catch(()=>{});if(id==='algotradeSection')loadOrderBlock().catch(()=>{});if(id==='fibonacciEngineSection')loadFibonacciEngine().catch(()=>{});if(['trendEngineSection','snrBreakoutSection','ictLiquiditySection','obFvgSection','momentumEngineSection'].includes(id))loadProEngines().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
 
 document.addEventListener('click',e=>{const b=e.target.closest('#refreshAlgoTrade');if(b)loadOrderBlock().catch(()=>{})});
 document.addEventListener('click',e=>{const b=e.target.closest('#refreshFibonacciEngine');if(b)loadFibonacciEngine().catch(err=>showToast(err.message||'Fibonacci error'))});
+document.addEventListener('click',e=>{const b=e.target.closest('#refreshStrategyPerformance');if(b)loadStrategyPerformance().catch(err=>showToast(err.message||'Performance error'))});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-refresh-pro-engines]');if(b)loadProEngines(true).catch(err=>showToast(err.message||'Engine error'))});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-classic-interval]');if(b){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===b));classicInterval=b.dataset.classicInterval;loadClassicTrade(classicInterval)}});
 document.addEventListener('click',e=>{
