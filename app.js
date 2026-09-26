@@ -255,7 +255,7 @@ async function loadStats(){
   }catch(e){if($('historySummary'))$('historySummary').innerHTML=`<div class="card">Analytics error: ${e?.message||'server xatosi'}</div>`;}
 }
 const SIGNAL_RECORD_SEEN=new Map();
-const BLOCKED_SIGNAL_SOURCES=new Set(['Signals','AlgoTrade']);
+const BLOCKED_SIGNAL_SOURCES=new Set(['AlgoTrade']);
 function recordModuleSignal(source, response, item, intervalName, candleTime){
   if(!token || BLOCKED_SIGNAL_SOURCES.has(String(source||'').trim())) return;
   const x=item||{}; const direction=String(x.signal||response?.direction||'WAIT').toUpperCase();
@@ -384,21 +384,59 @@ document.addEventListener('change',e=>{ const el=e.target.closest('#historyDate'
 document.addEventListener('click',e=>{ const b=e.target.closest('#clearHistoryDate'); if(!b)return; historyDate=''; localStorage.removeItem('history_date'); syncHistoryDate(); loadStats().catch(()=>{}); loadHistory().catch(()=>{}); });
 
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-save-advanced]');if(!b)return;const tf=b.dataset.saveAdvanced;b.disabled=true;try{await api(`/api/v1/signals/save-advanced?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}`,{method:'POST'});showToast(tfName(tf)+' signal saqlandi');loadStats();if($('historySection').classList.contains('active'))loadHistory()}catch(err){showToast(err.message)}finally{b.disabled=false}});
+function adaptiveSignalsCard(tf,x){
+  const sig=String(x.signal||'WAIT').toUpperCase();
+  const cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
+  const pd=x.premium_discount||{}, liq=x.liquidity||{}, htf=x.htf||{}, low=x.lower_tf||{}, kz=x.killzone||{}, news=x.news_filter||{};
+  const conf=Number(x.confidence||0), rr=Number(x.risk_reward||0);
+  const at=tf==='1min'?'M1 BLOCKED':(conf>=85&&rr>=1.4?'WAIT 3-CONFIRM':'WAIT');
+  return `<div class="signal-box auto-signal">
+    <div class="section-head"><div><b>${tfName(tf)} · ADAPTIVE ICT TREND</b><div class="signal-main ${cls}">${sig}</div></div><span class="pill">${conf}% · ${at}</span></div>
+    <div class="grid4" style="margin-top:8px"><div class="metric"><small>Entry</small><b>${fmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${fmt(x.stop_loss)}</b></div><div class="metric"><small>TP1</small><b>${fmt((x.take_profit||[])[0])}</b></div><div class="metric"><small>RR</small><b>${rr?`1 : ${rr.toFixed(2)}`:'—'}</b></div></div>
+    <div class="component-grid">
+      <div class="component"><small>H4/H1</small><b>${htf.h4?.bias||'—'} / ${htf.h1?.bias||'—'}</b></div>
+      <div class="component"><small>Premium/Discount</small><b>${pd.zone||'—'}</b></div>
+      <div class="component"><small>Liquidity</small><b>${liq.type||'NONE'}</b></div>
+      <div class="component"><small>M15/M5</small><b>${low.m15?.bias||'—'} / ${low.m5?.bias||'—'}</b></div>
+      <div class="component"><small>Session</small><b>${kz.active?kz.name:'OFF'}</b></div>
+      <div class="component"><small>News</small><b>${news.blocked?'BLACKOUT':news.known?'CLEAR':'UNKNOWN'}</b></div>
+      <div class="component"><small>OB / FVG</small><b>${x.order_block?.type||'NONE'} / ${x.fvg?.type||'NONE'}</b></div>
+      <div class="component"><small>AutoTrade</small><b>${at}</b></div>
+    </div>
+    <div class="mini">${x.reason||'—'}</div>
+    <div class="mini">${(x.checks||[]).map(q=>`${q.name}:${q.status} ${q.points||0}/${q.max_points||0}`).join(' · ')}</div>
+  </div>`;
+}
+
 async function loadAutoSignals(){
   try{
     const d=await api(`/api/v1/signals/live/${encodeURIComponent(symbol)}`);
     const order=['1min','5min','15min','30min','1h','4h','1day'];
-    $('autoSignalsGrid').innerHTML=order.map(tf=>{
-      const x=d.timeframes?.[tf]||{};
-      return `<div class="signal-box auto-signal"><div class="section-head"><b>${tfName(tf)}</b><span class="pill">BLOCKED</span></div><div class="signal-main wait">WAIT</div><div class="mini">Signals source blocked · analysis data only · History/AutoTrade OFF</div><div class="mini">Live price: ${fmt(x.current_price)}</div></div>`;
-    }).join('');
-    $('autoSignalUpdated').textContent='SIGNALS SOURCE BLOCKED · HISTORY OFF · AUTOTRADE OFF';
-  }catch(e){$('autoSignalsGrid').innerHTML=`<div class="card">Signals source blocked.</div>`}
+    $('autoSignalsGrid').innerHTML=order.map(tf=>adaptiveSignalsCard(tf,d.timeframes?.[tf]||{})).join('');
+    if(token){
+      order.forEach(tf=>{
+        const x=d.timeframes?.[tf]||{};
+        recordModuleSignal('Signals',d,x,tf,x.candle_time||liveCandle?.time);
+      });
+    }
+    const news=d.news_filter||{};
+    $('autoSignalUpdated').textContent=`ADAPTIVE ICT TREND · Signal ≥80 · AutoTrade ≥85 + RR≥1.40 + 3 confirmations · M1 BLOCKED · News ${news.blocked?'BLACKOUT':news.known?'CLEAR':'UNKNOWN'}`;
+  }catch(e){
+    $('autoSignalsGrid').innerHTML=`<div class="card">Signals error: ${escapeHtml(e.message||'server error')}</div>`;
+    $('autoSignalUpdated').textContent='SIGNALS ERROR';
+  }
 }
 async function autoEntryTick(){
   if(!token)return;
-  setText('autoSignalUpdated','SIGNALS SOURCE BLOCKED · no chart signal / no AutoTrade');
+  try{
+    const d=await api(`/api/v1/signals/live/${encodeURIComponent(symbol)}`);
+    const x=d?.timeframes?.[interval]||{};
+    const sig=String(x.signal||'WAIT').toUpperCase();
+    if(interval!=='1min' && ['BUY','SELL'].includes(sig)) markSignal(sig,x.candle_time||d.generated_at||Math.floor(Date.now()/1000));
+    setText('autoSignalUpdated',`ADAPTIVE ICT TREND · ${tfName(interval)} · ${sig} · ${x.confidence||0}% · M1 BLOCKED`);
+  }catch(e){console.warn('Adaptive Signals tick',e)}
 }
+
 async function loadClassicTrade(tf=interval){try{const d=await api(`/api/v1/classic-trade/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`);const x=d.classic||{};const sig=x.signal||'WAIT';const cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';$('classicSymbol').textContent=`${symbol} · ${tfName(tf)}`;$('classicSignal').textContent=sig;$('classicSignal').className='signal-main '+cls;$('classicConfidence').textContent=(x.confidence??0)+'% · Score '+(x.score??0);$('classicReason').textContent=x.reason||'—';$('classicEntry').textContent=fmt(x.entry);$('classicSL').textContent=fmt(x.stop_loss);$('classicTP1').textContent=fmt((x.take_profit||[])[0]);$('classicTP2').textContent=fmt((x.take_profit||[])[1]);$('classicTrend').textContent=x.trend||'—';$('classicEma').textContent=`EMA20 ${fmt(x.ema20)} · EMA50 ${fmt(x.ema50)}`;$('classicSNR').textContent=`S ${fmt((x.support||[])[0])} · R ${fmt((x.resistance||[])[0])}`;$('classicPivot').textContent=`Pivot ${fmt(x.pivot)}`;$('classicRSI').textContent=fmt(x.rsi);$('classicRSIState').textContent=x.rsi_state||'—';$('classicMACD').textContent=`${fmt(x.macd)} · ${x.macd_state||'—'}`;$('classicPattern').textContent=x.pattern||'—'; await recordModuleSignal('Classic Trade',d,x,tf,x.candle_time); }catch(e){$('classicReason').textContent='Classic Trade error: '+(e.message||'server error')}}
 let snrInterval='5min';
 function snrFmt(v){return v==null||!Number.isFinite(Number(v))?'—':fmt(Number(v));}
