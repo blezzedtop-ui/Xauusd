@@ -651,11 +651,81 @@ async function loadOrderBlock(){
     $('algoReason').textContent='Order Block error: '+(e.message||'server error');
   }
 }
+let PRO_ENGINE_CACHE={ts:0,data:null};
+function proCheckGrid(checks){
+  return (checks||[]).map(q=>`<div class="component"><small>${escapeHtml(q.name||'Check')}</small><b>${q.status==='PASS'?'PASS':'MISS'} · ${q.points||0}/${q.max_points||0}</b><div class="mini">${escapeHtml(q.detail||'')}</div></div>`).join('');
+}
+function proFinalBar(final){
+  const f=final||{}, sig=String(f.signal||'WAIT').toUpperCase(), cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
+  const ready=!!f.pro_engine_autotrade_eligible;
+  return `<div class="signal-box" style="margin-top:12px">
+    <div class="section-head"><div><div class="mini">5 ENGINE CONSENSUS · MT5 PIPELINE</div><div class="signal-main ${cls}">${sig}</div></div><span class="pill">${Number(f.confidence||0).toFixed(1)}% · ${f.confirmation_count||0}/5</span></div>
+    <div class="grid4" style="margin-top:10px">
+      <div class="metric"><small>Entry</small><b>${fmt(f.entry)}</b></div>
+      <div class="metric"><small>SL</small><b>${fmt(f.stop_loss)}</b></div>
+      <div class="metric"><small>TP1</small><b>${fmt((f.take_profit||[])[0])}</b></div>
+      <div class="metric"><small>RR</small><b>${f.risk_reward?`1 : ${Number(f.risk_reward).toFixed(2)}`:'—'}</b></div>
+    </div>
+    <div class="mini" style="margin-top:8px">Votes: ${escapeHtml(JSON.stringify(f.votes||{}))}</div>
+    <div class="mini" style="margin-top:5px"><b>${ready?'BASE AUTOTRADE READY':'AUTOTRADE WAIT'}</b> · Worker AI ≥85% + RR ≥1.40 + 3/5 · M1 BLOCKED${f.blockedReason?' · '+escapeHtml(f.blockedReason):''}</div>
+  </div>`;
+}
+function proEngineHtml(title,role,x,final,details=''){
+  const sig=String(x?.signal||'WAIT').toUpperCase(), cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
+  return `<div class="card">
+    <div class="section-head"><div><h2>${escapeHtml(title)}</h2><div class="mini">${escapeHtml(role)}</div></div><button class="btn primary" type="button" data-refresh-pro-engines>↻ Yangilash</button></div>
+    <div class="signal-box" style="margin-top:12px"><div class="section-head"><div><div class="mini">ENGINE SIGNAL</div><div class="signal-main ${cls}">${sig}</div></div><span class="pill">${Number(x?.confidence||0).toFixed(0)} / 100</span></div>
+      <div class="mini">${escapeHtml(x?.blockedReason||'All engine conditions passed')}</div>
+      ${details||''}
+    </div>
+    <div class="component-grid" style="margin-top:12px">${proCheckGrid(x?.checks)}</div>
+    ${proFinalBar(final)}
+  </div>`;
+}
+function renderProEngines(d){
+  const e=d?.engines||{}, f=d?.final||{};
+  if($('proTrendContent')){
+    const x=e.trend||{}, h4=x.h4||{}, h1=x.h1||{};
+    const details=`<div class="grid4" style="margin-top:10px"><div class="metric"><small>H4 Structure</small><b>${h4.structure||'—'}</b></div><div class="metric"><small>H1 Structure</small><b>${h1.structure||'—'}</b></div><div class="metric"><small>H4 EMA50/200</small><b>${fmt(h4.ema50)} / ${fmt(h4.ema200)}</b></div><div class="metric"><small>H1 EMA50/200</small><b>${fmt(h1.ema50)} / ${fmt(h1.ema200)}</b></div></div>`;
+    $('proTrendContent').innerHTML=proEngineHtml('Trend Engine','H4/H1 Structure → EMA50/EMA200 → M15 Pullback → Continuation BOS',x,f,details);
+  }
+  if($('proSnrContent')){
+    const x=e.snr_breakout||{}, z=x.zones||{};
+    const details=`<div class="grid4" style="margin-top:10px"><div class="metric"><small>Support</small><b>${fmt(z.support?.low)}–${fmt(z.support?.high)}</b></div><div class="metric"><small>Resistance</small><b>${fmt(z.resistance?.low)}–${fmt(z.resistance?.high)}</b></div><div class="metric"><small>Breakout</small><b>${x.breakout?.direction||'NONE'}</b></div><div class="metric"><small>Retest</small><b>${x.retest?'CONFIRMED':'WAIT'}</b></div></div>`;
+    $('proSnrContent').innerHTML=proEngineHtml('SNR / Breakout Engine','HTF SNR → Strong Breakout Close → Displacement → Retest → M5 Confirmation',x,f,details);
+  }
+  if($('proIctContent')){
+    const x=e.ict_liquidity||{}, pd=x.premium_discount||{}, pool=x.liquidity_pool||{}, sw=x.sweep||{};
+    const details=`<div class="grid4" style="margin-top:10px"><div class="metric"><small>Premium/Discount</small><b>${pd.zone||'—'}</b></div><div class="metric"><small>Liquidity Pool</small><b>${pool.strong?'STRONG':'WAIT'} · ${pool.matches||0}</b></div><div class="metric"><small>Sweep</small><b>${sw.type||'NONE'}</b></div><div class="metric"><small>Session</small><b>${x.killzone?.name||'OFF'}</b></div></div>`;
+    $('proIctContent').innerHTML=proEngineHtml('ICT Liquidity Engine','HTF Bias + Premium/Discount + Liquidity Pool + Sweep + MSS/Displacement',x,f,details);
+  }
+  if($('proObFvgContent')){
+    const x=e.ob_fvg||{}, ob=x.order_block||{}, ov=x.overlap||{};
+    const details=`<div class="grid4" style="margin-top:10px"><div class="metric"><small>Order Block</small><b>${ob.type||'NONE'} · ${fmt(ob.low)}–${fmt(ob.high)}</b></div><div class="metric"><small>Fresh</small><b>${x.freshness?.fresh?'YES':'NO'}</b></div><div class="metric"><small>FVG Overlap</small><b>${ov.overlap?'YES':'NO'} · ${fmt(ov.low)}–${fmt(ov.high)}</b></div><div class="metric"><small>First Retest</small><b>${x.retest?.retested?'YES':'WAIT'}</b></div></div><div class="grid4" style="margin-top:8px"><div class="metric"><small>Entry</small><b>${fmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${fmt(x.stop_loss)}</b></div><div class="metric"><small>TP1</small><b>${fmt((x.take_profit||[])[0])}</b></div><div class="metric"><small>RR</small><b>${x.risk_reward?`1 : ${x.risk_reward}`:'—'}</b></div></div>`;
+    $('proObFvgContent').innerHTML=proEngineHtml('Order Block / FVG Engine','Structure Break → Displacement → Fresh OB → FVG Overlap → First Retest Reaction',x,f,details);
+  }
+  if($('proMomentumContent')){
+    const x=e.momentum||{}, m=x.macd||{}, a=x.adx_dmi||{};
+    const details=`<div class="grid4" style="margin-top:10px"><div class="metric"><small>RSI</small><b>${fmt(x.rsi)}</b></div><div class="metric"><small>MACD / Signal</small><b>${fmt(m.line)} / ${fmt(m.signal)}</b></div><div class="metric"><small>ADX · +DI / -DI</small><b>${fmt(a.adx)} · ${fmt(a.plus_di)} / ${fmt(a.minus_di)}</b></div><div class="metric"><small>ATR Ratio</small><b>${fmt(x.atr_ratio)}</b></div></div>`;
+    $('proMomentumContent').innerHTML=proEngineHtml('Technical Momentum Engine','RSI Regime + MACD Expansion + ADX/DMI + ATR + Candle Momentum',x,f,details);
+  }
+}
+async function loadProEngines(force=false){
+  const now=Date.now();
+  if(!force && PRO_ENGINE_CACHE.data && now-PRO_ENGINE_CACHE.ts<5000){
+    renderProEngines(PRO_ENGINE_CACHE.data); return PRO_ENGINE_CACHE.data;
+  }
+  const d=await api(`/api/v1/pro-engines/${encodeURIComponent(symbol)}`);
+  PRO_ENGINE_CACHE={ts:now,data:d};
+  renderProEngines(d);
+  return d;
+}
 
-function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'Order Block'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section'){loadMT5Status().catch(()=>{});loadMT5GatewayAccounts().catch(()=>{});}if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
-if(id==='algotradeSection')loadOrderBlock().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
+function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'Order Block',trendEngineSection:'Trend Engine',snrBreakoutSection:'SNR Breakout',ictLiquiditySection:'ICT Liquidity',obFvgSection:'OB / FVG Engine',momentumEngineSection:'Technical Momentum'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section'){loadMT5Status().catch(()=>{});loadMT5GatewayAccounts().catch(()=>{});}if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
+if(id==='algotradeSection')loadOrderBlock().catch(()=>{});if(['trendEngineSection','snrBreakoutSection','ictLiquiditySection','obFvgSection','momentumEngineSection'].includes(id))loadProEngines().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
 
 document.addEventListener('click',e=>{const b=e.target.closest('#refreshAlgoTrade');if(b)loadOrderBlock().catch(()=>{})});
+document.addEventListener('click',e=>{const b=e.target.closest('[data-refresh-pro-engines]');if(b)loadProEngines(true).catch(err=>showToast(err.message||'Engine error'))});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-classic-interval]');if(b){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===b));classicInterval=b.dataset.classicInterval;loadClassicTrade(classicInterval)}});
 document.addEventListener('click',e=>{
   const b=e.target.closest('[data-pivot-interval]');
