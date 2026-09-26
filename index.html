@@ -800,6 +800,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
     <button type="button" data-section="activeSessionsSection"><span class="sx-nav-icon" data-icon="status" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M12 2v3m0 14v3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Aktiv Seanslar</span></button>
     <button type="button" class="admin-only" data-section="mt5Section"><span class="sx-nav-icon" data-icon="terminal" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m7 9 3 3-3 3m5 0h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">MetaTrader 5</span></button>
     <button type="button" class="admin-only" data-section="algotradeSection"><span class="sx-nav-icon" data-icon="bolt" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 2 5 13h6l-.8 9L19 11h-6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Order Block</span></button>
+    <button type="button" class="admin-only" data-section="fibonacciEngineSection"><span class="sx-nav-icon" data-icon="trend" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 18h16M5 15h14M7 12h10M9 9h6M11 6h2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Fibonacci Engine</span></button>
   <div class="sx-pro-card sx-pro-card-sidebar">
   <div><span class="sx-pro-kicker">SIGNALX PRO</span><b>AI + AUTO TRADING</b><small>Advanced signals and premium tools</small></div>
   <a class="sx-pro-btn" href="https://t.me/Shohrux_Ravshanov" id="telegramGoPro" target="_blank" rel="noopener">✈ GO PRO</a>
@@ -892,6 +893,62 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
       </div>
     </form>
     <div class="ai-qa-disclaimer">AI tahlili ma’lumot va scenario uchun. Foyda yoki signal natijasi kafolatlanmaydi. AI AutoTrade sozlamalarini o‘zgartirmaydi.</div>
+  </div>
+</section>
+<section class="section admin-only" id="fibonacciEngineSection">
+  <div class="card">
+    <div class="section-head">
+      <div><h2>Fibonacci Engine</h2><div class="mini">H4/H1 Trend → Strong Impulse → Fib Pullback → SNR/OB/FVG → Liquidity Sweep → M15/M5 MSS → Momentum → AutoTrade</div></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="pill" id="fibEngineStatus">READY</span><button class="btn primary" id="refreshFibonacciEngine" type="button">↻ Yangilash</button></div>
+    </div>
+    <div class="signal-box" style="margin-top:12px">
+      <div class="section-head"><div><div class="mini">XAUUSD FIBONACCI CONFLUENCE PRO 2026</div><div class="signal-main wait" id="fibEngineSignal">WAIT</div></div><span class="pill" id="fibEngineScore">0 / 100</span></div>
+      <div class="grid4" style="margin-top:10px">
+        <div class="metric"><small>Entry</small><b id="fibEngineEntry">—</b></div>
+        <div class="metric"><small>SL</small><b id="fibEngineSL">—</b></div>
+        <div class="metric"><small>TP1</small><b id="fibEngineTP1">—</b></div>
+        <div class="metric"><small>TP2</small><b id="fibEngineTP2">—</b></div>
+      </div>
+      <div class="grid4" style="margin-top:10px">
+        <div class="metric"><small>RR</small><b id="fibEngineRR">—</b></div>
+        <div class="metric"><small>Market Regime</small><b id="fibEngineRegime">—</b></div>
+        <div class="metric"><small>H4 / H1</small><b id="fibEngineHtf">—</b></div>
+        <div class="metric"><small>Impulse Power</small><b id="fibEngineImpulse">—</b></div>
+      </div>
+      <div class="mini" style="margin-top:8px" id="fibEngineReason">Fibonacci Engine hisoblanmoqda…</div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="section-head"><div><h3>Fibonacci Pullback Zone</h3><div class="mini">50–61.8% preferred zone · 38.2% strong trend context · 78.6% deep pullback protection</div></div><span class="pill">FIB-2026-V1</span></div>
+      <div class="grid4" style="margin-top:10px">
+        <div class="metric"><small>38.2%</small><b id="fibEngine382">—</b></div>
+        <div class="metric"><small>50.0%</small><b id="fibEngine500">—</b></div>
+        <div class="metric"><small>61.8%</small><b id="fibEngine618">—</b></div>
+        <div class="metric"><small>78.6%</small><b id="fibEngine786">—</b></div>
+      </div>
+      <div class="grid4" style="margin-top:10px">
+        <div class="metric"><small>Preferred 50–61.8 Zone</small><b id="fibEngineZone">—</b></div>
+        <div class="metric"><small>Extension 1.272</small><b id="fibEngine1272">—</b></div>
+        <div class="metric"><small>Extension 1.618</small><b id="fibEngine1618">—</b></div>
+        <div class="metric"><small>AI Validation</small><b id="fibEngineAI">—</b></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px">
+      <div class="section-head"><div><h3>Confluence</h3><div class="mini">Fib touch yolg‘iz signal emas. Structure va liquidity tasdig‘i majburiy.</div></div><span class="pill">Signal ≥80 · AutoTrade ≥85</span></div>
+      <div class="grid4">
+        <div class="metric"><small>SNR Overlap</small><b id="fibEngineSnr">—</b></div>
+        <div class="metric"><small>Order Block Overlap</small><b id="fibEngineOb">—</b></div>
+        <div class="metric"><small>FVG Overlap</small><b id="fibEngineFvg">—</b></div>
+        <div class="metric"><small>Liquidity Sweep</small><b id="fibEngineSweep">—</b></div>
+      </div>
+      <div class="grid2" style="margin-top:10px">
+        <div class="metric"><small>M15 / M5 MSS</small><b id="fibEngineMss">—</b></div>
+        <div class="metric"><small>Momentum</small><b id="fibEngineMomentum">—</b></div>
+      </div>
+      <div class="component-grid" id="fibEngineChecks" style="margin-top:12px"></div>
+    </div>
+    <div class="mini" style="margin-top:10px"><b>AutoTrade:</b> Fibonacci ≥85% + AI ≥85% + RR ≥1.40 + Fibonacci bilan bir yo‘nalishdagi kamida 2 ta core modul = jami 3 ta strategiya confirmation. <b>M1 blocked. FLAT/TRANSITION blocked.</b> Execution timeframe: M5.</div>
   </div>
 </section>
 <section class="section admin-only" id="algotradeSection">
@@ -1012,7 +1069,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
       <label class="filter-block"><span>START DATE</span><input id="historyV2Start" type="date"></label><label class="filter-block"><span>END DATE</span><input id="historyV2End" type="date"></label>
       <label class="filter-block"><span>SYMBOL</span><select id="historyV2Symbol"><option value="">ALL</option><option value="XAU/USD">XAUUSD</option><option value="EUR/USD">EURUSD</option></select></label><label class="filter-block"><span>DIRECTION</span><select id="historyV2Direction"><option value="">ALL</option><option>BUY</option><option>SELL</option></select></label>
       <label class="filter-block"><span>RESULT</span><select id="historyV2Result"><option value="">ALL</option><option>ACTIVE</option><option>TP1 HIT</option><option>TP2 HIT</option><option>SL HIT</option><option>EXPIRED</option><option>TARGET_REACHED</option><option>CANCELLED</option></select></label>
-      <label class="filter-block wide"><span>MODULE</span><select id="historyV2Module"><option value="">ALL</option><option>Technical Analysis</option><option>AI Smart Analysis</option><option>AI Fallback Network</option><option>SNR</option><option>Trend Line</option><option>Signal Lab</option><option>ICT Signals</option><option>Multi-Timeframe</option><option>Classic Trade</option><option>Economic Calendar</option><option>Market Sessions</option><option>Order Block</option><option>5 Engine Consensus</option><option>Consensus</option><option>Signals</option></select></label>
+      <label class="filter-block wide"><span>MODULE</span><select id="historyV2Module"><option value="">ALL</option><option>Technical Analysis</option><option>AI Smart Analysis</option><option>AI Fallback Network</option><option>SNR</option><option>Trend Line</option><option>Signal Lab</option><option>ICT Signals</option><option>Multi-Timeframe</option><option>Classic Trade</option><option>Economic Calendar</option><option>Market Sessions</option><option>Order Block</option><option>Fibonacci</option><option>5 Engine Consensus</option><option>Consensus</option><option>Signals</option></select></label>
     </div>
     <div class="sx-kpi-grid" id="historyV2Kpis"></div><div class="sx-history-subhead"><h3>Daily Performance</h3><div class="mini">Tanlangan sana / period · Asia/Tashkent</div></div><div class="sx-day-performance" id="historyV2Daily"></div>
     <div class="sx-history-subhead"><h3>Module Performance</h3></div><div class="sx-module-grid" id="historyV2Modules"></div>
@@ -1041,7 +1098,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 </div>
 
 <script src="config.js?v=20260908f"></script>
-<script src="app.js?v=20260926-regime-filter-v1"></script>
+<script src="app.js?v=20260926-fibonacci-engine-v1"></script>
 
 <script id="signalx-sidebar-fix-20260913">
 (function(){
