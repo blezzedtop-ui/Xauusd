@@ -794,7 +794,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
     <button type="button" data-section="historySection"><span class="sx-nav-icon" data-icon="history" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h13M4 12h16M4 17h10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M18 4v6l3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal History</span></button>
     <button type="button" data-section="activeSessionsSection"><span class="sx-nav-icon" data-icon="status" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M12 2v3m0 14v3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Aktiv Seanslar</span></button>
     <button type="button" class="admin-only" data-section="mt5Section"><span class="sx-nav-icon" data-icon="terminal" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m7 9 3 3-3 3m5 0h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">MetaTrader 5</span></button>
-    <button type="button" class="admin-only" data-section="algotradeSection"><span class="sx-nav-icon" data-icon="bolt" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 2 5 13h6l-.8 9L19 11h-6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">AlgoTrade</span></button>
+    <button type="button" class="admin-only" data-section="algotradeSection"><span class="sx-nav-icon" data-icon="bolt" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13.5 2 5 13h6l-.8 9L19 11h-6z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Order Block</span></button>
   <div class="sx-pro-card sx-pro-card-sidebar">
   <div><span class="sx-pro-kicker">SIGNALX PRO</span><b>AI + AUTO TRADING</b><small>Advanced signals and premium tools</small></div>
   <a class="sx-pro-btn" href="https://t.me/Shohrux_Ravshanov" id="telegramGoPro" target="_blank" rel="noopener">✈ GO PRO</a>
@@ -886,34 +886,34 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 <section class="section admin-only" id="algotradeSection">
   <div class="card algotrade-page">
     <div class="section-head">
-      <div><h2>AlgoTrade</h2><div class="mini">XAUUSD · H4 → H1 → M15 → M5 · qat’iy ICT confirmation tizimi</div></div>
+      <div><h2>Order Block</h2><div class="mini">XAUUSD · H4/H1 Bias → Fresh Order Block → Liquidity Sweep → Displacement → M15/M5 MSS/CHoCH → FVG overlap → First Retest</div></div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="pill" id="algoStatus">READY</span><button class="btn primary" id="refreshAlgoTrade" type="button">↻ Yangilash</button></div>
     </div>
     <div class="signal-box algotrade-hero">
-      <div class="section-head"><div><div class="mini">FINAL SIGNAL · DETERMINISTIC ENGINE</div><div class="signal-main wait" id="algoSignal">WAIT</div></div><span class="pill" id="algoScore">0 / 100</span></div>
+      <div class="section-head"><div><div class="mini">ORDER BLOCK PRO 2026 · FINAL SIGNAL</div><div class="signal-main wait" id="algoSignal">WAIT</div></div><span class="pill" id="algoScore">0 / 100</span></div>
       <div class="grid4" style="margin-top:10px">
         <div class="metric"><small>Entry</small><b id="algoEntry">—</b></div><div class="metric"><small>SL</small><b id="algoSL">—</b></div><div class="metric"><small>TP1</small><b id="algoTP1">—</b></div><div class="metric"><small>TP2</small><b id="algoTP2">—</b></div>
       </div>
       <div class="grid4" style="margin-top:10px">
-        <div class="metric"><small>Risk / Reward</small><b id="algoRR">—</b></div><div class="metric"><small>MTF Match</small><b id="algoMtf">—</b></div><div class="metric"><small>M15</small><b id="algoM15">—</b></div><div class="metric"><small>M5</small><b id="algoM5">—</b></div>
+        <div class="metric"><small>Risk / Reward</small><b id="algoRR">—</b></div><div class="metric"><small>H4 / H1</small><b id="algoMtf">—</b></div><div class="metric"><small>M15 Bias</small><b id="algoM15">—</b></div><div class="metric"><small>M5 Bias</small><b id="algoM5">—</b></div>
       </div>
-      <div class="mini algotrade-reason" id="algoReason">AlgoTrade hisoblanmoqda…</div>
+      <div class="mini algotrade-reason" id="algoReason">Order Block Pro hisoblanmoqda…</div>
     </div>
     <div class="grid4 algotrade-timeframes" id="algoTimeframes"></div>
     <div class="card" style="margin-top:12px">
-      <div class="section-head"><div><h3>Qat’iy qoidalar</h3><div class="mini">Har bir qatlam mustaqil tekshiriladi; mavjud SignalX strategiyalari o‘zgarmaydi.</div></div><span class="pill">V1</span></div>
+      <div class="section-head"><div><h3>Order Block Pro qoidalari</h3><div class="mini">Har qanday qarama-qarshi candle OB emas — faqat displacement, structure shift va FVG bilan tasdiqlangan fresh zona olinadi.</div></div><span class="pill">OB-2026-V1</span></div>
       <div class="component-grid">
-        <div class="component"><small>H4</small><b>Asosiy bias</b><div class="mini">Higher High/Low yoki Lower High/Low</div></div>
-        <div class="component"><small>H1</small><b>MTF confirmation</b><div class="mini">H4 bilan bir tomonda</div></div>
-        <div class="component"><small>M15</small><b>Setup</b><div class="mini">Liquidity + OB/FVG + structure</div></div>
-        <div class="component"><small>M5</small><b>Entry</b><div class="mini">Confirmation + retest</div></div>
-        <div class="component"><small>Risk</small><b>RR ≥ 1:2</b><div class="mini">Aks holda WAIT</div></div>
-        <div class="component"><small>Score</small><b>≥ 85</b><div class="mini">Yuqori sifatli setup filtri</div></div>
-        <div class="component"><small>AI</small><b>Advisory only</b><div class="mini">Asosiy qaror deterministic</div></div>
-        <div class="component"><small>AutoTrade</small><b>Consensus orqali</b><div class="mini">M1 bloklangan; M5+ mavjud AutoTrade queue bilan ishlaydi</div></div>
+        <div class="component"><small>H4/H1 Bias</small><b>15 ball</b><div class="mini">Ikkalasi bir yo‘nalishda</div></div>
+        <div class="component"><small>Fresh OB</small><b>15 ball</b><div class="mini">Oldin mitigatsiya qilinmagan, birinchi retest</div></div>
+        <div class="component"><small>Liquidity Sweep</small><b>20 ball</b><div class="mini">SSL/BSL olinishi shart</div></div>
+        <div class="component"><small>Displacement</small><b>15 ball</b><div class="mini">Kuchli impuls / ATR tasdig‘i</div></div>
+        <div class="component"><small>MSS / CHoCH</small><b>15 ball</b><div class="mini">M15/M5 structure shift</div></div>
+        <div class="component"><small>FVG + OB overlap</small><b>10 ball</b><div class="mini">Entry zona overlap + retest</div></div>
+        <div class="component"><small>Premium / Discount</small><b>5 ball</b><div class="mini">BUY discount · SELL premium</div></div>
+        <div class="component"><small>London / NY</small><b>5 ball</b><div class="mini">Faol sessiya qo‘shimcha tasdiq</div></div>
       </div>
     </div>
-    <div class="mini" style="margin-top:10px">AlgoTrade V1 mustaqil strategiya sifatida ishlaydi: BUY/SELL signal server-side Signal History’ga yoziladi va MTF tasdiqlanganda mavjud SignalX Consensus → AutoTrade pipeline’iga qo‘shiladi. M1 har doim bloklangan.</div>
+    <div class="mini" style="margin-top:10px"><b>Signal ≥80%</b>. AutoTrade: <b>≥85% + RR ≥1.40 + Order Block bilan bir yo‘nalishdagi kamida 2 ta core modul tasdig‘i</b> — jami 3 ta strategiya confirmation. <b>M1 AutoTrade qat’iy bloklangan.</b> Execution timeframe: M5.</div>
   </div>
 </section>
 <section class="section" id="mtfSection"><div class="card"><div class="section-head"><h2>Multi-Timeframe Analysis</h2><span class="pill" id="mtfOverall">—</span></div><div class="grid4" id="mtfGrid"></div></div></section>
@@ -1001,7 +1001,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
       <label class="filter-block"><span>START DATE</span><input id="historyV2Start" type="date"></label><label class="filter-block"><span>END DATE</span><input id="historyV2End" type="date"></label>
       <label class="filter-block"><span>SYMBOL</span><select id="historyV2Symbol"><option value="">ALL</option><option value="XAU/USD">XAUUSD</option><option value="EUR/USD">EURUSD</option></select></label><label class="filter-block"><span>DIRECTION</span><select id="historyV2Direction"><option value="">ALL</option><option>BUY</option><option>SELL</option></select></label>
       <label class="filter-block"><span>RESULT</span><select id="historyV2Result"><option value="">ALL</option><option>ACTIVE</option><option>TP1 HIT</option><option>TP2 HIT</option><option>SL HIT</option><option>EXPIRED</option><option>TARGET_REACHED</option><option>CANCELLED</option></select></label>
-      <label class="filter-block wide"><span>MODULE</span><select id="historyV2Module"><option value="">ALL</option><option>Technical Analysis</option><option>AI Smart Analysis</option><option>AI Fallback Network</option><option>SNR</option><option>Trend Line</option><option>Signal Lab</option><option>ICT Signals</option><option>Multi-Timeframe</option><option>Classic Trade</option><option>Economic Calendar</option><option>Market Sessions</option><option>AlgoTrade</option><option>Consensus</option><option>Signals</option></select></label>
+      <label class="filter-block wide"><span>MODULE</span><select id="historyV2Module"><option value="">ALL</option><option>Technical Analysis</option><option>AI Smart Analysis</option><option>AI Fallback Network</option><option>SNR</option><option>Trend Line</option><option>Signal Lab</option><option>ICT Signals</option><option>Multi-Timeframe</option><option>Classic Trade</option><option>Economic Calendar</option><option>Market Sessions</option><option>Order Block</option><option>Consensus</option><option>Signals</option></select></label>
     </div>
     <div class="sx-kpi-grid" id="historyV2Kpis"></div><div class="sx-history-subhead"><h3>Daily Performance</h3><div class="mini">Tanlangan sana / period · Asia/Tashkent</div></div><div class="sx-day-performance" id="historyV2Daily"></div>
     <div class="sx-history-subhead"><h3>Module Performance</h3></div><div class="sx-module-grid" id="historyV2Modules"></div>
@@ -1030,7 +1030,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 </div>
 
 <script src="config.js?v=20260908f"></script>
-<script src="app.js?v=20260926-adaptive-signals-v1"></script>
+<script src="app.js?v=20260926-order-block-v1"></script>
 
 <script id="signalx-sidebar-fix-20260913">
 (function(){
