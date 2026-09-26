@@ -8860,6 +8860,150 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
         b["total_r"]=round(b["total_r"],2); b["total_profit"]=round(b["total_profit"],2)
     return {"ok":True,"timezone":"Asia/Tashkent","overall":overall,"by_module":by_module,"by_day":dict(sorted(by_day.items(),reverse=True)),"by_symbol":by_symbol,"by_direction":by_direction}
 
+
+@app.get("/api/v1/strategy-performance")
+async def strategy_performance(start_date: str | None = Query(None), end_date: str | None = Query(None),
+                               symbol: str = Query("XAU/USD"),
+                               authorization: str | None = Header(default=None),
+                               session: Session = Depends(db)) -> dict[str, Any]:
+    """Performance dashboard derived only from persisted Signal History rows."""
+    user=current_user(authorization,session)
+    try:
+        await _maybe_refresh_history_v2(session,user.id)
+    except Exception as exc:
+        print(f"[STRATEGY PERFORMANCE] outcome refresh skipped: {type(exc).__name__}: {exc}")
+
+    visible_user_ids=_history_visible_user_ids(user,session)
+    q=select(SignalHistory).where(SignalHistory.user_id.in_(visible_user_ids))
+    if symbol:
+        q=q.where(SignalHistory.symbol==clean_symbol(symbol))
+    rows=list(session.scalars(q.order_by(SignalHistory.created_at.desc())).all())
+
+    def date_ok(r):
+        dt=r.created_at
+        if dt is None: return False
+        if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
+        local_date=dt.astimezone(HISTORY_LOCAL_TZ).date()
+        try:
+            if start_date and local_date<datetime.strptime(start_date,"%Y-%m-%d").date(): return False
+            if end_date and local_date>datetime.strptime(end_date,"%Y-%m-%d").date(): return False
+        except ValueError:
+            return False
+        return True
+    rows=[r for r in rows if date_ok(r)]
+
+    autotrade_sources=set({
+        CONSENSUS_AUTOTRADE_SOURCE,ICT_AUTOTRADE_SOURCE,GOLD_STRATEGY_SOURCE,
+        SIGNALS_AUTOTRADE_SOURCE,ORDER_BLOCK_SOURCE,PRO_ENGINE_SOURCE,FIBONACCI_SOURCE
+    }) | set(PRO_INDIVIDUAL_ENGINE_SOURCES)
+
+    def is_blocked(r,payload):
+        st=_history_status(r)
+        if st in {"CANCELLED","EXPIRED"}:
+            return True
+        module=payload.get("module_signal") if isinstance(payload.get("module_signal"),dict) else payload
+        states=[
+            module.get("execution_state"),module.get("execution_reason"),
+            (payload.get("execution_gate") or {}).get("state") if isinstance(payload.get("execution_gate"),dict) else None,
+            (payload.get("execution_gate") or {}).get("reason") if isinstance(payload.get("execution_gate"),dict) else None,
+        ]
+        return any("BLOCK" in str(x or "").upper() or "FAILED" in str(x or "").upper() for x in states)
+
+    def blank():
+        return {
+            "signals":0,"completed":0,"wins":0,"losses":0,"active":0,"blocked":0,
+            "rr_sum":0.0,"rr_count":0,"r_sum":0.0,"r_count":0,
+            "winrate":0.0,"avg_rr":0.0,"avg_r":0.0,"total_r":0.0,
+            "best_timeframe":None,"timeframes":{}
+        }
+
+    modules={}
+    for r in rows:
+        source=_normalize_history_source(r.source or "Signals")
+        b=modules.setdefault(source,blank())
+        b["signals"]+=1
+        status=_history_status(r)
+        if status=="TP2 HIT":
+            b["wins"]+=1; b["completed"]+=1
+        elif status=="SL HIT":
+            b["losses"]+=1; b["completed"]+=1
+        elif status in {"ACTIVE","TP1 HIT"}:
+            b["active"]+=1
+        try:
+            payload=json.loads(r.payload or "{}")
+        except Exception:
+            payload={}
+        if is_blocked(r,payload):
+            b["blocked"]+=1
+        if r.risk_reward is not None:
+            try:
+                rr=float(r.risk_reward)
+                if rr>0: b["rr_sum"]+=rr; b["rr_count"]+=1
+            except Exception: pass
+        if r.r_multiple is not None:
+            try:
+                rv=float(r.r_multiple)
+                b["r_sum"]+=rv; b["r_count"]+=1
+            except Exception: pass
+
+        tf=str(r.interval or "UNKNOWN")
+        t=b["timeframes"].setdefault(tf,{"signals":0,"completed":0,"wins":0,"losses":0,"total_r":0.0,"winrate":0.0})
+        t["signals"]+=1
+        if status=="TP2 HIT":
+            t["wins"]+=1; t["completed"]+=1
+        elif status=="SL HIT":
+            t["losses"]+=1; t["completed"]+=1
+        if r.r_multiple is not None:
+            try: t["total_r"]+=float(r.r_multiple)
+            except Exception: pass
+
+    for source,b in modules.items():
+        b["winrate"]=round(b["wins"]/b["completed"]*100,2) if b["completed"] else 0.0
+        b["avg_rr"]=round(b["rr_sum"]/b["rr_count"],2) if b["rr_count"] else 0.0
+        b["avg_r"]=round(b["r_sum"]/b["r_count"],2) if b["r_count"] else 0.0
+        b["total_r"]=round(b["r_sum"],2)
+        for tf,t in b["timeframes"].items():
+            t["winrate"]=round(t["wins"]/t["completed"]*100,2) if t["completed"] else 0.0
+            t["total_r"]=round(t["total_r"],2)
+        eligible=[(tf,t) for tf,t in b["timeframes"].items() if t["completed"]>0]
+        if eligible:
+            eligible.sort(key=lambda kv:(kv[1]["winrate"],kv[1]["total_r"],kv[1]["completed"]),reverse=True)
+            tf,t=eligible[0]
+            b["best_timeframe"]={"timeframe":tf,**t}
+        b.pop("rr_sum",None); b.pop("rr_count",None); b.pop("r_sum",None); b.pop("r_count",None)
+
+    ordered=sorted(
+        modules.items(),
+        key=lambda kv:(kv[1]["completed"]>0,kv[1]["winrate"],kv[1]["total_r"],kv[1]["signals"]),
+        reverse=True
+    )
+    autotrade=[{"source":s,**x} for s,x in ordered if s in autotrade_sources]
+    analysis=[{"source":s,**x} for s,x in ordered if s not in autotrade_sources]
+
+    overall=blank()
+    for _,x in ordered:
+        for k in ("signals","completed","wins","losses","active","blocked"):
+            overall[k]+=int(x.get(k) or 0)
+        overall["total_r"]+=float(x.get("total_r") or 0)
+    overall["winrate"]=round(overall["wins"]/overall["completed"]*100,2) if overall["completed"] else 0.0
+    overall["total_r"]=round(overall["total_r"],2)
+    for k in ("rr_sum","rr_count","r_sum","r_count","timeframes","best_timeframe","avg_rr","avg_r"):
+        overall.pop(k,None)
+
+    return {
+        "ok":True,"symbol":clean_symbol(symbol) if symbol else "ALL",
+        "timezone":"Asia/Tashkent","overall":overall,
+        "autotrade_sources":autotrade,"analysis_sources":analysis,
+        "generated_at":datetime.now(timezone.utc).isoformat(),
+        "definitions":{
+            "win":"TP2 HIT","loss":"SL HIT",
+            "completed":"TP2 HIT + SL HIT",
+            "blocked":"CANCELLED/EXPIRED or execution BLOCKED/FAILED",
+            "best_timeframe":"highest completed-trade winrate; ties use total R then completed count"
+        }
+    }
+
+
 @app.post("/api/v1/signals/save")
 async def save_signal(symbol: str, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
