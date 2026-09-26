@@ -920,12 +920,12 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 <section class="section" id="ictSection">
     <div class="card">
       <div class="section-head">
-        <div><h2>ICT Signals</h2><div class="mini">XAUUSD · M30 Bias → Liquidity Sweep → M5 MSS → Displacement → FVG → Entry</div></div>
+        <div><h2>ICT Signals</h2><div class="mini">XAUUSD · H4/H1 Bias → Liquidity Sweep → M15/M5 MSS/BOS → FVG/OB Retest → Killzone → Entry</div></div>
         <button class="btn primary" id="refreshICT">↻ Yangilash</button>
       </div>
       <div class="signal-box" style="margin-top:12px">
         <div class="section-head">
-          <div><div class="mini" id="ictSymbol">XAU/USD · M30 → M5</div><div class="signal-main wait" id="ictSignal">WAIT</div></div>
+          <div><div class="mini" id="ictSymbol">XAU/USD · H4/H1 → M15/M5 · M1 BLOCKED</div><div class="signal-main wait" id="ictSignal">WAIT</div></div>
           <span class="pill" id="ictConfidence">0%</span>
         </div>
         <div class="mini" id="ictReason">ICT engine hisoblanmoqda…</div>
@@ -937,17 +937,17 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
         </div>
       </div>
       <div class="grid4" style="margin-top:10px">
-        <div class="metric"><small>M30 Bias</small><b id="ictBias">—</b><div class="mini" id="ictLiquidity">Liquidity —</div></div>
-        <div class="metric"><small>Premium / Discount</small><b id="ictPD">—</b><div class="mini" id="ictEquilibrium">EQ —</div></div>
-        <div class="metric"><small>M5 MSS</small><b id="ictMSS">—</b><div class="mini" id="ictMSSLevel">Level —</div></div>
-        <div class="metric"><small>Risk / Reward</small><b id="ictRR">—</b><div class="mini">M30 → M5 model</div></div>
+        <div class="metric"><small>H4 / H1 Bias</small><b id="ictBias">—</b><div class="mini" id="ictLiquidity">Liquidity —</div></div>
+        <div class="metric"><small>Killzone / HTF</small><b id="ictPD">—</b><div class="mini" id="ictEquilibrium">EQ —</div></div>
+        <div class="metric"><small>M15 / M5 MSS-BOS</small><b id="ictMSS">—</b><div class="mini" id="ictMSSLevel">Level —</div></div>
+        <div class="metric"><small>Risk / Reward</small><b id="ictRR">—</b><div class="mini">ICT Smart Money · AutoTrade ≥85% · RR ≥1.40</div></div>
       </div>
       <div class="grid2" style="margin-top:12px">
-        <div class="advanced-card"><div class="advanced-head"><div><div class="mini">M30 PD ARRAYS</div><div class="advanced-signal wait" id="ictM30FVG">—</div></div><span class="pill" id="ictM30OB">OB —</span></div><div class="component-grid"><div class="component"><small>FVG</small><b id="ictM30FVGRange">—</b></div><div class="component"><small>Order Block</small><b id="ictM30OBRange">—</b></div><div class="component"><small>EMA20 / EMA50</small><b id="ictM30EMA">—</b></div><div class="component"><small>Draw</small><b id="ictDraw">—</b></div></div></div>
+        <div class="advanced-card"><div class="advanced-head"><div><div class="mini">FVG / ORDER BLOCK RETEST</div><div class="advanced-signal wait" id="ictM30FVG">—</div></div><span class="pill" id="ictM30OB">OB —</span></div><div class="component-grid"><div class="component"><small>FVG</small><b id="ictM30FVGRange">—</b></div><div class="component"><small>Order Block</small><b id="ictM30OBRange">—</b></div><div class="component"><small>H4 / H1 Bias</small><b id="ictM30EMA">—</b></div><div class="component"><small>Draw</small><b id="ictDraw">—</b></div></div></div>
         <div class="advanced-card"><div class="advanced-head"><div><div class="mini">M5 CONFIRMATION</div><div class="advanced-signal wait" id="ictM5FVG">—</div></div><span class="pill" id="ictDisp">Displacement —</span></div><div class="component-grid"><div class="component"><small>FVG</small><b id="ictM5FVGRange">—</b></div><div class="component"><small>MSS</small><b id="ictM5MSS">—</b></div><div class="component"><small>ATR Ratio</small><b id="ictDispRatio">—</b></div><div class="component"><small>Liquidity</small><b id="ictLiqLevel">—</b></div></div></div>
       </div>
-      <div class="card" style="margin-top:12px"><div class="section-head"><div><h3>ICT Confluence</h3><div class="mini">85+ = HIGH CONFIDENCE filter; this is a score, not a win-rate guarantee.</div></div><span class="pill" id="ictScore">0 / 100</span></div><div class="component-grid" id="ictChecks"></div></div>
-      <div class="mini" style="margin-top:10px" id="ictStatus">Real-time M30 and M5 candle calculation.</div>
+      <div class="card" style="margin-top:12px"><div class="section-head"><div><h3>ICT Confluence</h3><div class="mini">Signal ≥80. AutoTrade ≥85 + RR ≥1.40. M1 qat’iy bloklangan. Confidence — confluence score, win-rate kafolati emas.</div></div><span class="pill" id="ictScore">0 / 100</span></div><div class="component-grid" id="ictChecks"></div></div>
+      <div class="mini" style="margin-top:10px" id="ictStatus">Real-time H4/H1/M15/M5 ICT Smart Money calculation.</div>
     </div>
   </section>
 
@@ -1030,7 +1030,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 </div>
 
 <script src="config.js?v=20260908f"></script>
-<script src="app.js?v=20260917-history-result-fix-v5"></script>
+<script src="app.js?v=20260926-ict-smc-v3"></script>
 
 <script id="signalx-sidebar-fix-20260913">
 (function(){
