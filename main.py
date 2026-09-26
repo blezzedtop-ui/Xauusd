@@ -492,7 +492,7 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
         if str(row.interval or "").strip().lower() in {"1m", "1min", "m1"}:
             continue
         source = _normalize_history_source(str(row.source or "Signals")[:40])
-        if source not in {CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE}:
+        if source not in ({CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE} | set(PRO_INDIVIDUAL_ENGINE_SOURCES)):
             continue
         if _autotrade_source_excluded(source):
             continue
@@ -555,6 +555,16 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
             if not pro_allowed or pro_conf < PRO_ENGINE_AUTOTRADE_THRESHOLD or pro_rr < PRO_ENGINE_MIN_RR:
                 continue
             bridge_rr = pro_rr
+        elif source in PRO_INDIVIDUAL_ENGINE_SOURCES:
+            try:
+                eng_conf = float(row.signal_score or module_payload.get("confidence") or 0)
+                eng_rr = float(row.risk_reward or module_payload.get("risk_reward") or (payload.get("execution_gate") or {}).get("risk_reward") or 0)
+            except Exception:
+                eng_conf, eng_rr = 0.0, 0.0
+            eng_allowed = bool(module_payload.get("pro_individual_autotrade_eligible"))
+            if not eng_allowed or eng_conf < PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD or eng_rr < PRO_INDIVIDUAL_MIN_RR:
+                continue
+            bridge_rr = eng_rr
         elif source == FIBONACCI_SOURCE:
             try:
                 fib_conf = float(row.signal_score or module_payload.get("confidence") or 0)
@@ -1406,6 +1416,9 @@ def _normalize_history_source(value: str | None) -> str:
         "multi timeframe":"Multi-Timeframe", "multi-timeframe":"Multi-Timeframe", "classic trade":"Classic Trade",
         "algotrade":"Order Block", "order block":"Order Block", "orderblock":"Order Block", "consensus":"Consensus", "snr":"SNR",
         "5 engine consensus":"5 Engine Consensus", "pro engine consensus":"5 Engine Consensus",
+        "trend engine":"Trend Engine", "snr breakout engine":"SNR / Breakout Engine", "snr / breakout engine":"SNR / Breakout Engine",
+        "ict liquidity engine":"ICT Liquidity Engine", "order block / fvg engine":"Order Block / FVG Engine",
+        "ob / fvg engine":"Order Block / FVG Engine", "technical momentum engine":"Technical Momentum Engine",
         "fibonacci":"Fibonacci", "fibonacci engine":"Fibonacci", "fib":"Fibonacci",
         "economic calendar":"Economic Calendar", "market sessions":"Market Sessions"
     }
@@ -1439,6 +1452,13 @@ PRO_ENGINE_SIGNAL_THRESHOLD = 80
 PRO_ENGINE_AUTOTRADE_THRESHOLD = 85
 PRO_ENGINE_MIN_RR = 1.40
 PRO_ENGINE_REQUIRED_CONFIRMATIONS = 3
+PRO_INDIVIDUAL_ENGINE_SOURCES = frozenset({
+    "Trend Engine","SNR / Breakout Engine","ICT Liquidity Engine",
+    "Order Block / FVG Engine","Technical Momentum Engine"
+})
+PRO_INDIVIDUAL_SIGNAL_THRESHOLD = 80
+PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD = 85
+PRO_INDIVIDUAL_MIN_RR = 1.40
 FIBONACCI_SOURCE = "Fibonacci"
 FIBONACCI_SIGNAL_THRESHOLD = 80
 FIBONACCI_AUTOTRADE_THRESHOLD = 85
@@ -5178,6 +5198,114 @@ def _pro_momentum_engine(c15:list[dict[str,Any]],direction_hint:str) -> dict[str
                               adx_dmi={k:round(float(v),2) for k,v in dmi.items()},
                               atr_ratio=round(a_now/max(a_prev,1e-9),2),candle_body_ratio=round(body_ratio,2))
 
+
+def _pro_engine_execution_geometry(engine_name:str, engine:dict[str,Any],
+                                   c4:list[dict[str,Any]],c1:list[dict[str,Any]],
+                                   c15:list[dict[str,Any]],c5:list[dict[str,Any]]) -> dict[str,Any]:
+    """Give every individual Pro Engine its own structural Entry/SL/TP/RR."""
+    out=dict(engine or {})
+    direction=str(out.get("signal") or "WAIT").upper()
+    out["source"]=engine_name
+    out["execution_timeframe"]="5min"
+    out["m1_blocked"]=True
+    out["signal_threshold"]=PRO_INDIVIDUAL_SIGNAL_THRESHOLD
+    out["autotrade_threshold"]=PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD
+    out["min_rr"]=PRO_INDIVIDUAL_MIN_RR
+    if direction not in {"BUY","SELL"}:
+        out["pro_individual_autotrade_eligible"]=False
+        return out
+
+    # OB/FVG engine already owns a validated structural geometry; preserve it.
+    if engine_name=="Order Block / FVG Engine":
+        rr=float(out.get("risk_reward") or 0)
+        out["pro_individual_autotrade_eligible"]=bool(
+            float(out.get("confidence") or 0)>=PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD
+            and rr>=PRO_INDIVIDUAL_MIN_RR and out.get("entry") is not None
+            and out.get("stop_loss") is not None and bool(out.get("take_profit"))
+        )
+        return out
+
+    entry=float(c5[-1]["close"])
+    a5=max(atr(c5),entry*0.0002)
+    a15=max(atr(c15),entry*0.00025)
+    sl=None
+
+    if engine_name=="Trend Engine":
+        recent=c5[-12:-1] if len(c5)>=12 else c5[:-1]
+        if direction=="BUY":
+            sl=min(float(x["low"]) for x in recent)-a5*0.15
+        else:
+            sl=max(float(x["high"]) for x in recent)+a5*0.15
+
+    elif engine_name=="SNR / Breakout Engine":
+        zones=out.get("zones") or {}
+        zone=(zones.get("resistance") or {}) if direction=="BUY" else (zones.get("support") or {})
+        if direction=="BUY":
+            ref=[float(x["low"]) for x in c5[-8:-1]]
+            if zone.get("low") is not None: ref.append(float(zone["low"]))
+            sl=min(ref)-a5*0.12
+        else:
+            ref=[float(x["high"]) for x in c5[-8:-1]]
+            if zone.get("high") is not None: ref.append(float(zone["high"]))
+            sl=max(ref)+a5*0.12
+
+    elif engine_name=="ICT Liquidity Engine":
+        sweep=out.get("sweep") or {}
+        extreme=sweep.get("extreme")
+        if direction=="BUY":
+            base=float(extreme) if extreme is not None else min(float(x["low"]) for x in c5[-10:-1])
+            sl=base-a5*0.15
+        else:
+            base=float(extreme) if extreme is not None else max(float(x["high"]) for x in c5[-10:-1])
+            sl=base+a5*0.15
+
+    elif engine_name=="Technical Momentum Engine":
+        if direction=="BUY":
+            sl=min(float(x["low"]) for x in c15[-6:-1])-a15*0.10
+        else:
+            sl=max(float(x["high"]) for x in c15[-6:-1])+a15*0.10
+
+    if sl is None:
+        out["pro_individual_autotrade_eligible"]=False
+        out["blockedReason"]=out.get("blockedReason") or "NO_EXECUTION_GEOMETRY"
+        return out
+
+    risk=abs(entry-float(sl))
+    if risk<=0:
+        out["pro_individual_autotrade_eligible"]=False
+        out["blockedReason"]="INVALID_RISK_GEOMETRY"
+        return out
+
+    liquidity=_ict_liquidity_targets([c5,c15,c1],direction,entry)
+    if direction=="BUY":
+        targets=[float(x) for x in liquidity if float(x)>entry and (float(x)-entry)/risk>=PRO_INDIVIDUAL_MIN_RR]
+        fallback=[entry+risk*1.5,entry+risk*2.0,entry+risk*2.5]
+        for x in fallback:
+            if x>entry and all(abs(x-y)>a5*0.10 for y in targets):
+                targets.append(x)
+    else:
+        targets=[float(x) for x in liquidity if float(x)<entry and (entry-float(x))/risk>=PRO_INDIVIDUAL_MIN_RR]
+        fallback=[entry-risk*1.5,entry-risk*2.0,entry-risk*2.5]
+        for x in fallback:
+            if x<entry and all(abs(x-y)>a5*0.10 for y in targets):
+                targets.append(x)
+    targets=targets[:3]
+    rr=((targets[0]-entry)/risk) if direction=="BUY" and targets else ((entry-targets[0])/risk) if targets else 0.0
+
+    out["entry"]=round(entry,4)
+    out["stop_loss"]=round(float(sl),4)
+    out["take_profit"]=[round(float(x),4) for x in targets]
+    out["risk_reward"]=round(float(rr),2)
+    out["pro_individual_autotrade_eligible"]=bool(
+        float(out.get("confidence") or 0)>=PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD
+        and rr>=PRO_INDIVIDUAL_MIN_RR and bool(targets)
+    )
+    if not targets or rr<PRO_INDIVIDUAL_MIN_RR:
+        out["pro_individual_autotrade_eligible"]=False
+        out["blockedReason"]="RR_BELOW_1_40_OR_NO_TARGET"
+    return out
+
+
 def _build_pro_engine_suite(c4:list[dict[str,Any]],c1:list[dict[str,Any]],
                             c15:list[dict[str,Any]],c5:list[dict[str,Any]]) -> dict[str,Any]:
     if min(len(c4),len(c1),len(c15),len(c5))<80:
@@ -5191,6 +5319,11 @@ def _build_pro_engine_suite(c4:list[dict[str,Any]],c1:list[dict[str,Any]],
     ict=_pro_ict_liquidity_engine(c4,c1,c15,c5)
     ob=_pro_ob_fvg_engine(c15,c5,direction_hint)
     momentum=_pro_momentum_engine(c15,direction_hint)
+    trend=_pro_engine_execution_geometry("Trend Engine",trend,c4,c1,c15,c5)
+    snr=_pro_engine_execution_geometry("SNR / Breakout Engine",snr,c4,c1,c15,c5)
+    ict=_pro_engine_execution_geometry("ICT Liquidity Engine",ict,c4,c1,c15,c5)
+    ob=_pro_engine_execution_geometry("Order Block / FVG Engine",ob,c4,c1,c15,c5)
+    momentum=_pro_engine_execution_geometry("Technical Momentum Engine",momentum,c4,c1,c15,c5)
     engines={"trend":trend,"snr_breakout":snr,"ict_liquidity":ict,"ob_fvg":ob,"momentum":momentum}
     votes={k:str(v.get("signal") or "WAIT") for k,v in engines.items()}
     buy=[k for k,v in votes.items() if v=="BUY"]; sell=[k for k,v in votes.items() if v=="SELL"]
@@ -6793,7 +6926,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
         return None
     normalized_source = _normalize_history_source(source)
-    if normalized_source not in {CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE}:
+    if normalized_source not in ({CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE} | set(PRO_INDIVIDUAL_ENGINE_SOURCES)):
         print(f"[AUTO TRADE QUEUE] AUTOTRADE SOURCE BLOCKED source={source} market={symbol} tf={interval} dir={direction}")
         return None
     source = normalized_source
@@ -6868,6 +7001,18 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
             return None
         if pro_rr < PRO_ENGINE_MIN_RR:
             print(f"[AUTO TRADE QUEUE] 5 ENGINE RR BLOCKED tf={interval} rr={pro_rr:.2f} required={PRO_ENGINE_MIN_RR:.2f}")
+            return None
+    if source in PRO_INDIVIDUAL_ENGINE_SOURCES:
+        try:
+            eng_conf = float(confidence or 0)
+            eng_rr = float(risk_reward or 0)
+        except Exception:
+            eng_conf, eng_rr = 0.0, 0.0
+        if eng_conf < PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD:
+            print(f"[AUTO TRADE QUEUE] INDIVIDUAL ENGINE CONFIDENCE BLOCKED source={source} tf={interval} conf={eng_conf:.1f} required={PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD}")
+            return None
+        if eng_rr < PRO_INDIVIDUAL_MIN_RR:
+            print(f"[AUTO TRADE QUEUE] INDIVIDUAL ENGINE RR BLOCKED source={source} tf={interval} rr={eng_rr:.2f} required={PRO_INDIVIDUAL_MIN_RR:.2f}")
             return None
     if source == FIBONACCI_SOURCE:
         try:
@@ -6957,6 +7102,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     order_block_autotrade_count = 0
     pro_engine_autotrade_count = 0
     fibonacci_autotrade_count = 0
+    individual_engine_autotrade_count = 0
     seen_queue_keys = set()
 
     async def load_symbol_candidates(key: str) -> tuple[list[dict[str, Any]], dict[str, tuple[list[dict[str, Any]], str, str | None]]]:
@@ -7110,6 +7256,21 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 final=dict(suite.get("final") or {})
                 final["engines"]=suite.get("engines") or {}
                 final["interval"]="5min"
+                engine_source_map={
+                    "trend":"Trend Engine",
+                    "snr_breakout":"SNR / Breakout Engine",
+                    "ict_liquidity":"ICT Liquidity Engine",
+                    "ob_fvg":"Order Block / FVG Engine",
+                    "momentum":"Technical Momentum Engine",
+                }
+                for engine_key,engine_source in engine_source_map.items():
+                    eng=dict((suite.get("engines") or {}).get(engine_key) or {})
+                    eng["interval"]="5min"
+                    if eng.get("signal") in {"BUY","SELL"}:
+                        candidates.append({"source":engine_source,"interval":"5min","item":eng,
+                                           "response":{"mode":"tradingview","candle_time":c5[-1].get("time"),
+                                                       "individual_engine":engine_key}})
+                        print(f"[INDIVIDUAL ENGINE] market={key} source={engine_source} signal={eng.get('signal')} conf={float(eng.get('confidence') or 0):.1f} rr={float(eng.get('risk_reward') or 0):.2f}")
                 print(f"[5 ENGINE PIPELINE] market={key} signal={final.get('signal')} votes={final.get('votes')} confirmations={final.get('confirmation_count')}/5 conf={float(final.get('confidence') or 0):.1f} rr={float(final.get('risk_reward') or 0):.2f} blocked={final.get('blockedReason')}")
                 if final.get("signal") in {"BUY","SELL"}:
                     candidates.append({"source":PRO_ENGINE_SOURCE,"interval":"5min","item":final,
@@ -7190,7 +7351,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         }
 
     async def process_symbol(key: str):
-        nonlocal created_history, queued, module_signal_count, ict_autotrade_count, signal_lab_autotrade_count, signals_autotrade_count, order_block_autotrade_count, pro_engine_autotrade_count, fibonacci_autotrade_count
+        nonlocal created_history, queued, module_signal_count, ict_autotrade_count, signal_lab_autotrade_count, signals_autotrade_count, order_block_autotrade_count, pro_engine_autotrade_count, fibonacci_autotrade_count, individual_engine_autotrade_count
         candidates, live_by_tf = await load_symbol_candidates(key)
         print(f"[SIGNAL FLOW] candidates={len(candidates)} market={key}")
         consensus_ready: list[dict[str, Any]] = []
@@ -7324,6 +7485,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 is_order_block_source = source == ORDER_BLOCK_SOURCE
                 is_pro_engine_source = source == PRO_ENGINE_SOURCE
                 is_fibonacci_source = source == FIBONACCI_SOURCE
+                is_individual_engine_source = source in PRO_INDIVIDUAL_ENGINE_SOURCES
                 ict_rr = float(gate.get("r_multiple") or 0)
                 ict_direct_ready = bool(
                     is_ict_source and tf not in {"1min","1m","m1"}
@@ -7373,6 +7535,15 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                     and fib_ai_conf >= FIBONACCI_AUTOTRADE_THRESHOLD
                     and fib_rr >= FIBONACCI_MIN_RR
                 )
+                eng_rr = float(gate.get("r_multiple") or 0)
+                eng_ai_conf = float(ai.get("confidence") or 0) if is_individual_engine_source else 0.0
+                eng_direct_ready = bool(
+                    is_individual_engine_source and tf not in {"1min","1m","m1"}
+                    and bool(original_item.get("pro_individual_autotrade_eligible"))
+                    and conf >= PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD
+                    and eng_ai_conf >= PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD
+                    and eng_rr >= PRO_INDIVIDUAL_MIN_RR
+                )
                 item.update({"entry":entry,"stop_loss":sl,"take_profit":tp,"live_levels_verified":True,
                              "levels_repaired_from_live_chart":repaired,
                              "auto_trade_eligible":bool(ict_direct_ready),
@@ -7386,6 +7557,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                              "pro_engine_autotrade_eligible":bool(pro_direct_ready) if is_pro_engine_source else item.get("pro_engine_autotrade_eligible"),
                              "fibonacci_base_autotrade_ready":bool(fib_base_ready) if is_fibonacci_source else item.get("fibonacci_base_autotrade_ready"),
                              "fibonacci_autotrade_eligible":False if is_fibonacci_source else item.get("fibonacci_autotrade_eligible"),
+                             "pro_individual_autotrade_eligible":bool(eng_direct_ready) if is_individual_engine_source else item.get("pro_individual_autotrade_eligible"),
                              "consensus_eligible":bool(is_core_consensus_source),
                              "consensus_required":CONSENSUS_REQUIRED_CONFIRMATIONS,
                              "execution_state":"ICT_AUTOTRADE_READY" if ict_direct_ready else
@@ -7400,6 +7572,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                                                "PRO_ENGINE_THRESHOLD_BLOCKED" if is_pro_engine_source else
                                                "FIBONACCI_CONFIRMATION_WAIT" if fib_base_ready else
                                                "FIBONACCI_THRESHOLD_BLOCKED" if is_fibonacci_source else
+                                               "INDIVIDUAL_ENGINE_AUTOTRADE_READY" if eng_direct_ready else
+                                               "INDIVIDUAL_ENGINE_THRESHOLD_BLOCKED" if is_individual_engine_source else
                                                "CONSENSUS_READY" if is_core_consensus_source else "ANALYSIS_ONLY",
                              "execution_reason":"ICT_DIRECT_AUTOTRADE_READY" if ict_direct_ready else
                                                 ("ICT_THRESHOLD_OR_RR_BLOCK" if is_ict_source else
@@ -7413,6 +7587,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                                                  "5_ENGINE_THRESHOLD_AI_OR_RR_BLOCK" if is_pro_engine_source else
                                                  "WAITING_FOR_2_CORE_CONFIRMATIONS" if fib_base_ready else
                                                  "FIBONACCI_THRESHOLD_AI_OR_RR_BLOCK" if is_fibonacci_source else
+                                                 "INDIVIDUAL_ENGINE_AI_RR_PASSED" if eng_direct_ready else
+                                                 "INDIVIDUAL_ENGINE_THRESHOLD_AI_OR_RR_BLOCK" if is_individual_engine_source else
                                                  "WAITING_FOR_GLOBAL_3_OF_4_CONSENSUS" if is_core_consensus_source else
                                                  "SOURCE_NOT_IN_AUTOTRADE_CONSENSUS"),
                              "risk_reward":gate.get("r_multiple")})
@@ -7465,6 +7641,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                            "order_block_base_ready":bool(item.get("order_block_base_autotrade_ready")) if source == ORDER_BLOCK_SOURCE else False,
                            "pro_engine_ready":bool(item.get("pro_engine_autotrade_eligible")) if source == PRO_ENGINE_SOURCE else False,
                            "fibonacci_base_ready":bool(item.get("fibonacci_base_autotrade_ready")) if source == FIBONACCI_SOURCE else False,
+                           "individual_engine_ready":bool(item.get("pro_individual_autotrade_eligible")) if source in PRO_INDIVIDUAL_ENGINE_SOURCES else False,
                            "risk_reward":gate.get("r_multiple"),"risk":gate.get("risk"),"max_risk":gate.get("max_risk"),
                            "levels_repaired":repaired},
                        "consensus":{"required":CONSENSUS_REQUIRED_CONFIRMATIONS,"core_sources":sorted(CONSENSUS_AUTOTRADE_SOURCES),
@@ -7543,7 +7720,28 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                     pro_engine_autotrade_count += 1
                     print(f"[5 ENGINE AUTOTRADE] QUEUED market={key} tf={tf} dir={direction} conf={conf:.1f} rr={float(gate.get('r_multiple') or 0):.2f}")
 
-            # Other individual modules cannot queue directly; their only MT5 path is
+            if source in PRO_INDIVIDUAL_ENGINE_SOURCES and bool(item.get("pro_individual_autotrade_eligible")) and direction in {"BUY","SELL"} and tp:
+                existing_queue_ids={str(q.get("id")) for q in MT5_ORDER_QUEUE}
+                order=_queue_autotrade_order(
+                    symbol=key,source=source,interval=tf,direction=direction,
+                    entry=entry,sl=sl,tp=tp,volume=MT5_LOT_SIZE,
+                    confidence=conf,candle_time=candle_time,risk_reward=float(gate.get("r_multiple") or 0),
+                )
+                is_new_individual=order is not None and str(order.get("id")) not in existing_queue_ids
+                if order is not None:
+                    payload["auto_trade"]["queued"]=True
+                    payload["auto_trade"]["mode"]="INDIVIDUAL_ENGINE_DIRECT"
+                    payload["auto_trade"]["order_id"]=order.get("id")
+                    target_row=recent if recent is not None else history_row
+                    if target_row is not None:
+                        target_row.payload=json.dumps(payload,ensure_ascii=False,default=str)
+                        _history_sync_row(target_row,payload)
+                if is_new_individual:
+                    queued.append(order)
+                    individual_engine_autotrade_count += 1
+                    print(f"[INDIVIDUAL ENGINE AUTOTRADE] QUEUED market={key} source={source} tf={tf} dir={direction} conf={conf:.1f} ai={float(ai.get('confidence') or 0):.1f} rr={float(gate.get('r_multiple') or 0):.2f}")
+
+            # Core consensus modules still use the server-created 3-of-4 Consensus path below.
             # the server-created 3-of-4 Consensus row/order below.
 
         # Fibonacci AutoTrade:
@@ -7936,6 +8134,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         "order_block_autotrade_queued": order_block_autotrade_count,
         "pro_engine_autotrade_queued": pro_engine_autotrade_count,
         "fibonacci_autotrade_queued": fibonacci_autotrade_count,
+        "individual_engine_autotrade_queued": individual_engine_autotrade_count,
         "history_count": len(rows),
         "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
         "forward_mode": "CORE 3-of-4; ICT direct; Signal Lab +2 core; Signals +2 core; Order Block +2 core; 5 Engine Consensus internal 3-of-5 direct; all AutoTrade >=85% AI/RR gates; M1 blocked",
@@ -7961,6 +8160,15 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                                  "min_rr": PRO_ENGINE_MIN_RR,
                                  "required_confirmations": PRO_ENGINE_REQUIRED_CONFIRMATIONS,
                                  "engine_count":5,"execution_timeframe":"5min","m1_blocked":True},
+        "individual_engine_autotrade": {"enabled": True,
+                                        "sources": sorted(PRO_INDIVIDUAL_ENGINE_SOURCES),
+                                        "signal_threshold": PRO_INDIVIDUAL_SIGNAL_THRESHOLD,
+                                        "autotrade_threshold": PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD,
+                                        "ai_threshold": PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD,
+                                        "min_rr": PRO_INDIVIDUAL_MIN_RR,
+                                        "execution_timeframe":"5min","m1_blocked":True,
+                                        "requires_3_of_5":False,
+                                        "market_regime_and_weighted_mtf_required":True},
         "fibonacci_autotrade": {"enabled": True, "source": FIBONACCI_SOURCE,
                                 "strategy": "XAUUSD Fibonacci Confluence Pro 2026",
                                 "signal_threshold": FIBONACCI_SIGNAL_THRESHOLD,
