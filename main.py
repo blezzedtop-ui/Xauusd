@@ -819,7 +819,7 @@ ENABLE_API_DOCS = os.getenv("ENABLE_API_DOCS", "false").strip().lower() == "true
 RATE_LIMIT_WINDOW_SECONDS = max(10, int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")))
 RATE_LIMIT_MAX_REQUESTS = max(30, int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "180")))
 MAX_REQUEST_BODY_BYTES = max(65536, int(os.getenv("MAX_REQUEST_BODY_BYTES", "1048576")))
-RATE_LIMIT_EXEMPT_PATHS = {"/", "/health", "/favicon.ico"}
+RATE_LIMIT_EXEMPT_PATHS = {"/", "/health", "/api/health", "/favicon.ico"}
 _RATE_BUCKETS: dict[str, tuple[float, int]] = {}
 _LOGIN_FAILS: dict[str, tuple[float, int]] = {}
 LOGIN_LOCK_SECONDS = max(30, int(os.getenv("LOGIN_LOCK_SECONDS", "300")))
