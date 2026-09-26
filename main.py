@@ -471,10 +471,10 @@ def _history_row_levels_for_autotrade(row: "SignalHistory", payload: dict[str, A
 def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[str, Any]]:
     """Forward newly-created eligible History records into the existing MT5 queue exactly once.
 
-    History creation remains independent from execution, but every eligible persisted
-    trade signal becomes AutoTrade-eligible through the same queue safety gates.
-    M1, non-XAUUSD, WAIT/non-directional, closed/cancelled, and Book+OpenAI records
-    are never forwarded. Existing queue de-duplication prevents duplicate orders.
+    History creation remains independent from execution, but MT5 may only receive
+    server-created global Consensus rows. Individual module History rows are never
+    forwarded directly. M1, non-XAUUSD, WAIT/non-directional, and closed/cancelled
+    records are also excluded. Existing queue de-duplication prevents duplicate orders.
     """
     if not MT5_AUTO_TRADING or not AUTO_ENTRY_ENABLED:
         return []
@@ -491,7 +491,9 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
             continue
         if str(row.interval or "").strip().lower() in {"1m", "1min", "m1"}:
             continue
-        source = str(row.source or "Signals")[:40]
+        source = _normalize_history_source(str(row.source or "Signals")[:40])
+        if source != CONSENSUS_AUTOTRADE_SOURCE:
+            continue
         if _autotrade_source_excluded(source):
             continue
         try:
@@ -1342,6 +1344,9 @@ def _normalize_history_source(value: str | None) -> str:
     return aliases.get(raw.lower(), raw)[:40]
 
 BLOCKED_SIGNAL_SOURCES = frozenset({"Signal Lab", "Signals", "AlgoTrade"})
+CONSENSUS_AUTOTRADE_SOURCES = frozenset({"Classic Trade", "SNR", "Auto Trend Line", "Technical Analysis"})
+CONSENSUS_REQUIRED_CONFIRMATIONS = 3
+CONSENSUS_AUTOTRADE_SOURCE = "Consensus"
 
 def _signal_source_blocked(value: str | None) -> bool:
     return _normalize_history_source(value) in BLOCKED_SIGNAL_SOURCES
@@ -4950,6 +4955,11 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     """
     if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
         return None
+    normalized_source = _normalize_history_source(source)
+    if normalized_source != CONSENSUS_AUTOTRADE_SOURCE:
+        print(f"[AUTO TRADE QUEUE] GLOBAL CONSENSUS BLOCKED source={source} market={symbol} tf={interval} dir={direction}")
+        return None
+    source = CONSENSUS_AUTOTRADE_SOURCE
     # M1 is analysis/history-only. Never allow 1-minute signals into AutoTrade.
     if str(interval).strip().lower() in {"1min", "1m", "m1"}:
         print(f"[AUTO TRADE QUEUE] M1 BLOCKED market={symbol} source={source} tf={interval}")
@@ -5093,95 +5103,85 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 pass
         return candidates, live_by_tf
 
-    def _build_consensus(candidates: list[dict[str, Any]], interval: str, candle_time: str) -> dict[str, Any] | None:
-        """Collapse all module outputs into ONE directional decision per XAU timeframe/candle.
+    def _build_consensus(validated: list[dict[str, Any]], interval: str, candle_time: str) -> dict[str, Any]:
+        """Final AutoTrade gate: at least 3 of 4 core modules must agree.
 
-        Signal Lab and Signals are aliases of the same master output and therefore count as
-        one strategy family. A trade is emitted only when independent families agree; ties,
-        conflicts and weak consensus become WAIT. This is the final AutoTrade gate.
+        Only candidates that already passed their module logic, AI/market validation,
+        and execution geometry/risk checks reach this function. Missing/WAIT/failed
+        modules count as WAIT and do not contribute to either side.
         """
-        weights = {
-            "Signal Engine": 1.00,
-            "Technical Analysis": 1.00,
-            "Classic Trade": 1.00,
-            "SNR": 1.20,
-            "Auto Trend Line": 1.10,
-            "ICT Signals": 1.40,
-            "AI Smart Analysis": 0.80,
-        }
-        families: dict[str, dict[str, Any]] = {}
-        aliases = {"signal lab": "Signal Engine", "signals": "Signal Engine"}
-        for c in candidates:
-            if str(c.get("interval")) != interval:
-                continue
-            item = c.get("item") or {}
-            direction = str(item.get("signal") or item.get("direction") or "WAIT").upper()
-            if direction not in {"BUY", "SELL"}:
-                continue
-            source = str(c.get("source") or "").strip()
-            family = aliases.get(source.lower(), source)
-            if family not in weights:
-                continue
-            confidence = max(0.0, min(100.0, float(item.get("confidence") or item.get("trend_power") or 0)))
-            # Confidence contributes gradually; no single module can dominate the ensemble.
-            score = weights[family] * (0.55 + 0.45 * confidence / 100.0)
-            bucket = families.setdefault(family, {"BUY": 0.0, "SELL": 0.0, "items": []})
-            bucket[direction] += score
-            bucket["items"].append((direction, item, source, confidence))
+        core_sources = tuple(sorted(CONSENSUS_AUTOTRADE_SOURCES))
+        relevant = [
+            x for x in validated
+            if str(x.get("interval") or "") == interval
+            and str(x.get("candle_time") or "") == str(candle_time)
+            and str(x.get("source") or "") in CONSENSUS_AUTOTRADE_SOURCES
+            and str(x.get("direction") or "").upper() in {"BUY", "SELL"}
+        ]
 
-        if not families:
-            return None
-        totals = {d: 0.0 for d in ("BUY", "SELL")}
-        for f in families.values():
-            totals["BUY"] += f["BUY"]
-            totals["SELL"] += f["SELL"]
-        winner = "BUY" if totals["BUY"] > totals["SELL"] else "SELL" if totals["SELL"] > totals["BUY"] else "WAIT"
-        if winner == "WAIT":
-            return None
-        loser = "SELL" if winner == "BUY" else "BUY"
-        active_total = totals[winner] + totals[loser]
-        agreement = (totals[winner] / active_total) if active_total else 0.0
-        distinct_winner = sum(1 for f in families.values() if f[winner] > 0)
-        min_families = 2  # tradable timeframes: require two independent strategy families
-        # Hard conflict protection: if the opposing side is materially represented, wait.
-        if distinct_winner < min_families or agreement < 0.60 or (active_total and totals[loser] / active_total > 0.35):
-            return None
-        # Choose the strongest representative setup on the winning side for levels.
-        reps=[]
-        for f in families.values():
-            for d,item,source,conf in f["items"]:
-                if d == winner:
-                    reps.append((weights.get(aliases.get(source.lower(), source),1.0) * (0.55+0.45*conf/100), item, source, conf))
-        reps.sort(key=lambda x:x[0], reverse=True)
-        _, representative, rep_source, rep_conf = reps[0]
+        # Defensive de-duplication: one vote per source/timeframe/candle.
+        best_by_source: dict[str, dict[str, Any]] = {}
+        for x in relevant:
+            source = str(x["source"])
+            quality = float(x.get("smart_score") or 0) + float(x.get("confidence") or 0)
+            prev = best_by_source.get(source)
+            prev_quality = (float(prev.get("smart_score") or 0) + float(prev.get("confidence") or 0)) if prev else -1
+            if prev is None or quality > prev_quality:
+                best_by_source[source] = x
+
+        votes = {source: "WAIT" for source in core_sources}
+        for source, x in best_by_source.items():
+            votes[source] = str(x.get("direction") or "WAIT").upper()
+
+        buy_sources = [s for s,d in votes.items() if d == "BUY"]
+        sell_sources = [s for s,d in votes.items() if d == "SELL"]
+        if len(buy_sources) >= CONSENSUS_REQUIRED_CONFIRMATIONS:
+            winner, winner_sources = "BUY", buy_sources
+        elif len(sell_sources) >= CONSENSUS_REQUIRED_CONFIRMATIONS:
+            winner, winner_sources = "SELL", sell_sources
+        else:
+            return {
+                "passed": False, "signal": "WAIT", "votes": votes,
+                "buy_count": len(buy_sources), "sell_count": len(sell_sources),
+                "required": CONSENSUS_REQUIRED_CONFIRMATIONS,
+                "reason": f"GLOBAL_CONSENSUS_BLOCKED: BUY={len(buy_sources)}/4 SELL={len(sell_sources)}/4; required 3/4.",
+            }
+
+        agreeing = [best_by_source[s] for s in winner_sources if s in best_by_source]
+        agreeing.sort(
+            key=lambda x: (float(x.get("smart_score") or 0), float(x.get("confidence") or 0)),
+            reverse=True
+        )
+        representative = agreeing[0]
+        avg_conf = round(sum(float(x.get("confidence") or 0) for x in agreeing) / max(1, len(agreeing)), 1)
+        avg_smart = round(sum(float(x.get("smart_score") or 0) for x in agreeing) / max(1, len(agreeing)), 1)
         return {
+            "passed": True,
             "signal": winner,
-            "confidence": round(min(99.0, max(0.0, 50.0 + 50.0 * agreement)), 1),
-            "entry": representative.get("entry"),
-            "stop_loss": representative.get("stop_loss"),
-            "take_profit": representative.get("take_profit") or [],
-            "reason": f"Consensus {winner}: {distinct_winner} independent strategy families agreed; agreement {agreement*100:.1f}%.",
-            "consensus_agreement": round(agreement*100, 1),
-            "consensus_families": sorted(families.keys()),
-            "consensus_votes": {f:{"BUY":round(v["BUY"],3),"SELL":round(v["SELL"],3)} for f,v in families.items()},
-            "consensus_source": rep_source,
-            "consensus_source_confidence": rep_conf,
-            "candle_time": candle_time,
-            "strategy_engine": "SignalX Consensus Engine V3",
-            "strategy_version": "V3",
-            "decision_state": "CONFIRMED",
-            "strategy_chain": _strategy_chain(interval),
+            "votes": votes,
+            "buy_count": len(buy_sources),
+            "sell_count": len(sell_sources),
+            "required": CONSENSUS_REQUIRED_CONFIRMATIONS,
+            "confirmed_sources": winner_sources,
+            "confirmation_count": len(winner_sources),
+            "agreement_pct": round(len(winner_sources) / 4 * 100, 1),
+            "confidence": avg_conf,
+            "smart_score": avg_smart,
+            "representative": representative,
+            "reason": f"GLOBAL CONSENSUS {winner}: {len(winner_sources)}/4 core modules agreed ({', '.join(winner_sources)}).",
         }
 
     async def process_symbol(key: str):
         nonlocal created_history, queued, module_signal_count
         candidates, live_by_tf = await load_symbol_candidates(key)
         print(f"[SIGNAL FLOW] candidates={len(candidates)} market={key}")
+        consensus_ready: list[dict[str, Any]] = []
 
-        # Persist AND queue every confirmed module signal independently.
-        # M1 remains excluded; Book + OpenAI is excluded by the common queue guard.
-        # Each module gets its own History row and its own AutoTrade queue key.
-        # This intentionally does NOT collapse module signals into a single consensus order.
+        # Persist each module independently in History. MT5 execution is no longer
+        # performed here; only the 3-of-4 global consensus created after this loop
+        # can enter the MT5 queue.
+        # Core modules keep separate History rows. ICT/AI Smart may remain analytical
+        # History sources, but they never count toward or bypass the 3-of-4 MT5 gate.
         for c in candidates:
             tf = str(c.get("interval") or "").strip().lower()
             item = dict(c.get("item") or {})
@@ -5295,18 +5295,32 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                              "risk_reward":None,"live_levels_verified":True,"levels_repaired_from_live_chart":repaired})
                 direction_history = "WAIT"
             else:
+                is_core_consensus_source = source in CONSENSUS_AUTOTRADE_SOURCES
                 item.update({"entry":entry,"stop_loss":sl,"take_profit":tp,"live_levels_verified":True,
-                             "levels_repaired_from_live_chart":repaired,"auto_trade_eligible":True,
-                             "execution_state":"READY","execution_reason":"ALL_GATES_PASSED",
+                             "levels_repaired_from_live_chart":repaired,"auto_trade_eligible":False,
+                             "consensus_eligible":bool(is_core_consensus_source),
+                             "consensus_required":CONSENSUS_REQUIRED_CONFIRMATIONS,
+                             "execution_state":"CONSENSUS_READY" if is_core_consensus_source else "ANALYSIS_ONLY",
+                             "execution_reason":"WAITING_FOR_GLOBAL_3_OF_4_CONSENSUS" if is_core_consensus_source else "SOURCE_NOT_IN_AUTOTRADE_CONSENSUS",
                              "risk_reward":gate.get("r_multiple")})
                 direction_history = direction
+                if is_core_consensus_source:
+                    consensus_ready.append({
+                        "source": source, "interval": tf, "candle_time": candle_time,
+                        "direction": direction, "entry": entry, "sl": sl, "tp": tp,
+                        "confidence": conf, "smart_score": float(smart.get("score") or 0),
+                        "item": item,
+                    })
 
             payload = {"source":source,"module_signal":item,"symbol":key,"interval":tf,"candle_time":candle_time,
                        "live_generated":True,"execution_gate":{
                            "state":gate.get("state"),"reason":gate.get("reason"),"geometry_checked":True,
-                           "target_checked":True,"risk_checked":not target_reached,"auto_trade":bool(gate.get("ok")),
+                           "target_checked":True,"risk_checked":not target_reached,"auto_trade":False,
                            "risk_reward":gate.get("r_multiple"),"risk":gate.get("risk"),"max_risk":gate.get("max_risk"),
-                           "levels_repaired":repaired},"auto_trade":{"queued":False}}
+                           "levels_repaired":repaired},
+                       "consensus":{"required":CONSENSUS_REQUIRED_CONFIRMATIONS,"core_sources":sorted(CONSENSUS_AUTOTRADE_SOURCES),
+                                    "eligible":bool(source in CONSENSUS_AUTOTRADE_SOURCES)},
+                       "auto_trade":{"queued":False,"mode":"GLOBAL_CONSENSUS_3_OF_4"}}
             recent = session.scalars(select(SignalHistory).where(
                 SignalHistory.user_id == user.id, SignalHistory.symbol == key,
                 SignalHistory.interval == tf, SignalHistory.candle_time == candle_time,
@@ -5325,8 +5339,9 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 session.add(history_row)
                 created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction_history,
                                         "confidence":conf,"module_history":True,
-                                        "auto_trade_eligible":bool(gate.get("ok")),
-                                        "execution_state":gate.get("state"),"risk_reward":gate.get("r_multiple")})
+                                        "auto_trade_eligible":False,
+                                        "consensus_eligible":bool(source in CONSENSUS_AUTOTRADE_SOURCES),
+                                        "execution_state":item.get("execution_state"),"risk_reward":gate.get("r_multiple")})
                 print(f"[SIGNAL HISTORY] MODULE RECORDED source={source} market={key} tf={tf} dir={direction_history} state={gate.get('state')}")
             elif str(recent.status or "ACTIVE").upper() in {"ACTIVE","TP1 HIT","OPEN"} and str(recent.outcome or "OPEN").upper() in {"OPEN","TP1 HIT"}:
                 recent.direction = direction_history
@@ -5335,36 +5350,140 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 recent.payload = json.dumps(payload, ensure_ascii=False, default=str)
                 _history_sync_row(recent, payload)
 
-            order = None
-            if direction in {"BUY", "SELL"} and tp:
-                order = _queue_autotrade_order(
-                    symbol=key, source=source, interval=tf, direction=direction,
-                    entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
-                    confidence=conf, candle_time=candle_time,
+            # No individual module may queue an order here. The only MT5 path is
+            # the server-created Consensus row/order below.
+
+        # Evaluate one global 3-of-4 decision per timeframe/current candle.
+        for tf in ("5min", "15min", "30min", "1h", "4h", "1day"):
+            candles = live_by_tf.get(tf, ([], "error", None))[0]
+            if len(candles) < 40:
+                continue
+            candle_time = _normalize_history_candle_time(candles[-1].get("time"))
+            consensus = _build_consensus(consensus_ready, tf, candle_time)
+            if not consensus.get("passed"):
+                print(f"[GLOBAL CONSENSUS] BLOCKED market={key} tf={tf} candle={candle_time} votes={consensus.get('votes')} reason={consensus.get('reason')}")
+                continue
+
+            winner = str(consensus["signal"]).upper()
+            rep = dict(consensus["representative"])
+            consensus_item = dict(rep.get("item") or {})
+            consensus_item.update({
+                "signal": winner,
+                "entry": rep.get("entry"),
+                "stop_loss": rep.get("sl"),
+                "take_profit": list(rep.get("tp") or []),
+                "confidence": consensus.get("confidence"),
+                "consensus_votes": consensus.get("votes"),
+                "consensus_sources": consensus.get("confirmed_sources"),
+                "consensus_count": consensus.get("confirmation_count"),
+                "consensus_required": CONSENSUS_REQUIRED_CONFIRMATIONS,
+                "consensus_agreement_pct": consensus.get("agreement_pct"),
+                "strategy_engine": "SignalX Global Consensus 3-of-4",
+                "strategy_version": "GC-3OF4-V1",
+                "reason": consensus.get("reason"),
+            })
+            final_gate = _execution_gate(consensus_item, winner, candles)
+            if not final_gate.get("ok"):
+                print(f"[GLOBAL CONSENSUS] EXECUTION BLOCKED market={key} tf={tf} dir={winner} reason={final_gate.get('reason')}")
+                continue
+
+            entry = final_gate.get("entry")
+            sl = final_gate.get("sl")
+            tp = list(final_gate.get("tp") or [])
+            consensus_conf = float(consensus.get("confidence") or 0)
+            consensus_payload = {
+                "source": CONSENSUS_AUTOTRADE_SOURCE,
+                "symbol": key, "interval": tf, "candle_time": candle_time,
+                "live_generated": True,
+                "signal": {"direction": winner, "confidence": consensus_conf},
+                "setup": {"entry": entry, "stop_loss": sl, "take_profit": tp},
+                "consensus": {
+                    "mode": "GLOBAL_3_OF_4",
+                    "required": CONSENSUS_REQUIRED_CONFIRMATIONS,
+                    "core_sources": sorted(CONSENSUS_AUTOTRADE_SOURCES),
+                    "votes": consensus.get("votes"),
+                    "confirmed_sources": consensus.get("confirmed_sources"),
+                    "confirmation_count": consensus.get("confirmation_count"),
+                    "agreement_pct": consensus.get("agreement_pct"),
+                    "representative_source": rep.get("source"),
+                    "average_ai_market_score": consensus.get("smart_score"),
+                    "reason": consensus.get("reason"),
+                },
+                "execution_gate": {
+                    "state": final_gate.get("state"), "reason": final_gate.get("reason"),
+                    "geometry_checked": True, "target_checked": True, "risk_checked": True,
+                    "auto_trade": True, "risk_reward": final_gate.get("r_multiple"),
+                    "risk": final_gate.get("risk"), "max_risk": final_gate.get("max_risk"),
+                },
+                "auto_trade": {"queued": False, "mode": "GLOBAL_CONSENSUS_3_OF_4"},
+            }
+
+            q = select(SignalHistory).where(
+                SignalHistory.user_id == user.id,
+                SignalHistory.symbol == key,
+                SignalHistory.interval == tf,
+                SignalHistory.candle_time == candle_time,
+                SignalHistory.source == CONSENSUS_AUTOTRADE_SOURCE,
+            ).order_by(SignalHistory.id.desc())
+            consensus_row = session.scalar(q)
+            if consensus_row is None:
+                consensus_row = SignalHistory(
+                    user_id=user.id, symbol=key, interval=tf, direction=winner,
+                    headline=f"Consensus {winner} · {consensus.get('confirmation_count')}/4 · {consensus_conf:.1f}%",
+                    price=float(entry or 0), payload=json.dumps(consensus_payload, ensure_ascii=False, default=str),
+                    outcome="OPEN", status="ACTIVE", created_at=now,
+                    source=CONSENSUS_AUTOTRADE_SOURCE, candle_time=candle_time,
                 )
+                _history_sync_row(consensus_row, consensus_payload)
+                session.add(consensus_row)
+                created_history.append({
+                    "source": CONSENSUS_AUTOTRADE_SOURCE, "symbol": key, "interval": tf,
+                    "direction": winner, "confidence": consensus_conf,
+                    "consensus": True, "confirmation_count": consensus.get("confirmation_count"),
+                    "confirmed_sources": consensus.get("confirmed_sources"),
+                    "auto_trade_eligible": True, "execution_state": "CONSENSUS_READY",
+                    "risk_reward": final_gate.get("r_multiple"),
+                })
+            elif str(consensus_row.status or "ACTIVE").upper() in {"ACTIVE", "TP1 HIT", "OPEN"}:
+                consensus_row.direction = winner
+                consensus_row.price = float(entry or 0)
+                consensus_row.headline = f"Consensus {winner} · {consensus.get('confirmation_count')}/4 · {consensus_conf:.1f}%"
+                consensus_row.payload = json.dumps(consensus_payload, ensure_ascii=False, default=str)
+                _history_sync_row(consensus_row, consensus_payload)
+
+            existing_queue_ids = {str(q.get("id")) for q in MT5_ORDER_QUEUE}
+            order = _queue_autotrade_order(
+                symbol=key, source=CONSENSUS_AUTOTRADE_SOURCE, interval=tf, direction=winner,
+                entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
+                confidence=consensus_conf, candle_time=candle_time,
+            )
+            is_new_order = order is not None and str(order.get("id")) not in existing_queue_ids
             if order is not None:
-                payload["auto_trade"]["queued"] = True
-                target_row = recent if recent is not None else history_row
-                if target_row is not None:
-                    target_row.payload = json.dumps(payload, ensure_ascii=False, default=str)
+                consensus_payload["auto_trade"]["queued"] = True
+                consensus_payload["auto_trade"]["order_id"] = order.get("id")
+                consensus_row.payload = json.dumps(consensus_payload, ensure_ascii=False, default=str)
+                _history_sync_row(consensus_row, consensus_payload)
+            if is_new_order:
                 queued.append(order)
                 module_signal_count += 1
-                print(f"[AUTO TRADE QUEUE] MODULE QUEUED source={source} market={key} tf={tf} dir={direction} candle={candle_time}")
+                print(f"[GLOBAL CONSENSUS] QUEUED market={key} tf={tf} dir={winner} confirmations={consensus.get('confirmation_count')}/4 sources={consensus.get('confirmed_sources')}")
 
     await asyncio.gather(*(process_symbol(k) for k in symbols))
-    if created_history:
-        session.commit()
+    session.commit()
     rows = await refresh_signal_outcomes(session, user.id, limit=80)
     return {
         "enabled": True,
         "symbols": symbols,
         "count": len(created_history),
         "queued": len(queued),
-        "module_autotrade_queued": module_signal_count,
+        "module_autotrade_queued": 0,
+        "consensus_autotrade_queued": module_signal_count,
         "history_count": len(rows),
         "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
-        "forward_mode": "EVERY CONFIRMED MODULE SIGNAL EXCEPT M1 AND BOOK + OPENAI",
-        "excluded_sources": ["Book + OpenAI", "M1 / 1min / 1m"],
+        "forward_mode": "GLOBAL CONSENSUS: at least 3 of 4 core modules must agree on the same timeframe/candle",
+        "consensus_sources": sorted(CONSENSUS_AUTOTRADE_SOURCES),
+        "consensus_required": CONSENSUS_REQUIRED_CONFIRMATIONS,
+        "excluded_sources": ["Signal Lab", "Signals", "AlgoTrade", "individual module direct MT5", "M1 / 1min / 1m"],
         "items": created_history,
         "user_id": int(user.id),
     }
@@ -5640,6 +5759,8 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     user = current_user(authorization, session)
     direction = str(body.direction or "WAIT").upper()
     source = _normalize_history_source(body.source or "Signals")
+    if source == CONSENSUS_AUTOTRADE_SOURCE:
+        return {"saved": False, "blocked": True, "reason": "CONSENSUS_SERVER_ONLY", "source": source}
     if _signal_source_blocked(source):
         return {"saved": False, "blocked": True, "reason": "SOURCE_BLOCKED", "source": source}
     interval = validate_interval(body.interval)
@@ -5677,6 +5798,10 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         "target_state": "TARGET_REACHED" if target_reached else "ACTIVE", "candle_time": live_candle_time,
         "live_levels_verified": True, "levels_repaired_from_live_chart": bool(repaired),
         "setup_strength": setup_strength, "setup_grade": setup_grade, "strong_setup": strong_setup,
+        "consensus_required": CONSENSUS_REQUIRED_CONFIRMATIONS,
+        "consensus_eligible": bool(source in CONSENSUS_AUTOTRADE_SOURCES),
+        "auto_trade": {"queued": False, "mode": "GLOBAL_CONSENSUS_3_OF_4",
+                       "reason": "WAITING_FOR_GLOBAL_CONSENSUS" if source in CONSENSUS_AUTOTRADE_SOURCES else "SOURCE_NOT_IN_AUTOTRADE_CONSENSUS"},
     })
     snapshot=_history_snapshot_payload(payload,source,symbol,interval,direction,body.confidence,entry,sl,tp,live_candle_time)
     payload["history_snapshot"]=snapshot
@@ -5706,13 +5831,8 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         _history_sync_row(existing, payload)
         session.commit()
 
+    # Client/module History writes are never allowed to bypass the global 3-of-4 gate.
     order = None
-    if direction in {"BUY", "SELL"} and tp and not target_reached:
-        order = _queue_autotrade_order(
-            symbol=symbol, source=source, interval=interval, direction=direction,
-            entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
-            confidence=body.confidence, candle_time=live_candle_time,
-        )
     if existing is not None:
         return {"saved": False, "updated": str(existing.status or "ACTIVE").upper() in {"ACTIVE", "TP1 HIT", "OPEN"}, "duplicate": True, "id": existing.id, "queued": bool(order),
                 "source": source, "symbol": symbol, "entry": existing.price, "stop_loss": existing.stop_loss,
