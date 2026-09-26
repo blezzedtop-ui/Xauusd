@@ -9,6 +9,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
-RUN python -m py_compile main.py book_openai_engine.py mt5_account_gateway.py
+RUN python -m py_compile main.py book_openai_engine.py mt5_account_gateway.py algotrade_strategy.py
 EXPOSE 8000
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}"]
