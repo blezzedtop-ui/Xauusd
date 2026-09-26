@@ -5037,42 +5037,9 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 live_by_tf[tf]=([],"error",None)
         await asyncio.gather(*(load_tf(tf) for tf in intervals))
 
-        # Signal Lab + Signals are the master strategy output for every timeframe.
-        advanced=await build_advanced_signals(key, news_blocked=False)
-        for tf in intervals:
-            item=(advanced.get("timeframes") or {}).get(tf) or {}
-            if item.get("signal") in {"BUY","SELL"}:
-                candidates.append({"source":"Signal Lab","interval":tf,"item":item,"response":advanced})
-                candidates.append({"source":"Signals","interval":tf,"item":item,"response":advanced})
-
-        # AlgoTrade is an additive strategy family.  It uses the same live candle
-        # pipeline but remains isolated from the existing modules.  When its full
-        # MTF gate is confirmed, its per-timeframe execution candidates are added
-        # to the same consensus/History/AutoTrade pipeline. M1 is intentionally
-        # absent from AlgoTrade and is also blocked by _queue_autotrade_order().
-        try:
-            from algotrade_strategy import build_algotrade
-            algo = await build_algotrade(key)
-            for tf, item in (algo.get("execution_candidates") or {}).items():
-                if tf not in intervals:
-                    continue
-                if str(item.get("signal") or "WAIT").upper() not in {"BUY", "SELL"}:
-                    continue
-                candidates.append({
-                    "source": "AlgoTrade",
-                    "interval": tf,
-                    "item": item,
-                    "response": {
-                        "strategy": algo.get("strategy"),
-                        "version": algo.get("version"),
-                        "score": algo.get("score"),
-                        "checks": algo.get("checks"),
-                        "reason": algo.get("reason"),
-                        "candle_time": item.get("candle_time"),
-                    },
-                })
-        except Exception as exc:
-            print(f"[ALGOTRADE] candidate build error market={key}: {type(exc).__name__}: {exc}")
+        # Signal Lab, Signals and AlgoTrade are intentionally disabled as signal
+        # sources. Their dedicated analysis endpoints may still be viewed, but the
+        # background worker does not evaluate or enqueue them.
 
         # All remaining modules are also evaluated on ALL seven timeframes.
         for tf in intervals:
