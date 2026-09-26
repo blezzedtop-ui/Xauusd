@@ -2265,6 +2265,146 @@ def timeframe_trend(candles: list[dict[str, Any]]) -> dict[str, Any]:
     return {"trend": direction, "price": round(current, 4), "rsi": round(r, 2), "ema_fast_proxy": round(fast, 4), "ema_slow_proxy": round(slow, 4)}
 
 
+MTF_AUTOTRADE_WEIGHTS = {"1h":40, "30min":25, "15min":20, "5min":15}
+MTF_AUTOTRADE_STATE: dict[str, dict[str, Any]] = {}
+MTF_AUTOTRADE_STATE_TTL_SECONDS = 180
+
+def _weighted_mtf_decision(timeframes: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Hierarchical weighted MTF model used as the global AutoTrade direction filter.
+
+    H1 sets the primary direction, M30 provides context, M15 is setup/pullback,
+    and M5 is the final entry trigger. M1 never participates in AutoTrade.
+    """
+    detail={}
+    buy_weight=sell_weight=neutral_weight=0
+    for tf,weight in MTF_AUTOTRADE_WEIGHTS.items():
+        trend=str((timeframes.get(tf) or {}).get("trend") or "UNAVAILABLE").upper()
+        if trend=="BULLISH":
+            buy_weight += weight
+            signed=weight
+        elif trend=="BEARISH":
+            sell_weight += weight
+            signed=-weight
+        else:
+            neutral_weight += weight
+            signed=0
+        detail[tf]={"trend":trend,"weight":weight,"signed_points":signed}
+
+    signed_score=buy_weight-sell_weight
+    if signed_score>=60:
+        classification="STRONG BULLISH"
+    elif signed_score>=35:
+        classification="BULLISH"
+    elif signed_score>=20:
+        classification="BULLISH BIAS"
+    elif signed_score<=-60:
+        classification="STRONG BEARISH"
+    elif signed_score<=-35:
+        classification="BEARISH"
+    elif signed_score<=-20:
+        classification="BEARISH BIAS"
+    else:
+        classification="MIXED"
+
+    weighted_direction="BUY" if buy_weight>=60 and signed_score>=20 else "SELL" if sell_weight>=60 and signed_score<=-20 else "WAIT"
+    h1_trend=detail["1h"]["trend"]
+    m30_trend=detail["30min"]["trend"]
+    m15_trend=detail["15min"]["trend"]
+    m5_trend=detail["5min"]["trend"]
+    expected_h1="BULLISH" if weighted_direction=="BUY" else "BEARISH" if weighted_direction=="SELL" else None
+    h1_match=bool(expected_h1 and h1_trend==expected_h1)
+    m5_match=bool(expected_h1 and m5_trend==expected_h1)
+
+    if weighted_direction=="BUY":
+        if m15_trend=="BEARISH" and m5_trend=="BULLISH":
+            context="M15_PULLBACK_RECOVERY"
+        elif m15_trend=="BEARISH":
+            context="M15_PULLBACK_ACTIVE"
+        elif m30_trend=="BEARISH" and m5_trend=="BULLISH":
+            context="M30_PULLBACK_RECOVERY"
+        else:
+            context="BULLISH_ALIGNMENT"
+    elif weighted_direction=="SELL":
+        if m15_trend=="BULLISH" and m5_trend=="BEARISH":
+            context="M15_PULLBACK_RECOVERY"
+        elif m15_trend=="BULLISH":
+            context="M15_PULLBACK_ACTIVE"
+        elif m30_trend=="BULLISH" and m5_trend=="BEARISH":
+            context="M30_PULLBACK_RECOVERY"
+        else:
+            context="BEARISH_ALIGNMENT"
+    else:
+        context="MIXED_TIMEFRAMES"
+
+    if weighted_direction=="WAIT":
+        blocked_reason="WEIGHTED_SCORE_NOT_STRONG_ENOUGH"
+    elif not h1_match:
+        blocked_reason="H1_DIRECTION_CONFLICT"
+    elif not m5_match:
+        blocked_reason=f"WAIT_FOR_M5_{weighted_direction}_TRIGGER"
+    else:
+        blocked_reason=None
+
+    autotrade_direction=weighted_direction if blocked_reason is None else "WAIT"
+    return {
+        "weights":dict(MTF_AUTOTRADE_WEIGHTS),
+        "detail":detail,
+        "buy_weight":buy_weight,
+        "sell_weight":sell_weight,
+        "neutral_weight":neutral_weight,
+        "signed_score":signed_score,
+        "classification":classification,
+        "weighted_direction":weighted_direction,
+        "autotrade_direction":autotrade_direction,
+        "autotrade_ready":autotrade_direction in {"BUY","SELL"},
+        "h1_match":h1_match,
+        "m5_trigger_match":m5_match,
+        "context":context,
+        "blocked_reason":blocked_reason,
+        "m1_autotrade_blocked":True,
+    }
+
+def _update_mtf_autotrade_state(symbol: str, timeframes: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    key=clean_symbol(symbol)
+    decision=_weighted_mtf_decision(timeframes)
+    MTF_AUTOTRADE_STATE[key]={
+        "updated_at_epoch":datetime.now(timezone.utc).timestamp(),
+        "updated_at":datetime.now(timezone.utc).isoformat(),
+        "decision":decision,
+    }
+    return decision
+
+def _mtf_autotrade_gate(symbol: str, direction: str) -> dict[str, Any]:
+    key=clean_symbol(symbol)
+    state=MTF_AUTOTRADE_STATE.get(key)
+    if not state:
+        return {"ok":False,"reason":"MTF_STATE_UNAVAILABLE","direction":"WAIT"}
+    age=max(0.0,datetime.now(timezone.utc).timestamp()-float(state.get("updated_at_epoch") or 0))
+    if age>MTF_AUTOTRADE_STATE_TTL_SECONDS:
+        return {"ok":False,"reason":"MTF_STATE_STALE","direction":"WAIT","age_seconds":round(age,1)}
+    d=state.get("decision") or {}
+    wanted=str(direction or "").upper()
+    allowed=str(d.get("autotrade_direction") or "WAIT").upper()
+    if wanted not in {"BUY","SELL"}:
+        return {"ok":False,"reason":"INVALID_DIRECTION","direction":allowed}
+    if allowed!=wanted:
+        return {
+            "ok":False,
+            "reason":d.get("blocked_reason") or f"MTF_DIRECTION_{allowed}_NOT_{wanted}",
+            "direction":allowed,
+            "weighted_direction":d.get("weighted_direction"),
+            "buy_weight":d.get("buy_weight"),
+            "sell_weight":d.get("sell_weight"),
+            "context":d.get("context"),
+        }
+    return {
+        "ok":True,"reason":"WEIGHTED_MTF_PASSED","direction":allowed,
+        "buy_weight":d.get("buy_weight"),"sell_weight":d.get("sell_weight"),
+        "signed_score":d.get("signed_score"),"classification":d.get("classification"),
+        "context":d.get("context"),"detail":d.get("detail"),"age_seconds":round(age,1),
+    }
+
+
 async def multi_timeframe(symbol: str) -> dict[str, Any]:
     key=clean_symbol(symbol)
     now=asyncio.get_running_loop().time()
@@ -2282,8 +2422,19 @@ async def multi_timeframe(symbol: str) -> dict[str, Any]:
         except Exception as exc:
             errors[tf]=f"{type(exc).__name__}: {exc}"
     dirs=[x["trend"] for x in out.values() if x.get("trend")]
-    score=dirs.count("BULLISH")-dirs.count("BEARISH")
-    result={"timeframes":out,"overall":"BULLISH" if score>=2 else "BEARISH" if score<=-2 else "MIXED","bullish_count":dirs.count("BULLISH"),"bearish_count":dirs.count("BEARISH"),"available_count":len(out),"errors":errors,"mode":"tradingview"}
+    weighted=_update_mtf_autotrade_state(key,out)
+    result={
+        "timeframes":out,
+        "overall":weighted.get("classification") or "MIXED",
+        "bullish_count":dirs.count("BULLISH"),
+        "bearish_count":dirs.count("BEARISH"),
+        "available_count":len(out),
+        "errors":errors,
+        "mode":"tradingview",
+        "weighted":weighted,
+        "autotrade_direction":weighted.get("autotrade_direction"),
+        "m1_autotrade_blocked":True,
+    }
     MTF_CACHE[key]=(now,result)
     return result
 
@@ -6270,6 +6421,14 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     if str(interval).strip().lower() in {"1min", "1m", "m1"}:
         print(f"[AUTO TRADE QUEUE] M1 BLOCKED market={symbol} source={source} tf={interval}")
         return None
+
+    # Global proportional Multi-Timeframe safety gate.
+    # Every AutoTrade source must agree with weighted H1/M30/M15/M5 direction,
+    # with H1 as primary direction and M5 as the final execution trigger.
+    mtf_gate=_mtf_autotrade_gate(symbol,direction)
+    if not mtf_gate.get("ok"):
+        print(f"[AUTO TRADE QUEUE] WEIGHTED MTF BLOCKED market={symbol} source={source} tf={interval} dir={direction} reason={mtf_gate.get('reason')} allowed={mtf_gate.get('direction')} BUY={mtf_gate.get('buy_weight')} SELL={mtf_gate.get('sell_weight')} context={mtf_gate.get('context')}")
+        return None
     if source == ICT_AUTOTRADE_SOURCE:
         try:
             ict_conf = float(confidence or 0)
@@ -6371,6 +6530,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
         "claimed": False,
         "status": "QUEUED",
         "queue_key": [market, source.strip(), interval, str(candle_time), direction.upper()],
+        "weighted_mtf": mtf_gate,
     }
     MT5_ORDER_ATTEMPTS[order_id] = 0
     MT5_ORDER_QUEUE.append(order)
@@ -6418,6 +6578,20 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             except Exception:
                 live_by_tf[tf]=([],"error",None)
         await asyncio.gather(*(load_tf(tf) for tf in intervals))
+
+        # Global weighted MTF direction filter for every AutoTrade source.
+        # H1=40%, M30=25%, M15=20%, M5=15%; M1 never participates.
+        try:
+            mtf_frames={}
+            for mtf_tf in MTF_AUTOTRADE_WEIGHTS:
+                mtf_candles=live_by_tf.get(mtf_tf,([],"",None))[0]
+                if len(mtf_candles)>=2:
+                    mtf_frames[mtf_tf]=timeframe_trend(mtf_candles)
+            mtf_decision=_update_mtf_autotrade_state(key,mtf_frames)
+            print(f"[WEIGHTED MTF] market={key} BUY={mtf_decision.get('buy_weight')} SELL={mtf_decision.get('sell_weight')} score={mtf_decision.get('signed_score')} class={mtf_decision.get('classification')} autotrade={mtf_decision.get('autotrade_direction')} context={mtf_decision.get('context')} blocked={mtf_decision.get('blocked_reason')}")
+        except Exception as exc:
+            MTF_AUTOTRADE_STATE.pop(key,None)
+            print(f"[WEIGHTED MTF] market={key} ERROR {type(exc).__name__}: {exc}")
 
         # Signal Lab, Signals and Order Block are independent live strategies.
         gold_news=await _gold_strategy_news_guard()
