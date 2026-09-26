@@ -1341,6 +1341,11 @@ def _normalize_history_source(value: str | None) -> str:
     }
     return aliases.get(raw.lower(), raw)[:40]
 
+BLOCKED_SIGNAL_SOURCES = frozenset({"Signal Lab", "Signals", "AlgoTrade"})
+
+def _signal_source_blocked(value: str | None) -> bool:
+    return _normalize_history_source(value) in BLOCKED_SIGNAL_SOURCES
+
 def history_pip_size(symbol: str) -> float:
     """Return the user-facing pip size for history distance display.
     XAUUSD uses 0.01 price units per pip; major FX pairs use 0.0001.
@@ -1478,17 +1483,40 @@ def calculate_pivot_levels(high: float, low: float, close: float, current: float
 
 
 def build_key_level_signal(candles: list[dict[str, Any]], levels: dict[str, Any], news_blocked: bool = False) -> dict[str, Any]:
+    """High-confluence Pivot/Technical engine.
+
+    A Pivot retest/breakout is only tradable when momentum, EMA trend, candle
+    quality and SNR context agree.  The returned confirmations are consumed by
+    the common timeframe quality gate, so weak/noisy setups remain WAIT.
+    """
     current = candles[-1]
     prev = candles[-2] if len(candles) > 1 else current
-    pivot = levels["pivot"]
-    bias = levels["bias"]
-    average_range = atr(candles)
-    pivot_buffer = max(abs(pivot) * PIVOT_NO_TRADE_PCT, average_range * 0.15)
-    near_pivot = abs(current["close"] - pivot) <= pivot_buffer
+    pivot = float(levels["pivot"])
+    bias = str(levels["bias"])
+    average_range = max(atr(candles), abs(float(current["close"])) * 0.00025)
+    pivot_buffer = max(abs(pivot) * PIVOT_NO_TRADE_PCT, average_range * 0.18)
+    near_pivot = abs(float(current["close"]) - pivot) <= pivot_buffer
+
+    closes=[float(x["close"]) for x in candles]
+    ema20=_ema(closes[-100:],20)
+    ema50=_ema(closes[-150:],50)
+    ema20_prev=_ema(closes[-101:-1],20) if len(closes)>21 else ema20
+    macd=_ema(closes[-140:],12)-_ema(closes[-140:],26)
+    r=float(rsi(candles))
+    body=abs(float(current["close"])-float(current["open"]))
+    rng=max(float(current["high"])-float(current["low"]),1e-9)
+    body_ratio=body/rng
+    bull_candle=float(current["close"])>float(current["open"]) and body_ratio>=0.42
+    bear_candle=float(current["close"])<float(current["open"]) and body_ratio>=0.42
+    regime=_adaptive_regime(candles)
+    zone=_snr_zone_analysis(candles)
+
     result = {
-        "signal": "WAIT", "setup": "NO_TRADE", "entry": None, "stop_loss": None,
-        "take_profit": [], "reason": "No confirmed Pivot retest/breakout setup.",
-        "pivot_filter": bias, "pivot_zone": round(pivot_buffer, 2),
+        "signal":"WAIT","setup":"NO_TRADE","entry":None,"stop_loss":None,
+        "take_profit":[],"reason":"No high-confluence Pivot/Technical setup.",
+        "pivot_filter":bias,"pivot_zone":round(pivot_buffer,2),
+        "confirmations":0,"confidence":0,
+        "technical_checks":{},"strategy_engine":"Technical Confluence Pro V3"
     }
     if news_blocked:
         result.update(setup="NEWS_BLACKOUT", reason="High-impact news window is active; new entries are blocked.")
@@ -1497,37 +1525,66 @@ def build_key_level_signal(candles: list[dict[str, Any]], levels: dict[str, Any]
         result.update(setup="PIVOT_NO_TRADE", reason="Price is inside the Pivot no-trade zone.")
         return result
 
-    bearish_retest = prev["close"] < pivot and current["high"] >= pivot and current["close"] < pivot and current["close"] < current["open"]
-    bullish_retest = prev["close"] > pivot and current["low"] <= pivot and current["close"] > pivot and current["close"] > current["open"]
-    bearish_breakout = current["close"] < levels["s1"] and prev["close"] >= levels["s1"]
-    bullish_breakout = current["close"] > levels["r1"] and prev["close"] <= levels["r1"]
+    bearish_retest = prev["close"] < pivot and current["high"] >= pivot and current["close"] < pivot and bear_candle
+    bullish_retest = prev["close"] > pivot and current["low"] <= pivot and current["close"] > pivot and bull_candle
+    bearish_breakout = current["close"] < levels["s1"]-average_range*0.08 and prev["close"] >= levels["s1"] and bear_candle
+    bullish_breakout = current["close"] > levels["r1"]+average_range*0.08 and prev["close"] <= levels["r1"] and bull_candle
 
-    if bias == "BEARISH" and (bearish_retest or bearish_breakout):
-        entry = float(current["close"])
-        sl = max(float(current["high"]), float(pivot)) * (1 + SL_BUFFER_PCT)
-        # Never place a SELL target above/at entry. If S1 is already behind price,
-        # advance to the next valid support; if no valid support remains, WAIT.
-        sell_targets = [float(levels["s1"]), float(levels["s2"]), float(levels["s3"])]
-        sell_targets = [x for x in sell_targets if x < entry]
-        if len(sell_targets) >= 2:
-            result.update(signal="SELL", setup="PIVOT_RETEST" if bearish_retest else "S1_BREAKOUT", entry=round(entry, 2), stop_loss=round(sl, 2), take_profit=[round(sell_targets[0], 2), round(sell_targets[1], 2)], reason="Bearish Pivot filter confirmed with rejection/breakdown.")
-        else:
-            result.update(setup="TARGET_REACHED", reason="Bearish setup has no valid support target below entry; fresh SELL entry blocked.")
-    elif bias == "BULLISH" and (bullish_retest or bullish_breakout):
-        entry = float(current["close"])
-        sl = min(float(current["low"]), float(pivot)) * (1 - SL_BUFFER_PCT)
-        # Never place a BUY target below/at entry. If R1 is already behind price,
-        # advance to the next valid resistance; if no valid resistance remains, WAIT.
-        buy_targets = [float(levels["r1"]), float(levels["r2"]), float(levels["r3"])]
-        buy_targets = [x for x in buy_targets if x > entry]
-        if len(buy_targets) >= 2:
-            result.update(signal="BUY", setup="PIVOT_RETEST" if bullish_retest else "R1_BREAKOUT", entry=round(entry, 2), stop_loss=round(sl, 2), take_profit=[round(buy_targets[0], 2), round(buy_targets[1], 2)], reason="Bullish Pivot filter confirmed with rejection/breakout.")
-        else:
-            result.update(setup="TARGET_REACHED", reason="Bullish setup has no valid resistance target above entry; fresh BUY entry blocked.")
-    elif bias == "BEARISH" and current["close"] <= levels["s2"]:
-        result.update(setup="TARGET_REACHED", reason="S2/S3 target zone reached; fresh SELL entries are blocked.")
-    elif bias == "BULLISH" and current["close"] >= levels["r2"]:
-        result.update(setup="TARGET_REACHED", reason="R2/R3 target zone reached; fresh BUY entries are blocked.")
+    candidate = "SELL" if bias=="BEARISH" and (bearish_retest or bearish_breakout) else "BUY" if bias=="BULLISH" and (bullish_retest or bullish_breakout) else "WAIT"
+    if candidate=="WAIT":
+        if bias=="BEARISH" and current["close"] <= levels["s2"]:
+            result.update(setup="TARGET_REACHED", reason="S2/S3 target zone reached; fresh SELL entries are blocked.")
+        elif bias=="BULLISH" and current["close"] >= levels["r2"]:
+            result.update(setup="TARGET_REACHED", reason="R2/R3 target zone reached; fresh BUY entries are blocked.")
+        return result
+
+    buy=candidate=="BUY"
+    checks={
+        "pivot_bias": (bias=="BULLISH") if buy else (bias=="BEARISH"),
+        "ema_trend": (ema20>ema50 and ema20>=ema20_prev) if buy else (ema20<ema50 and ema20<=ema20_prev),
+        "rsi_momentum": (52<=r<=72) if buy else (28<=r<=48),
+        "macd_alignment": macd>=0 if buy else macd<=0,
+        "candle_confirmation": bull_candle if buy else bear_candle,
+        "pivot_trigger": (bullish_retest or bullish_breakout) if buy else (bearish_retest or bearish_breakout),
+        "snr_context": (zone["support"]["strength"]>=74) if buy else (zone["resistance"]["strength"]>=74),
+    }
+    confirms=sum(1 for v in checks.values() if v)
+    conflict=(buy and regime["regime"]=="TRENDING_DOWN") or ((not buy) and regime["regime"]=="TRENDING_UP")
+    confidence=int(max(0,min(97,46+confirms*7+(5 if body_ratio>=0.60 else 0)-(18 if conflict else 0))))
+    result.update(confirmations=confirms,confidence=confidence,technical_checks=checks,
+                  ema20=round(ema20,4),ema50=round(ema50,4),macd=round(macd,6),rsi=round(r,2),
+                  market_regime=regime)
+
+    # Require at least five independent confirmations here; the per-timeframe
+    # strategy profile may demand even more (e.g. six on M5).
+    if confirms < 5 or conflict:
+        result.update(setup="CONFLUENCE_WAIT",
+                      reason=f"Technical candidate {candidate} blocked: {confirms}/7 confirmations; regime conflict={conflict}.")
+        return result
+
+    entry=float(current["close"])
+    if candidate=="SELL":
+        sl=max(float(current["high"]),pivot)+average_range*0.12
+        targets=[float(levels["s1"]),float(levels["s2"]),float(levels["s3"])]
+        targets=[x for x in targets if x<entry]
+        if len(targets)<2:
+            result.update(setup="TARGET_REACHED",reason="No two fresh support targets remain below SELL entry.")
+            return result
+        setup="PIVOT_RETEST" if bearish_retest else "S1_BREAKOUT"
+        result.update(signal="SELL",setup=setup,entry=round(entry,2),stop_loss=round(sl,2),
+                      take_profit=[round(targets[0],2),round(targets[1],2)],
+                      reason=f"SELL confirmed by {confirms}/7 Technical confluences.")
+    else:
+        sl=min(float(current["low"]),pivot)-average_range*0.12
+        targets=[float(levels["r1"]),float(levels["r2"]),float(levels["r3"])]
+        targets=[x for x in targets if x>entry]
+        if len(targets)<2:
+            result.update(setup="TARGET_REACHED",reason="No two fresh resistance targets remain above BUY entry.")
+            return result
+        setup="PIVOT_RETEST" if bullish_retest else "R1_BREAKOUT"
+        result.update(signal="BUY",setup=setup,entry=round(entry,2),stop_loss=round(sl,2),
+                      take_profit=[round(targets[0],2),round(targets[1],2)],
+                      reason=f"BUY confirmed by {confirms}/7 Technical confluences.")
     return result
 
 
@@ -2450,68 +2507,100 @@ def _ema(values: list[float], period: int) -> float:
     return e
 
 def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dict[str, Any]:
-    closes = [float(c["close"]) for c in candles]
-    # Base the Classic decision on the last COMPLETED candle; the newest candle may still be forming.
-    cur = candles[-2]; prev = candles[-3]
-    price = closes[-1]
-    r = rsi(candles); a = atr(candles)
-    ema20 = _ema(closes[-80:], 20); ema50 = _ema(closes[-120:], 50)
-    macd_line = _ema(closes[-120:], 12) - _ema(closes[-120:], 26)
-    macd_prev = _ema(closes[-121:-1], 12) - _ema(closes[-121:-1], 26) if len(closes) > 121 else macd_line
-    macd_state = "BULLISH" if macd_line > macd_prev else "BEARISH"
-    body = abs(float(cur["close"])-float(cur["open"]))
-    rng = max(float(cur["high"])-float(cur["low"]), 1e-9)
-    bullish_candle = float(cur["close"]) > float(cur["open"]) and body/rng >= 0.45
-    bearish_candle = float(cur["close"]) < float(cur["open"]) and body/rng >= 0.45
-    prev_body = abs(float(prev["close"])-float(prev["open"]))
-    bullish_engulf = bullish_candle and float(prev["close"]) < float(prev["open"]) and float(cur["open"]) <= float(prev["close"]) and float(cur["close"]) >= float(prev["open"])
-    bearish_engulf = bearish_candle and float(prev["close"]) > float(prev["open"]) and float(cur["open"]) >= float(prev["close"]) and float(cur["close"]) <= float(prev["open"])
-    pattern = "BULLISH ENGULFING" if bullish_engulf else "BEARISH ENGULFING" if bearish_engulf else "BULLISH CANDLE" if bullish_candle else "BEARISH CANDLE" if bearish_candle else "NEUTRAL CANDLE"
-    score = 0; reasons=[]
-    trend = "BULLISH" if ema20 > ema50 and price > ema20 else "BEARISH" if ema20 < ema50 and price < ema20 else "MIXED"
-    if trend == "BULLISH": score += 2; reasons.append("EMA20 > EMA50 / price above EMA20")
-    elif trend == "BEARISH": score -= 2; reasons.append("EMA20 < EMA50 / price below EMA20")
-    if price >= levels["pivot"]: score += 1; reasons.append("price above Pivot")
-    else: score -= 1; reasons.append("price below Pivot")
-    if r >= 55 and r < 70: score += 1; reasons.append("RSI bullish zone")
-    elif r <= 45 and r > 30: score -= 1; reasons.append("RSI bearish zone")
-    if macd_state == "BULLISH": score += 1; reasons.append("MACD bullish")
-    else: score -= 1; reasons.append("MACD bearish")
-    if bullish_engulf: score += 2; reasons.append("bullish engulfing")
-    elif bearish_engulf: score -= 2; reasons.append("bearish engulfing")
-    # Classic S/R context: reward rejection near a level, but avoid chasing extended moves.
-    near_r1 = abs(price-levels["r1"]) <= max(a*0.35, 0.5)
-    near_s1 = abs(price-levels["s1"]) <= max(a*0.35, 0.5)
-    if near_s1 and bullish_candle: score += 2; reasons.append("support rejection")
-    if near_r1 and bearish_candle: score -= 2; reasons.append("resistance rejection")
+    """Classic strategy with closed-candle, momentum, regime and strong-zone confluence."""
+    closed = candles[:-1] if len(candles) >= 50 else candles
+    closes=[float(x["close"]) for x in closed]
+    cur=closed[-1]; prev=closed[-2]
+    live_price=float(candles[-1]["close"])
+    decision_price=float(cur["close"])
+    r=float(rsi(closed)); a=max(atr(closed),live_price*0.00025)
+    ema20=_ema(closes[-100:],20); ema50=_ema(closes[-150:],50)
+    ema20_prev=_ema(closes[-101:-1],20) if len(closes)>21 else ema20
+    macd_line=_ema(closes[-140:],12)-_ema(closes[-140:],26)
+    macd_prev=(_ema(closes[-141:-1],12)-_ema(closes[-141:-1],26)) if len(closes)>30 else macd_line
+    macd_state="BULLISH" if macd_line>macd_prev else "BEARISH"
+
+    body=abs(float(cur["close"])-float(cur["open"]))
+    rng=max(float(cur["high"])-float(cur["low"]),1e-9)
+    body_ratio=body/rng
+    bullish_candle=float(cur["close"])>float(cur["open"]) and body_ratio>=0.45
+    bearish_candle=float(cur["close"])<float(cur["open"]) and body_ratio>=0.45
+    bullish_engulf=bullish_candle and float(prev["close"])<float(prev["open"]) and float(cur["open"])<=float(prev["close"]) and float(cur["close"])>=float(prev["open"])
+    bearish_engulf=bearish_candle and float(prev["close"])>float(prev["open"]) and float(cur["open"])>=float(prev["close"]) and float(cur["close"])<=float(prev["open"])
+    pattern="BULLISH ENGULFING" if bullish_engulf else "BEARISH ENGULFING" if bearish_engulf else "BULLISH CANDLE" if bullish_candle else "BEARISH CANDLE" if bearish_candle else "NEUTRAL CANDLE"
+
     zone=_snr_zone_analysis(candles)
-    near_strong_support=zone["support"]["strength"]>=82 and zone["support"]["distance_pct"]<=0.75
-    near_strong_resistance=zone["resistance"]["strength"]>=82 and zone["resistance"]["distance_pct"]<=0.75
-    if near_strong_support and bullish_candle: score += 2; reasons.append("strong support zone")
-    if near_strong_resistance and bearish_candle: score -= 2; reasons.append("strong resistance zone")
-    direction = "BUY" if score >= 4 else "SELL" if score <= -4 else "WAIT"
-    # Classic entries are only permitted from a strong zone, never in the middle of a range.
-    if direction=="BUY" and not near_strong_support: direction="WAIT"; reasons.append("no strong entry zone")
-    if direction=="SELL" and not near_strong_resistance: direction="WAIT"; reasons.append("no strong entry zone")
-    regime=_adaptive_regime(candles)
-    if direction=="BUY" and regime["regime"]=="TRENDING_DOWN": direction="WAIT"; reasons.append("adaptive regime conflict")
-    if direction=="SELL" and regime["regime"]=="TRENDING_UP": direction="WAIT"; reasons.append("adaptive regime conflict")
-    confidence = min(97, 50 + abs(score)*7 + (5 if (near_strong_support or near_strong_resistance) else 0))
-    strategy_quality=int(max(0,min(100,confidence + (8 if abs(score)>=6 else 0) + (5 if regime["trend_strength"]>=65 else 0))))
-    entry = round(price, 2)
-    if direction == "BUY":
-        sl = round(min(float(cur["low"]), levels["s1"]) - max(a*0.15, 0.1), 2)
-        tp = [round(levels["r1"],2), round(levels["r2"],2)]
-    elif direction == "SELL":
-        sl = round(max(float(cur["high"]), levels["r1"]) + max(a*0.15, 0.1), 2)
-        tp = [round(levels["s1"],2), round(levels["s2"],2)]
-    else: sl=None; tp=[]
-    return {"signal":direction,"confidence":confidence,"score":score,"entry":entry,"stop_loss":sl,"take_profit":tp,
-            "trend":trend,"rsi":round(r,2),"rsi_state":"OVERBOUGHT" if r>=70 else "OVERSOLD" if r<=30 else "NEUTRAL",
+    regime=_adaptive_regime(closed)
+    trend="BULLISH" if ema20>ema50 and ema20>=ema20_prev and decision_price>ema20 else "BEARISH" if ema20<ema50 and ema20<=ema20_prev and decision_price<ema20 else "MIXED"
+    strong_support=zone["support"]["strength"]>=85 and zone["support"]["distance_pct"]<=0.60 and zone["support"]["status"]!="BROKEN"
+    strong_resistance=zone["resistance"]["strength"]>=85 and zone["resistance"]["distance_pct"]<=0.60 and zone["resistance"]["status"]!="BROKEN"
+
+    score=0; reasons=[]
+    if trend=="BULLISH": score+=2; reasons.append("EMA trend bullish")
+    elif trend=="BEARISH": score-=2; reasons.append("EMA trend bearish")
+    if decision_price>=levels["pivot"]: score+=1; reasons.append("above Pivot")
+    else: score-=1; reasons.append("below Pivot")
+    if 52<=r<=70: score+=1; reasons.append("RSI bullish")
+    elif 30<=r<=48: score-=1; reasons.append("RSI bearish")
+    if macd_state=="BULLISH" and macd_line>=0: score+=1; reasons.append("MACD bullish")
+    elif macd_state=="BEARISH" and macd_line<=0: score-=1; reasons.append("MACD bearish")
+    if bullish_engulf: score+=2; reasons.append("bullish engulfing")
+    elif bearish_engulf: score-=2; reasons.append("bearish engulfing")
+    elif bullish_candle: score+=1
+    elif bearish_candle: score-=1
+    if strong_support and bullish_candle: score+=2; reasons.append("strong support rejection")
+    if strong_resistance and bearish_candle: score-=2; reasons.append("strong resistance rejection")
+
+    candidate="BUY" if score>=6 else "SELL" if score<=-6 else "WAIT"
+    if candidate=="BUY":
+        checks={
+            "trend":trend=="BULLISH","pivot":decision_price>=levels["pivot"],"rsi":52<=r<=70,
+            "macd":macd_state=="BULLISH" and macd_line>=0,"candle":bullish_candle,
+            "strong_zone":strong_support,"regime":regime["regime"]!="TRENDING_DOWN"
+        }
+    elif candidate=="SELL":
+        checks={
+            "trend":trend=="BEARISH","pivot":decision_price<levels["pivot"],"rsi":30<=r<=48,
+            "macd":macd_state=="BEARISH" and macd_line<=0,"candle":bearish_candle,
+            "strong_zone":strong_resistance,"regime":regime["regime"]!="TRENDING_UP"
+        }
+    else:
+        checks={}
+    confirms=sum(1 for v in checks.values() if v)
+    direction=candidate
+    if direction=="BUY" and (confirms<5 or not strong_support or not bullish_candle):
+        direction="WAIT"; reasons.append(f"BUY confluence insufficient {confirms}/7")
+    if direction=="SELL" and (confirms<5 or not strong_resistance or not bearish_candle):
+        direction="WAIT"; reasons.append(f"SELL confluence insufficient {confirms}/7")
+
+    confidence=int(max(0,min(97,45+confirms*7+min(10,abs(score)*2)+(4 if (bullish_engulf or bearish_engulf) else 0))))
+    strategy_quality=int(max(0,min(100,confidence+(5 if regime["trend_strength"]>=65 else 0))))
+    entry=round(live_price,2); sl=None; tp=[]
+    if direction=="BUY":
+        sl=round(min(float(cur["low"]),float(zone["support"]["low"]),float(levels["s1"]))-a*0.12,2)
+        targets=[float(zone["resistance"]["mid"]),float(levels["r1"]),float(levels["r2"]),float(levels["r3"])]
+        targets=sorted(set(round(x,2) for x in targets if x>entry))
+        if len(targets)<2:
+            direction="WAIT"; sl=None; reasons.append("no two fresh BUY targets")
+        else: tp=targets[:2]
+    elif direction=="SELL":
+        sl=round(max(float(cur["high"]),float(zone["resistance"]["high"]),float(levels["r1"]))+a*0.12,2)
+        targets=[float(zone["support"]["mid"]),float(levels["s1"]),float(levels["s2"]),float(levels["s3"])]
+        targets=sorted(set(round(x,2) for x in targets if x<entry),reverse=True)
+        if len(targets)<2:
+            direction="WAIT"; sl=None; reasons.append("no two fresh SELL targets")
+        else: tp=targets[:2]
+
+    return {"signal":direction,"confidence":confidence,"score":score,"confirmations":confirms,
+            "entry":entry,"stop_loss":sl,"take_profit":tp,"trend":trend,"rsi":round(r,2),
+            "rsi_state":"OVERBOUGHT" if r>=70 else "OVERSOLD" if r<=30 else "NEUTRAL",
             "ema20":round(ema20,2),"ema50":round(ema50,2),"macd":round(macd_line,5),"macd_state":macd_state,
-            "pattern":pattern,"pivot":levels["pivot"],"support":[levels["s1"],levels["s2"],levels["s3"]],"resistance":[levels["r1"],levels["r2"],levels["r3"]],
-            "reason":"; ".join(reasons),"method":"Classic · Adaptive Trend/Pivot/SNR/Momentum/Candlestick",
-            "market_regime":regime,"strategy_engine":"Adaptive Classic Strategy","strategy_quality":strategy_quality,"decision_state":"CONFIRMED" if direction in {"BUY","SELL"} else "WAIT"}
+            "pattern":pattern,"pivot":levels["pivot"],"support":[levels["s1"],levels["s2"],levels["s3"]],
+            "resistance":[levels["r1"],levels["r2"],levels["r3"]],"classic_checks":checks,
+            "reason":"; ".join(reasons),"method":"Classic Pro V3 · Closed Candle + EMA/Pivot/SNR/Momentum/Pattern/Regime",
+            "market_regime":regime,"strategy_engine":"Adaptive Classic Pro V3","strategy_quality":strategy_quality,
+            "decision_state":"CONFIRMED" if direction in {"BUY","SELL"} else "WAIT"}
+
 
 async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict[str, Any], str | None]:
     """Classic Pivot levels based on the previous completed candle of the selected timeframe.
@@ -3228,12 +3317,32 @@ def _trendline_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
         confirmation="WAIT"
 
     power=int(max(0,min(99,round(
-        45 + min(30,touches*9) + min(12,max(0,(n-p2[0]))/5)
-        + (10 if breakout!="NO" else 0) + (8 if retest=="YES" else 0)
-        - min(20,violations*2)
+        42 + min(32,touches*9) + min(12,max(0,(n-p2[0]))/5)
+        + (10 if breakout!="NO" else 0) + (10 if retest=="YES" else 0)
+        - min(24,violations*3)
     ))))
     trend="BULLISH" if mode=="UP" else "BEARISH" if mode=="DOWN" else "NEUTRAL"
-    sig="BUY" if confirmation in {"CONFIRMED_BUY","BULLISH_HOLD"} and direction=="BULLISH" else "SELL" if confirmation in {"CONFIRMED_SELL","BEARISH_HOLD"} and direction=="BEARISH" else "WAIT"
+
+    # Pro V3 gate: a normal trend-line hold is tradable only on a RECENT third
+    # touch with candle rejection. Breakout entries require breakout + retest.
+    # Two-touch lines remain analytical only.
+    cur_open=float(candles[current_i]["open"])
+    cur_high=float(candles[current_i]["high"])
+    cur_low=float(candles[current_i]["low"])
+    recent_third_touch=touches>=3 and any(i>=n-3 for i in touch_idxs)
+    bullish_rejection=cur_low<=line_cur+tol and cur_close>cur_open and cur_close>=line_cur-tol*0.05
+    bearish_rejection=cur_high>=line_cur-tol and cur_close<cur_open and cur_close<=line_cur+tol*0.05
+    clean_line=violations<=1 and power>=80
+    setup="WAIT"
+    sig="WAIT"
+    if direction=="BULLISH" and mode=="UP" and breakout=="NO" and recent_third_touch and bullish_rejection and clean_line:
+        sig="BUY"; setup="CONFIRMED_THIRD_TOUCH"; confirmation="THIRD_TOUCH_BUY"
+    elif direction=="BEARISH" and mode=="DOWN" and breakout=="NO" and recent_third_touch and bearish_rejection and clean_line:
+        sig="SELL"; setup="CONFIRMED_THIRD_TOUCH"; confirmation="THIRD_TOUCH_SELL"
+    elif direction=="BULLISH" and confirmation=="CONFIRMED_BUY" and breakout=="BULLISH_BREAK" and retest=="YES" and clean_line:
+        sig="BUY"; setup="BREAKOUT_RETEST"
+    elif direction=="BEARISH" and confirmation=="CONFIRMED_SELL" and breakout=="BEARISH_BREAK" and retest=="YES" and clean_line:
+        sig="SELL"; setup="BREAKOUT_RETEST"
 
     swing_highs=[{"index":pt[0],"time":candles[pt[0]].get("time"),"price":round(pt[1],4)} for pt in highs[-20:]]
     swing_lows=[{"index":pt[0],"time":candles[pt[0]].get("time"),"price":round(pt[1],4)} for pt in lows[-20:]]
@@ -3244,57 +3353,124 @@ def _trendline_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
             "swing_highs":swing_highs,"swing_lows":swing_lows,
             "breakout_index":breakout_idx,"retest_index":retest_idx,
             "trend_power":power,"breakout":breakout,"retest":retest,"confirmation":confirmation,
-            "current_line":round(line_cur,4),"signal":sig,
+            "current_line":round(line_cur,4),"signal":sig,"setup":setup,
+            "confirmations":(3 if recent_third_touch else 2)+(1 if clean_line else 0)+(1 if retest=="YES" else 0),
+            "quality_gates":{"third_touch":recent_third_touch,"clean_line":clean_line,"bullish_rejection":bullish_rejection,"bearish_rejection":bearish_rejection},
             "timeframe_candles":n,
-            "reason":f"{('Support' if mode=='UP' else 'Resistance' if mode=='DOWN' else 'Neutral')} trend line · {touches} touch · power {power}% · structure {direction} · {breakout} · retest {retest}."}
+            "reason":f"{('Support' if mode=='UP' else 'Resistance' if mode=='DOWN' else 'Neutral')} trend line · {touches} touch · power {power}% · structure {direction} · {breakout} · retest {retest} · setup {setup}."}
 
 
 def _snr_zone_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
-    current=float(candles[-1]["close"]); highs,lows=_swing_points(candles,2,2); avtr=max(atr(candles), current*0.0004)
-    high_vals=[float(v) for _,v in highs[-24:]] or [float(candles[-1]["high"])]
-    low_vals=[float(v) for _,v in lows[-24:]] or [float(candles[-1]["low"])]
-    width=max(avtr*0.28, current*0.00045)
-    def best_cluster(vals, side):
-        # Score each swing level by repeated touches, recency and separation from price.
+    """Institutional SNR V3: clustered zones + confirmed rejection/breakout + regime filter."""
+    closed=candles[:-1] if len(candles)>=50 else candles
+    current=float(candles[-1]["close"])
+    cur=closed[-1]; prev=closed[-2]
+    highs,lows=_swing_points(closed,2,2)
+    avtr=max(atr(closed),current*0.0004)
+    high_vals=[float(v) for _,v in highs[-30:]] or [float(cur["high"])]
+    low_vals=[float(v) for _,v in lows[-30:]] or [float(cur["low"])]
+    width=max(avtr*0.24,current*0.00040)
+
+    def best_cluster(vals,side):
         candidates=[]
         for level in vals:
             lo,hi=level-width,level+width
             touches=sum(1 for v in vals if lo<=v<=hi)
-            recency=sum(1 for c in candles[-60:] if lo<=float(c["low" if side=="support" else "high"])<=hi)
+            recency=sum(1 for x in closed[-80:] if lo<=float(x["low" if side=="support" else "high"])<=hi)
             distance=abs(current-level)/max(current,1e-9)
-            candidates.append((touches*12+min(recency,10)*3-min(distance*1000,18),level,touches,recency))
-        return max(candidates,key=lambda x:x[0]) if candidates else (0,float(candles[-1]["close"]),0,0)
+            score=touches*14+min(recency,12)*3.2-min(distance*1200,20)
+            candidates.append((score,level,touches,recency))
+        return max(candidates,key=lambda x:x[0]) if candidates else (0,current,0,0)
+
     _,support,sret,srec=best_cluster(low_vals,"support")
     _,resistance,rret,rrec=best_cluster(high_vals,"resistance")
+
     def zone(level,side,retests,recency):
         lo,hi=level-width,level+width
         in_zone=lo<=current<=hi
         dist=abs(current-level)/max(current,1e-9)*100
-        proximity=max(0,18-dist*160)
-        strength=min(99,round(48+retests*7+min(recency,10)*2.5+proximity+(10 if in_zone else 0)))
+        proximity=max(0,20-dist*180)
+        strength=min(99,round(42+retests*8+min(recency,12)*2.6+proximity+(10 if in_zone else 0)))
         if side=="support": status="IN ZONE" if in_zone else "BROKEN" if current<lo else "ACTIVE"
         else: status="IN ZONE" if in_zone else "BROKEN" if current>hi else "ACTIVE"
-        return {"mid":round(level,4),"low":round(lo,4),"high":round(hi,4),"retests":int(retests),"strength":int(strength),"distance_pct":round(dist,3),"status":status,"quality":"STRONG" if strength>=82 else "GOOD" if strength>=72 else "WEAK"}
+        return {"mid":round(level,4),"low":round(lo,4),"high":round(hi,4),"retests":int(retests),
+                "recency_touches":int(recency),"strength":int(strength),"distance_pct":round(dist,3),
+                "status":status,"quality":"INSTITUTIONAL" if strength>=88 else "STRONG" if strength>=82 else "GOOD" if strength>=74 else "WEAK"}
+
     sup,res=zone(support,"support",sret,srec),zone(resistance,"resistance",rret,rrec)
-    # A signal is allowed only at a strong zone or a clean breakout of a strong zone.
-    bullish_zone=sup["strength"]>=82 and (sup["status"]=="IN ZONE" or current>sup["high"])
-    bearish_zone=res["strength"]>=82 and (res["status"]=="IN ZONE" or current<res["low"])
-    if sup["status"]=="IN ZONE" and sup["strength"]>=82: signal="BUY"
-    elif res["status"]=="IN ZONE" and res["strength"]>=82: signal="SELL"
-    elif current>res["high"] and res["strength"]>=82: signal="BUY"
-    elif current<sup["low"] and sup["strength"]>=82: signal="SELL"
-    else: signal="WAIT"
-    confidence=max(sup["strength"],res["strength"]) if signal!="WAIT" else round((sup["strength"]+res["strength"])/2)
+    range_width=max(0.0,float(res["low"])-float(sup["high"]))
+    healthy_range=range_width>=avtr*1.20
+
+    body=abs(float(cur["close"])-float(cur["open"]))
+    rng=max(float(cur["high"])-float(cur["low"]),1e-9)
+    body_ratio=body/rng
+    lower_wick=min(float(cur["open"]),float(cur["close"]))-float(cur["low"])
+    upper_wick=float(cur["high"])-max(float(cur["open"]),float(cur["close"]))
+    bull_reject=float(cur["close"])>float(cur["open"]) and (lower_wick>=body*0.55 or body_ratio>=0.55)
+    bear_reject=float(cur["close"])<float(cur["open"]) and (upper_wick>=body*0.55 or body_ratio>=0.55)
+
+    strong_sup=sup["strength"]>=85 and sup["retests"]>=2
+    strong_res=res["strength"]>=85 and res["retests"]>=2
+    support_rejection=strong_sup and (sup["low"]<=float(cur["low"])<=sup["high"] or sup["low"]<=float(cur["close"])<=sup["high"]) and bull_reject
+    resistance_rejection=strong_res and (res["low"]<=float(cur["high"])<=res["high"] or res["low"]<=float(cur["close"])<=res["high"]) and bear_reject
+    breakout_up=strong_res and float(prev["close"])<=res["high"] and float(cur["close"])>res["high"]+avtr*0.10 and bull_reject
+    breakout_down=strong_sup and float(prev["close"])>=sup["low"] and float(cur["close"])<sup["low"]-avtr*0.10 and bear_reject
+
+    regime=_adaptive_regime(closed)
+    closes=[float(x["close"]) for x in closed]
+    ema20=_ema(closes[-100:],20); ema50=_ema(closes[-150:],50)
+    signal="WAIT"; setup="WAIT"; confirmations=0
+    if healthy_range and support_rejection:
+        signal="BUY"; setup="SUPPORT_REJECTION"
+        confirmations=4+int(ema20>=ema50)+int(regime["regime"]!="TRENDING_DOWN")
+    elif healthy_range and resistance_rejection:
+        signal="SELL"; setup="RESISTANCE_REJECTION"
+        confirmations=4+int(ema20<=ema50)+int(regime["regime"]!="TRENDING_UP")
+    elif breakout_up:
+        signal="BUY"; setup="RESISTANCE_BREAKOUT"
+        confirmations=4+int(ema20>=ema50)+int(regime["regime"]!="TRENDING_DOWN")
+    elif breakout_down:
+        signal="SELL"; setup="SUPPORT_BREAKDOWN"
+        confirmations=4+int(ema20<=ema50)+int(regime["regime"]!="TRENDING_UP")
+
+    if signal=="BUY" and regime["regime"]=="TRENDING_DOWN" and regime["trend_strength"]>=65:
+        signal="WAIT"; setup="REGIME_CONFLICT"
+    if signal=="SELL" and regime["regime"]=="TRENDING_UP" and regime["trend_strength"]>=65:
+        signal="WAIT"; setup="REGIME_CONFLICT"
+
+    zone_strength=sup["strength"] if setup in {"SUPPORT_REJECTION","SUPPORT_BREAKDOWN"} else res["strength"]
+    confidence=int(max(0,min(97,zone_strength+(4 if confirmations>=5 else 0)+(3 if body_ratio>=0.55 else 0))))
+    entry=current; stop_loss=None; take_profit=[]
+    if signal=="BUY":
+        if setup=="RESISTANCE_BREAKOUT":
+            risk=max(avtr*0.80,current-float(res["high"]))
+            stop_loss=current-risk
+            take_profit=[current+risk*1.5,current+risk*2.2]
+        else:
+            stop_loss=float(sup["low"])-avtr*0.12
+            targets=[float(res["mid"]),float(res["high"])]
+            take_profit=[x for x in targets if x>current][:2]
+    elif signal=="SELL":
+        if setup=="SUPPORT_BREAKDOWN":
+            risk=max(avtr*0.80,float(sup["low"])-current)
+            stop_loss=current+risk
+            take_profit=[current-risk*1.5,current-risk*2.2]
+        else:
+            stop_loss=float(res["high"])+avtr*0.12
+            targets=[float(sup["mid"]),float(sup["low"])]
+            take_profit=[x for x in targets if x<current][:2]
+    if signal in {"BUY","SELL"} and len(take_profit)<2:
+        signal="WAIT"; setup="NO_FRESH_TARGET"; stop_loss=None; take_profit=[]
+
     pos="ABOVE RESISTANCE" if current>res["high"] else "BELOW SUPPORT" if current<sup["low"] else "NEAR SUPPORT" if current<=sup["mid"] else "NEAR RESISTANCE" if current>=res["mid"] else "BETWEEN ZONES"
-    if signal=="BUY": entry=current; stop_loss=sup["low"]; take_profit=[res["mid"],res["high"]]
-    elif signal=="SELL": entry=current; stop_loss=res["high"]; take_profit=[sup["mid"],sup["low"]]
-    else: entry=current; stop_loss=None; take_profit=[]
     strongest=max(sup,res,key=lambda z:z["strength"])
-    reason=f"{pos.lower()}; strongest zone {strongest['strength']}% ({strongest['quality']}); Support {sup['strength']}% · Resistance {res['strength']}%."
-    return {"support":sup,"resistance":res,"signal":signal,"confidence":confidence,"position":pos,
-            "entry":round(entry,4),"stop_loss":round(stop_loss,4) if stop_loss is not None else None,
-            "take_profit":[round(v,4) for v in take_profit],
-            "strongest_zone":strongest,"reason":reason,"method":"Strong-zone SNR · clustered swings + retests + proximity + volatility"}
+    reason=f"{setup}; {confirmations}/6 confirmations; strongest zone {strongest['strength']}%; range {range_width/max(avtr,1e-9):.2f} ATR; regime {regime['regime']}."
+    return {"support":sup,"resistance":res,"signal":signal,"setup":setup,"confidence":confidence,
+            "confirmations":confirmations,"position":pos,"entry":round(entry,4),
+            "stop_loss":round(stop_loss,4) if stop_loss is not None else None,
+            "take_profit":[round(v,4) for v in take_profit],"strongest_zone":strongest,
+            "healthy_range":healthy_range,"market_regime":regime,
+            "reason":reason,"method":"Institutional SNR V3 · cluster/retests/rejection/breakout/regime"}
 
 
 def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blocked: bool=False) -> dict[str, Any]:
@@ -4758,6 +4934,8 @@ def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[di
             "session_filter":session_ok,"volatility_ratio":round(vol_ratio,2)}
 
 def _autotrade_source_excluded(source: str) -> bool:
+    if _signal_source_blocked(source):
+        return True
     normalized = re.sub(r"[\s_\-/]+", " ", str(source or "").strip().lower()).strip()
     return normalized in {"book + openai", "book openai", "book/openai", "book-openai"} or ("book" in normalized and "openai" in normalized)
 
@@ -5048,6 +5226,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 continue
             candle_time = _normalize_history_candle_time(candles[-1].get("time"))
             source = _normalize_history_source(c.get("source") or "Signals")
+            if _signal_source_blocked(source):
+                continue
             original_direction = direction
             original_item = dict(item)
 
@@ -5491,6 +5671,8 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     user = current_user(authorization, session)
     direction = str(body.direction or "WAIT").upper()
     source = _normalize_history_source(body.source or "Signals")
+    if _signal_source_blocked(source):
+        return {"saved": False, "blocked": True, "reason": "SOURCE_BLOCKED", "source": source}
     interval = validate_interval(body.interval)
     symbol = clean_symbol(body.symbol)
     if direction not in {"BUY", "SELL"}:
