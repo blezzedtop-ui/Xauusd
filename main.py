@@ -1357,7 +1357,7 @@ def _normalize_history_source(value: str | None) -> str:
     }
     return aliases.get(raw.lower(), raw)[:40]
 
-BLOCKED_SIGNAL_SOURCES = frozenset({"Signal Lab", "Signals", "AlgoTrade"})
+BLOCKED_SIGNAL_SOURCES = frozenset({"Signals", "AlgoTrade"})
 CONSENSUS_AUTOTRADE_SOURCES = frozenset({"Classic Trade", "SNR", "Auto Trend Line", "Technical Analysis"})
 CONSENSUS_REQUIRED_CONFIRMATIONS = 3
 CONSENSUS_AUTOTRADE_SOURCE = "Consensus"
@@ -1365,6 +1365,11 @@ ICT_AUTOTRADE_SOURCE = "ICT Signals"
 ICT_SIGNAL_THRESHOLD = 80
 ICT_AUTOTRADE_THRESHOLD = 85
 ICT_MIN_AUTOTRADE_RR = 1.40
+GOLD_STRATEGY_SOURCE = "Signal Lab"
+GOLD_STRATEGY_SIGNAL_THRESHOLD = 80
+GOLD_STRATEGY_AUTOTRADE_THRESHOLD = 85
+GOLD_STRATEGY_MIN_RR = 1.40
+GOLD_STRATEGY_REQUIRED_TOTAL_CONFIRMATIONS = 3
 
 def _signal_source_blocked(value: str | None) -> bool:
     return _normalize_history_source(value) in BLOCKED_SIGNAL_SOURCES
@@ -3612,36 +3617,270 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
     return _enhance_strategy_result(result, candles, interval)
 
 
+_GOLD_NEWS_GUARD_CACHE: dict[str, Any] = {"ts": 0.0, "blocked": False, "reason": None, "provider": None, "known": False, "events": 0}
+
+async def _gold_strategy_news_guard() -> dict[str, Any]:
+    """Best-effort USD high-impact news guard with a five-minute cache.
+
+    The strategy never invents a news event. If all live providers are unavailable,
+    the guard is marked unknown and the score loses the news-filter points, but the
+    rest of the deterministic market analysis still remains visible.
+    """
+    now_ts=datetime.now(timezone.utc).timestamp()
+    if now_ts-float(_GOLD_NEWS_GUARD_CACHE.get("ts") or 0) < 300:
+        return dict(_GOLD_NEWS_GUARD_CACHE)
+    data=None
+    try:
+        if TRADING_ECONOMICS_API_KEY:
+            data=await _calendar_tradingeconomics(2)
+        elif FINNHUB_API_KEY:
+            data=await _calendar_finnhub(2)
+        else:
+            data=await _calendar_forexfactory(2)
+    except Exception as exc:
+        data={"mode":"error","provider":None,"events":[],"warning":str(exc)}
+    events=(data or {}).get("events") or []
+    blocked,reason=news_blackout(events)
+    known=bool((data or {}).get("provider")) and str((data or {}).get("mode") or "").lower() not in {"error","unconfigured"}
+    out={
+        "ts":now_ts,"blocked":bool(blocked),"reason":reason,
+        "provider":(data or {}).get("provider"),"known":known,
+        "events":len(events),"warning":(data or {}).get("warning"),
+    }
+    _GOLD_NEWS_GUARD_CACHE.clear(); _GOLD_NEWS_GUARD_CACHE.update(out)
+    return dict(out)
+
+def _gold_tf_bias(candles: list[dict[str, Any]]) -> dict[str, Any]:
+    if len(candles)<55:
+        return {"bias":"NEUTRAL","ema20":None,"ema50":None,"structure":"NEUTRAL"}
+    data=candles[:-1] if len(candles)>2 else candles
+    closes=[float(x["close"]) for x in data]
+    price=closes[-1]
+    e20=_ema(closes[-100:],20); e50=_ema(closes[-160:],50)
+    highs,lows=_swing_points(data,2,2)
+    hh=len(highs)>=2 and highs[-1][1]>highs[-2][1]
+    hl=len(lows)>=2 and lows[-1][1]>lows[-2][1]
+    lh=len(highs)>=2 and highs[-1][1]<highs[-2][1]
+    ll=len(lows)>=2 and lows[-1][1]<lows[-2][1]
+    structure="BULLISH" if hh and hl else "BEARISH" if lh and ll else "MIXED"
+    if structure=="BULLISH" and e20>e50 and price>e20: bias="BULLISH"
+    elif structure=="BEARISH" and e20<e50 and price<e20: bias="BEARISH"
+    elif e20>e50 and price>e20: bias="BULLISH"
+    elif e20<e50 and price<e20: bias="BEARISH"
+    else: bias="NEUTRAL"
+    return {"bias":bias,"ema20":round(e20,4),"ema50":round(e50,4),"structure":structure,"price":round(price,4)}
+
+def _gold_strategy_2026(candles: list[dict[str, Any]], interval: str,
+                        c4: list[dict[str, Any]], c1: list[dict[str, Any]],
+                        c15: list[dict[str, Any]], c5: list[dict[str, Any]],
+                        news_state: dict[str, Any]) -> dict[str, Any]:
+    """Gold Strategy 2026: trend + pullback/breakout + confirmation + risk.
+
+    H4/H1 establish direction. SNR defines the trade location. M15/M5, RSI/MACD
+    and price action confirm the setup. Volatility and USD high-impact news are
+    filters. A market signal needs >=80; AutoTrade needs >=85, RR>=1.40 and later
+    also passes the common AI/market/execution gates plus the 3-confirmation rule.
+    """
+    interval=validate_interval(interval)
+    if min(len(candles),len(c4),len(c1),len(c15),len(c5)) < 55:
+        return {"interval":interval,"signal":"WAIT","confidence":0,"score":0,"setup":"INSUFFICIENT_DATA",
+                "entry":None,"stop_loss":None,"take_profit":[],"risk_reward":0,
+                "signal_lab_autotrade_eligible":False,"auto_trade_eligible":False,
+                "reason":"INSUFFICIENT_CLOSED_CANDLES","strategy_engine":"Gold Strategy 2026","strategy_version":"GOLD-2026-V1"}
+
+    closed=candles[:-1] if len(candles)>2 else candles
+    cur=closed[-1]; prev=closed[-2]
+    live_price=float(candles[-1]["close"])
+    close=float(cur["close"]); op=float(cur["open"]); hi=float(cur["high"]); lo=float(cur["low"])
+    prev_close=float(prev["close"])
+    a=max(atr(closed),live_price*0.00025)
+
+    h4=_gold_tf_bias(c4); h1=_gold_tf_bias(c1); b15=_gold_tf_bias(c15); b5=_gold_tf_bias(c5)
+    htf_aligned=h4["bias"]==h1["bias"] and h4["bias"] in {"BULLISH","BEARISH"}
+    direction="BUY" if htf_aligned and h4["bias"]=="BULLISH" else "SELL" if htf_aligned and h4["bias"]=="BEARISH" else "WAIT"
+
+    zones=_snr_zone_analysis(closed)
+    h1_zones=_snr_zone_analysis(c1[:-1] if len(c1)>2 else c1)
+    sup=zones["support"]; res=zones["resistance"]
+    body=abs(close-op); rng=max(hi-lo,1e-9); body_ratio=body/rng
+    bullish_candle=close>op and body_ratio>=0.42
+    bearish_candle=close<op and body_ratio>=0.42
+
+    support_touch=(lo<=float(sup["high"]) and hi>=float(sup["low"])) or float(sup["distance_pct"])<=0.55
+    resistance_touch=(hi>=float(res["low"]) and lo<=float(res["high"])) or float(res["distance_pct"])<=0.55
+    pullback_buy=direction=="BUY" and sup["strength"]>=78 and sup["status"]!="BROKEN" and support_touch and bullish_candle
+    pullback_sell=direction=="SELL" and res["strength"]>=78 and res["status"]!="BROKEN" and resistance_touch and bearish_candle
+    breakout_buy=direction=="BUY" and prev_close<=float(res["high"]) and close>float(res["high"])+a*0.08 and bullish_candle
+    breakout_sell=direction=="SELL" and prev_close>=float(sup["low"]) and close<float(sup["low"])-a*0.08 and bearish_candle
+    setup_ok=pullback_buy or pullback_sell or breakout_buy or breakout_sell
+    setup="PULLBACK_BUY" if pullback_buy else "PULLBACK_SELL" if pullback_sell else "BREAKOUT_BUY" if breakout_buy else "BREAKOUT_SELL" if breakout_sell else "WAIT"
+
+    mtf_align=(direction=="BUY" and b15["bias"]=="BULLISH" and b5["bias"]=="BULLISH") or (direction=="SELL" and b15["bias"]=="BEARISH" and b5["bias"]=="BEARISH")
+
+    closes=[float(x["close"]) for x in closed]
+    r=float(rsi(closed))
+    macd=_ema(closes[-140:],12)-_ema(closes[-140:],26)
+    prior=closes[:-1]
+    macd_prev=(_ema(prior[-140:],12)-_ema(prior[-140:],26)) if len(prior)>=30 else macd
+    momentum_ok=(direction=="BUY" and 52<=r<=72 and macd>=0 and macd>=macd_prev) or (direction=="SELL" and 28<=r<=48 and macd<=0 and macd<=macd_prev)
+    price_action_ok=(direction=="BUY" and bullish_candle) or (direction=="SELL" and bearish_candle)
+
+    regime=_adaptive_regime(closed)
+    vr=float(regime.get("volatility_ratio") or 1.0)
+    volatility_ok=0.68<=vr<=1.80
+    if setup.startswith("BREAKOUT") and 1.80<vr<=2.05 and int(regime.get("trend_strength") or 0)>=60:
+        volatility_ok=True
+
+    news_blocked=bool(news_state.get("blocked"))
+    news_known=bool(news_state.get("known"))
+
+    checks=[]; score=0
+    def add(name:str,pts:int,ok:bool,detail:str):
+        nonlocal score
+        if ok: score+=pts
+        checks.append({"name":name,"points":pts if ok else 0,"max_points":pts,"status":"PASS" if ok else "MISS","detail":detail})
+
+    add("H4/H1 Trend",25,htf_aligned,f"H4={h4['bias']} H1={h1['bias']}")
+    add("SNR Pullback/Breakout",20,setup_ok,f"{setup}; S={sup['strength']} R={res['strength']}")
+    add("M15/M5 Alignment",15,mtf_align,f"M15={b15['bias']} M5={b5['bias']}")
+    add("RSI/MACD",15,momentum_ok,f"RSI={r:.1f} MACD={macd:.5f}")
+    add("Price Action",10,price_action_ok,f"body={body_ratio:.2f}")
+    add("Volatility",10,volatility_ok,f"range ratio={vr:.2f} regime={regime.get('regime')}")
+    news_points_ok=not news_blocked and news_known
+    add("News Filter",5,news_points_ok,
+        str(news_state.get("reason") or (f"provider={news_state.get('provider')}" if news_known else "live news source unavailable")))
+
+    mandatory_ok=htf_aligned and setup_ok and mtf_align and price_action_ok and volatility_ok and not news_blocked
+    wait_code=None
+    if not htf_aligned: wait_code="HTF_TREND_CONFLICT"
+    elif not setup_ok: wait_code="NO_PULLBACK_OR_BREAKOUT_CONFIRMATION"
+    elif not mtf_align: wait_code="M15_M5_MISALIGN"
+    elif not momentum_ok: wait_code="MOMENTUM_NOT_CONFIRMED"
+    elif not price_action_ok: wait_code="NO_PRICE_ACTION_CONFIRMATION"
+    elif not volatility_ok: wait_code="VOLATILITY_FILTER"
+    elif news_blocked: wait_code="NEWS_BLACKOUT"
+    elif score<GOLD_STRATEGY_SIGNAL_THRESHOLD: wait_code="LOW_CONFIDENCE"
+
+    signal=direction if mandatory_ok and score>=GOLD_STRATEGY_SIGNAL_THRESHOLD and direction!="WAIT" else "WAIT"
+
+    highs,lows=_swing_points(closed,2,2)
+    recent_lows=[v for _,v in lows[-8:]]
+    recent_highs=[v for _,v in highs[-8:]]
+    if direction=="BUY":
+        base=float(sup["low"]) if setup.startswith("PULLBACK") else float(res["low"])
+        candidates=[base]+recent_lows
+        sl=min(candidates)-a*0.12 if candidates else live_price-a*1.2
+    elif direction=="SELL":
+        base=float(res["high"]) if setup.startswith("PULLBACK") else float(sup["high"])
+        candidates=[base]+recent_highs
+        sl=max(candidates)+a*0.12 if candidates else live_price+a*1.2
+    else:
+        sl=None
+
+    targets=[]
+    rr=0.0
+    if direction in {"BUY","SELL"} and sl is not None:
+        risk=abs(live_price-sl)
+        raw_targets=[]
+        for series in (closed,c15,c1,c4):
+            hs,ls=_swing_points(series[:-1] if len(series)>2 else series,2,2)
+            raw_targets.extend(v for _,v in (hs if direction=="BUY" else ls))
+        raw_targets.extend([
+            float(res["mid"]),float(res["high"]),float(h1_zones["resistance"]["mid"]),float(h1_zones["resistance"]["high"])
+        ] if direction=="BUY" else [
+            float(sup["mid"]),float(sup["low"]),float(h1_zones["support"]["mid"]),float(h1_zones["support"]["low"])
+        ])
+        if direction=="BUY":
+            valid=sorted({round(v,4) for v in raw_targets if v>live_price and (v-live_price)>=risk*GOLD_STRATEGY_MIN_RR})
+        else:
+            valid=sorted({round(v,4) for v in raw_targets if v<live_price and (live_price-v)>=risk*GOLD_STRATEGY_MIN_RR},reverse=True)
+        targets=valid[:2]
+        if targets:
+            rr=((targets[0]-live_price)/risk) if direction=="BUY" else ((live_price-targets[0])/risk)
+            rr=max(0.0,rr)
+
+    if signal in {"BUY","SELL"} and (not targets or rr<GOLD_STRATEGY_MIN_RR):
+        signal="WAIT"; wait_code="NO_RR_1_40_STRUCTURAL_TARGET"
+
+    base_autotrade=bool(
+        signal in {"BUY","SELL"} and score>=GOLD_STRATEGY_AUTOTRADE_THRESHOLD
+        and rr>=GOLD_STRATEGY_MIN_RR and interval not in {"1min","1m","m1"} and not news_blocked
+    )
+
+    reason=(
+        f"{signal} · {setup} · score {score}/100 · H4/H1 {h4['bias']} · "
+        f"M15/M5 {b15['bias']}/{b5['bias']} · RSI {r:.1f} · RR {rr:.2f}"
+        if signal in {"BUY","SELL"}
+        else f"{wait_code or 'WAIT'} · score {score}/100 · H4/H1 {h4['bias']}/{h1['bias']}"
+    )
+    return {
+        "interval":interval,"signal":signal,"direction_candidate":direction,"confidence":int(score),"score":int(score),
+        "setup":setup,"entry":round(live_price,4) if direction!="WAIT" else None,
+        "stop_loss":round(sl,4) if sl is not None else None,"take_profit":[round(x,4) for x in targets],
+        "risk_reward":round(rr,2),"signal_threshold":GOLD_STRATEGY_SIGNAL_THRESHOLD,
+        "autotrade_threshold":GOLD_STRATEGY_AUTOTRADE_THRESHOLD,"min_autotrade_rr":GOLD_STRATEGY_MIN_RR,
+        "signal_lab_autotrade_eligible":base_autotrade,"auto_trade_eligible":base_autotrade,
+        "m1_blocked":interval in {"1min","1m","m1"},"wait_code":wait_code,
+        "htf":{"h4":h4,"h1":h1,"aligned":htf_aligned},"lower_tf":{"m15":b15,"m5":b5,"aligned":mtf_align},
+        "snr":zones,"h1_snr":h1_zones,"rsi":round(r,2),"macd":round(macd,6),
+        "price_action":"BULLISH" if bullish_candle else "BEARISH" if bearish_candle else "NEUTRAL",
+        "market_regime":regime,"news_filter":news_state,"checks":checks,
+        "components":{"HTF Trend":{"H4":h4["bias"],"H1":h1["bias"]},
+                      "SNR Setup":{"setup":setup,"support":sup,"resistance":res},
+                      "M15/M5":{"M15":b15["bias"],"M5":b5["bias"]},
+                      "RSI/MACD":{"rsi":round(r,2),"macd":round(macd,6)},
+                      "Price Action":{"state":"BULLISH" if bullish_candle else "BEARISH" if bearish_candle else "NEUTRAL"},
+                      "Volatility":regime,"News Filter":news_state},
+        "reason":reason,
+        "strategy_engine":"ThinkMarkets-style Gold Strategy 2026",
+        "strategy_version":"GOLD-2026-V1",
+        "strategy_chain":["H4/H1 Trend","SNR Pullback/Breakout","M15/M5 Confirmation","RSI/MACD","Price Action","Volatility/News","AI Validation","RR >= 1.40","3-confirmation AutoTrade"],
+        "evaluated_at":datetime.now(timezone.utc).isoformat(),
+    }
+
 async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[str, Any]:
-    # RealMarketAPI's documented analysis timeframes. M30 is built locally from M15.
+    """Signal Lab = Gold Strategy 2026 across all dashboard timeframes.
+
+    M1 remains visible for analysis but is always AutoTrade-blocked.
+    """
+    key=clean_symbol(symbol)
     intervals=["1min","5min","15min","30min","1h","4h","1day"]
-    async def one(tf: str):
+    loaded: dict[str, tuple[list[dict[str,Any]],str,str|None]] = {}
+    async def load(tf:str):
+        try: loaded[tf]=await get_candles(key,tf,260)
+        except Exception as exc: loaded[tf]=([],"error",str(exc))
+    await asyncio.gather(*(load(tf) for tf in intervals))
+    news_state=await _gold_strategy_news_guard()
+    if news_blocked:
+        news_state={**news_state,"blocked":True,"reason":news_state.get("reason") or "Manual/news blackout active"}
+
+    c4=loaded.get("4h",([], "", None))[0]
+    c1=loaded.get("1h",([], "", None))[0]
+    c15=loaded.get("15min",([], "", None))[0]
+    c5=loaded.get("5min",([], "", None))[0]
+    out={}
+    for tf in intervals:
+        candles,mode,warning=loaded.get(tf,([],"error",None))
         try:
-            candles_data,mode,warning=await get_candles(symbol,tf,260)
-            analysis_candles=candles_data
-            item=build_advanced_signal(analysis_candles,tf,news_blocked=news_blocked)
-            candle_time=analysis_candles[-1].get("time")
-            ai=await ai_validate_module_signal("Signal Lab",symbol,tf,candle_time,item)
-            item=merge_ai_validation(item,ai)
-            # Shared AI validation assists every strategy component, but never gates AutoTrade.
-            for _component in (item.get("components") or {}).values():
-                if isinstance(_component, dict):
-                    _component.setdefault("ai_assisted", True)
-                    _component.setdefault("ai_layer", "Shared AI Validation")
-                    _component.setdefault("ai_advisory_only", True)
-            item["ai_layer"]="Shared AI Validation"
-            item["ai_advisory_only"]=True
+            item=_gold_strategy_2026(candles,tf,c4,c1,c15,c5,news_state)
+            candle_time=candles[-1].get("time") if candles else None
+            try:
+                ai=await ai_validate_module_signal(GOLD_STRATEGY_SOURCE,key,tf,candle_time,item)
+            except Exception as exc:
+                ai={"mode":"fallback","signal":item.get("signal","WAIT"),"confidence":0,"agreement":0,
+                    "risk_flags":["AI validation exception"],"reasoning":str(exc)[:240]}
+            item["ai_validation"]=ai
+            item["ai_assisted"]=True
+            item["ai_layer"]="Gold Strategy 2026 AI Validation"
             item["candle_time"]=candle_time
-            # Every timeframe and signal component is calculated from the same
-            # TradingView OHLC series returned by get_candles(). No secondary
-            # market-data or provider-intelligence result is merged into the signal.
-            return tf,{**item,"mode":mode,"warning":warning}
+            item["mode"]=mode; item["warning"]=warning
+            out[tf]=item
         except Exception as exc:
-            return tf,{"interval":tf,"signal":"UNAVAILABLE","entry":None,"stop_loss":None,"take_profit":[],
-                       "confidence":0,"score":0,"setup":"ERROR","components":{},
-                       "reason":str(exc),"mode":"error","warning":str(exc)}
-    pairs=await asyncio.gather(*(one(tf) for tf in intervals))
-    return {"symbol":clean_symbol(symbol),"timeframes":{tf:data for tf,data in pairs},
+            out[tf]={"interval":tf,"signal":"UNAVAILABLE","entry":None,"stop_loss":None,"take_profit":[],
+                     "confidence":0,"score":0,"setup":"ERROR","components":{},"reason":str(exc),
+                     "mode":"error","warning":str(exc),"signal_lab_autotrade_eligible":False}
+    return {"symbol":key,"strategy":"Gold Strategy 2026","timeframes":out,
+            "news_filter":news_state,"m1_autotrade_blocked":True,
             "generated_at":datetime.now(timezone.utc).isoformat()}
 
 
@@ -5142,7 +5381,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
         return None
     normalized_source = _normalize_history_source(source)
-    if normalized_source not in {CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE}:
+    if normalized_source not in {CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE}:
         print(f"[AUTO TRADE QUEUE] AUTOTRADE SOURCE BLOCKED source={source} market={symbol} tf={interval} dir={direction}")
         return None
     source = normalized_source
@@ -5161,6 +5400,18 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
             return None
         if ict_rr < ICT_MIN_AUTOTRADE_RR:
             print(f"[AUTO TRADE QUEUE] ICT RR BLOCKED tf={interval} rr={ict_rr:.2f} required={ICT_MIN_AUTOTRADE_RR:.2f}")
+            return None
+    if source == GOLD_STRATEGY_SOURCE:
+        try:
+            gold_conf = float(confidence or 0)
+            gold_rr = float(risk_reward or 0)
+        except Exception:
+            gold_conf, gold_rr = 0.0, 0.0
+        if gold_conf < GOLD_STRATEGY_AUTOTRADE_THRESHOLD:
+            print(f"[AUTO TRADE QUEUE] GOLD STRATEGY CONFIDENCE BLOCKED tf={interval} conf={gold_conf:.1f} required={GOLD_STRATEGY_AUTOTRADE_THRESHOLD}")
+            return None
+        if gold_rr < GOLD_STRATEGY_MIN_RR:
+            print(f"[AUTO TRADE QUEUE] GOLD STRATEGY RR BLOCKED tf={interval} rr={gold_rr:.2f} required={GOLD_STRATEGY_MIN_RR:.2f}")
             return None
     market = _mt5_market_key(symbol)
     if market != "XAU/USD":
@@ -5232,6 +5483,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     queued = []
     module_signal_count = 0
     ict_autotrade_count = 0
+    signal_lab_autotrade_count = 0
     seen_queue_keys = set()
 
     async def load_symbol_candidates(key: str) -> tuple[list[dict[str, Any]], dict[str, tuple[list[dict[str, Any]], str, str | None]]]:
@@ -5247,16 +5499,26 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 live_by_tf[tf]=([],"error",None)
         await asyncio.gather(*(load_tf(tf) for tf in intervals))
 
-        # Signal Lab, Signals and AlgoTrade are intentionally disabled as signal
-        # sources. Their dedicated analysis endpoints may still be viewed, but the
-        # background worker does not evaluate or enqueue them.
+        # Signals and AlgoTrade remain disabled. Signal Lab is now Gold Strategy 2026.
+        gold_news=await _gold_strategy_news_guard()
+        c4_ctx=live_by_tf.get("4h",([],"",None))[0]
+        c1_ctx=live_by_tf.get("1h",([],"",None))[0]
+        c15_ctx=live_by_tf.get("15min",([],"",None))[0]
+        c5_ctx=live_by_tf.get("5min",([],"",None))[0]
 
-        # All remaining modules are also evaluated on ALL seven timeframes.
+        # All active modules are evaluated on their live timeframe candles.
         for tf in intervals:
             candles, mode, warning = live_by_tf.get(tf,([],"error",None))
             if len(candles)<40:
                 continue
             ct=candles[-1].get("time")
+            try:
+                gold=_gold_strategy_2026(candles,tf,c4_ctx,c1_ctx,c15_ctx,c5_ctx,gold_news)
+                gold["strategy_chain"]=["H4/H1 Trend","SNR Pullback/Breakout","M15/M5 Confirmation","RSI/MACD","Price Action","Volatility/News","AI Validation","RR >= 1.40","3-confirmation AutoTrade"]
+                candidates.append({"source":GOLD_STRATEGY_SOURCE,"interval":tf,"item":gold,
+                                   "response":{"mode":mode,"warning":warning,"candle_time":ct,"news_filter":gold_news}})
+            except Exception as exc:
+                print(f"[GOLD STRATEGY 2026] candidate error tf={tf} error={type(exc).__name__}: {exc}")
             try:
                 ref=candles[-2] if len(candles)>1 else candles[-1]
                 price=float(candles[-1]["close"])
@@ -5378,10 +5640,11 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         }
 
     async def process_symbol(key: str):
-        nonlocal created_history, queued, module_signal_count, ict_autotrade_count
+        nonlocal created_history, queued, module_signal_count, ict_autotrade_count, signal_lab_autotrade_count
         candidates, live_by_tf = await load_symbol_candidates(key)
         print(f"[SIGNAL FLOW] candidates={len(candidates)} market={key}")
         consensus_ready: list[dict[str, Any]] = []
+        signal_lab_ready: list[dict[str, Any]] = []
 
         # Persist each module independently in History. MT5 execution is no longer
         # performed here; only the 3-of-4 global consensus created after this loop
@@ -5503,6 +5766,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             else:
                 is_core_consensus_source = source in CONSENSUS_AUTOTRADE_SOURCES
                 is_ict_source = source == ICT_AUTOTRADE_SOURCE
+                is_signal_lab_source = source == GOLD_STRATEGY_SOURCE
                 ict_rr = float(gate.get("r_multiple") or 0)
                 ict_direct_ready = bool(
                     is_ict_source and tf not in {"1min","1m","m1"}
@@ -5510,17 +5774,30 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                     and conf >= ICT_AUTOTRADE_THRESHOLD
                     and ict_rr >= ICT_MIN_AUTOTRADE_RR
                 )
+                gold_rr = float(gate.get("r_multiple") or 0)
+                gold_base_ready = bool(
+                    is_signal_lab_source and tf not in {"1min","1m","m1"}
+                    and bool(original_item.get("signal_lab_autotrade_eligible") or original_item.get("auto_trade_eligible"))
+                    and conf >= GOLD_STRATEGY_AUTOTRADE_THRESHOLD
+                    and gold_rr >= GOLD_STRATEGY_MIN_RR
+                )
                 item.update({"entry":entry,"stop_loss":sl,"take_profit":tp,"live_levels_verified":True,
                              "levels_repaired_from_live_chart":repaired,
                              "auto_trade_eligible":bool(ict_direct_ready),
                              "ict_autotrade_eligible":bool(ict_direct_ready) if is_ict_source else item.get("ict_autotrade_eligible"),
+                             "signal_lab_base_autotrade_ready":bool(gold_base_ready) if is_signal_lab_source else item.get("signal_lab_base_autotrade_ready"),
+                             "signal_lab_autotrade_eligible":False if is_signal_lab_source else item.get("signal_lab_autotrade_eligible"),
                              "consensus_eligible":bool(is_core_consensus_source),
                              "consensus_required":CONSENSUS_REQUIRED_CONFIRMATIONS,
                              "execution_state":"ICT_AUTOTRADE_READY" if ict_direct_ready else
                                                "ICT_AUTOTRADE_BLOCKED" if is_ict_source else
+                                               "SIGNAL_LAB_CONFIRMATION_WAIT" if gold_base_ready else
+                                               "SIGNAL_LAB_THRESHOLD_BLOCKED" if is_signal_lab_source else
                                                "CONSENSUS_READY" if is_core_consensus_source else "ANALYSIS_ONLY",
                              "execution_reason":"ICT_DIRECT_AUTOTRADE_READY" if ict_direct_ready else
                                                 ("ICT_THRESHOLD_OR_RR_BLOCK" if is_ict_source else
+                                                 "WAITING_FOR_2_CORE_CONFIRMATIONS" if gold_base_ready else
+                                                 "SIGNAL_LAB_THRESHOLD_OR_RR_BLOCK" if is_signal_lab_source else
                                                  "WAITING_FOR_GLOBAL_3_OF_4_CONSENSUS" if is_core_consensus_source else
                                                  "SOURCE_NOT_IN_AUTOTRADE_CONSENSUS"),
                              "risk_reward":gate.get("r_multiple")})
@@ -5532,6 +5809,13 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                         "confidence": conf, "smart_score": float(smart.get("score") or 0),
                         "item": item,
                     })
+                if gold_base_ready:
+                    signal_lab_ready.append({
+                        "source": source, "interval": tf, "candle_time": candle_time,
+                        "direction": direction, "entry": entry, "sl": sl, "tp": tp,
+                        "confidence": conf, "smart_score": float(smart.get("score") or 0),
+                        "risk_reward": gold_rr, "item": item,
+                    })
 
             payload = {"source":source,"module_signal":item,"symbol":key,"interval":tf,"candle_time":candle_time,
                        "live_generated":True,"execution_gate":{
@@ -5540,6 +5824,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                            "geometry_checked":True,
                            "target_checked":True,"risk_checked":not target_reached,
                            "auto_trade":bool(item.get("ict_autotrade_eligible")) if source == ICT_AUTOTRADE_SOURCE else False,
+                           "signal_lab_base_ready":bool(item.get("signal_lab_base_autotrade_ready")) if source == GOLD_STRATEGY_SOURCE else False,
                            "risk_reward":gate.get("r_multiple"),"risk":gate.get("risk"),"max_risk":gate.get("max_risk"),
                            "levels_repaired":repaired},
                        "consensus":{"required":CONSENSUS_REQUIRED_CONFIRMATIONS,"core_sources":sorted(CONSENSUS_AUTOTRADE_SOURCES),
@@ -5599,6 +5884,73 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
 
             # Other individual modules cannot queue directly; their only MT5 path is
             # the server-created 3-of-4 Consensus row/order below.
+
+        # Signal Lab / Gold Strategy 2026 AutoTrade:
+        # Signal Lab itself + at least two validated core modules in the same direction
+        # = three independent confirmations. M1 is hard-blocked at the queue layer.
+        for gold in signal_lab_ready:
+            tf=str(gold.get("interval") or "")
+            candle_time=str(gold.get("candle_time") or "")
+            direction=str(gold.get("direction") or "").upper()
+            matching={}
+            for x in consensus_ready:
+                if str(x.get("interval") or "")!=tf or str(x.get("candle_time") or "")!=candle_time:
+                    continue
+                if str(x.get("direction") or "").upper()!=direction:
+                    continue
+                src=str(x.get("source") or "")
+                if src in CONSENSUS_AUTOTRADE_SOURCES:
+                    matching[src]=x
+            total_confirmations=1+len(matching)
+            passed=total_confirmations>=GOLD_STRATEGY_REQUIRED_TOTAL_CONFIRMATIONS
+            row=session.scalar(select(SignalHistory).where(
+                SignalHistory.user_id==user.id,
+                SignalHistory.symbol==key,
+                SignalHistory.interval==tf,
+                SignalHistory.candle_time==candle_time,
+                SignalHistory.source==GOLD_STRATEGY_SOURCE,
+            ).order_by(SignalHistory.id.desc()))
+            if row is not None:
+                try: row_payload=json.loads(row.payload or "{}")
+                except Exception: row_payload={}
+                module_payload=row_payload.get("module_signal") if isinstance(row_payload.get("module_signal"),dict) else {}
+                module_payload["signal_lab_consensus_passed"]=passed
+                module_payload["signal_lab_autotrade_eligible"]=passed
+                module_payload["signal_lab_confirmation_count"]=total_confirmations
+                module_payload["signal_lab_confirming_sources"]=sorted(matching.keys())
+                module_payload["execution_state"]="SIGNAL_LAB_AUTOTRADE_READY" if passed else "SIGNAL_LAB_CONFIRMATION_BLOCKED"
+                module_payload["execution_reason"]="3_CONFIRMATIONS_PASSED" if passed else f"ONLY_{total_confirmations}_OF_3_CONFIRMATIONS"
+                row_payload["module_signal"]=module_payload
+                row_payload["signal_lab_consensus"]={
+                    "passed":passed,"required":GOLD_STRATEGY_REQUIRED_TOTAL_CONFIRMATIONS,
+                    "total_confirmations":total_confirmations,"signal_lab":direction,
+                    "confirming_core_sources":sorted(matching.keys()),
+                }
+                row_payload.setdefault("auto_trade",{})["mode"]="GOLD_STRATEGY_2026_3_CONFIRMATIONS"
+                row.payload=json.dumps(row_payload,ensure_ascii=False,default=str)
+                _history_sync_row(row,row_payload)
+            if not passed:
+                print(f"[GOLD STRATEGY 2026] AUTOTRADE BLOCKED market={key} tf={tf} dir={direction} confirmations={total_confirmations}/3 core={sorted(matching.keys())}")
+                continue
+            existing_queue_ids={str(q.get("id")) for q in MT5_ORDER_QUEUE}
+            order=_queue_autotrade_order(
+                symbol=key,source=GOLD_STRATEGY_SOURCE,interval=tf,direction=direction,
+                entry=float(gold.get("entry")),sl=float(gold.get("sl")),tp=list(gold.get("tp") or []),
+                volume=MT5_LOT_SIZE,confidence=float(gold.get("confidence") or 0),
+                candle_time=candle_time,risk_reward=float(gold.get("risk_reward") or 0),
+            )
+            is_new=order is not None and str(order.get("id")) not in existing_queue_ids
+            if order is not None and row is not None:
+                try: row_payload=json.loads(row.payload or "{}")
+                except Exception: row_payload={}
+                row_payload.setdefault("auto_trade",{})["queued"]=True
+                row_payload["auto_trade"]["order_id"]=order.get("id")
+                row.payload=json.dumps(row_payload,ensure_ascii=False,default=str)
+                _history_sync_row(row,row_payload)
+            if is_new:
+                queued.append(order)
+                signal_lab_autotrade_count+=1
+                print(f"[GOLD STRATEGY 2026] QUEUED market={key} tf={tf} dir={direction} confirmations={total_confirmations}/3 conf={float(gold.get('confidence') or 0):.1f} rr={float(gold.get('risk_reward') or 0):.2f}")
 
         # Evaluate one global 3-of-4 decision per timeframe/current candle.
         for tf in ("5min", "15min", "30min", "1h", "4h", "1day"):
@@ -5726,15 +6078,22 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         "module_autotrade_queued": 0,
         "consensus_autotrade_queued": module_signal_count,
         "ict_autotrade_queued": ict_autotrade_count,
+        "signal_lab_autotrade_queued": signal_lab_autotrade_count,
         "history_count": len(rows),
         "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
-        "forward_mode": "CORE MODULES: GLOBAL 3-of-4 CONSENSUS; ICT: DIRECT Smart Money AutoTrade >=85% and RR>=1.40; M1 blocked",
+        "forward_mode": "CORE MODULES: GLOBAL 3-of-4; ICT: direct >=85% RR>=1.40; Signal Lab Gold Strategy 2026: >=85% RR>=1.40 + 2 core confirmations; M1 blocked",
         "consensus_sources": sorted(CONSENSUS_AUTOTRADE_SOURCES),
+        "signal_lab_autotrade": {"enabled": True, "source": GOLD_STRATEGY_SOURCE,
+                                 "signal_threshold": GOLD_STRATEGY_SIGNAL_THRESHOLD,
+                                 "autotrade_threshold": GOLD_STRATEGY_AUTOTRADE_THRESHOLD,
+                                 "min_rr": GOLD_STRATEGY_MIN_RR,
+                                 "required_total_confirmations": GOLD_STRATEGY_REQUIRED_TOTAL_CONFIRMATIONS,
+                                 "m1_blocked": True},
         "ict_autotrade": {"enabled": True, "source": ICT_AUTOTRADE_SOURCE, "signal_threshold": ICT_SIGNAL_THRESHOLD,
                           "autotrade_threshold": ICT_AUTOTRADE_THRESHOLD, "min_rr": ICT_MIN_AUTOTRADE_RR,
                           "execution_timeframe": "5min", "m1_blocked": True},
         "consensus_required": CONSENSUS_REQUIRED_CONFIRMATIONS,
-        "excluded_sources": ["Signal Lab", "Signals", "AlgoTrade", "individual module direct MT5", "M1 / 1min / 1m"],
+        "excluded_sources": ["Signals", "AlgoTrade", "unconfirmed individual module MT5", "M1 / 1min / 1m"],
         "items": created_history,
         "user_id": int(user.id),
     }
@@ -5900,32 +6259,43 @@ async def ai_signals_live(symbol: str, interval: str = DEFAULT_INTERVAL, authori
     return {"symbol":key,"interval":interval,"signal":item,"ai_validation":ai,"mode":"live","source":f"TradingView {tv_symbol_for(key)} live candle","generated_at":datetime.now(timezone.utc).isoformat()}
 
 @app.post("/api/v1/signals/save-advanced")
-async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    user = current_user(authorization, session)
-    if _signal_source_blocked("Signal Lab"):
-        return {"saved": False, "blocked": True, "reason": "SOURCE_BLOCKED", "source": "Signal Lab"}
-    interval = validate_interval(interval)
-    candles_data, mode, warning = await get_candles(clean_symbol(symbol), interval, 260)
-    item = {**build_advanced_signal(candles_data, interval, news_blocked=False), "mode":mode, "warning":warning}
+async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = DEFAULT_SYMBOL,
+                               authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    """Manual journal save for the current Gold Strategy 2026 Signal Lab result.
+
+    This endpoint never bypasses the server-side AutoTrade confirmation gate.
+    """
+    user=current_user(authorization,session)
+    interval=validate_interval(interval)
+    result=await build_advanced_signals(clean_symbol(symbol),news_blocked=False)
+    item=dict((result.get("timeframes") or {}).get(interval) or {})
     if not item or item.get("signal") not in ("BUY","SELL"):
-        raise HTTPException(status_code=400, detail="Bu timeframe uchun tasdiqlangan BUY/SELL signal mavjud emas.")
-    live_ct = _normalize_history_candle_time(candles_data[-1].get("time"))
-    existing = session.scalar(select(SignalHistory).where(
-        SignalHistory.user_id == user.id, SignalHistory.symbol == clean_symbol(symbol), SignalHistory.interval == interval,
-        SignalHistory.source == "Signal Lab", SignalHistory.candle_time == live_ct
-    ).order_by(SignalHistory.id.desc()))
-    payload = {"advanced":item,"setup":{"entry":item.get("entry"),"stop_loss":item.get("stop_loss"),"take_profit":item.get("take_profit",[])},"symbol":clean_symbol(symbol),"interval":interval,"source":"Signal Lab","candle_time":live_ct,"live_generated":True}
+        raise HTTPException(status_code=400,detail="Bu timeframe uchun tasdiqlangan Gold Strategy 2026 BUY/SELL signal mavjud emas.")
+    live_ct=_normalize_history_candle_time(item.get("candle_time"))
+    q=select(SignalHistory).where(
+        SignalHistory.user_id==user.id,SignalHistory.symbol==clean_symbol(symbol),
+        SignalHistory.interval==interval,SignalHistory.source==GOLD_STRATEGY_SOURCE,
+        SignalHistory.candle_time==live_ct
+    ).order_by(SignalHistory.id.desc())
+    existing=session.scalar(q)
+    payload={"module_signal":item,"advanced":item,
+             "setup":{"entry":item.get("entry"),"stop_loss":item.get("stop_loss"),"take_profit":item.get("take_profit",[])},
+             "symbol":clean_symbol(symbol),"interval":interval,"source":GOLD_STRATEGY_SOURCE,
+             "candle_time":live_ct,"live_generated":True,
+             "auto_trade":{"queued":False,"mode":"SERVER_CONFIRMATION_REQUIRED"}}
     if existing is not None:
-        existing.direction = item["signal"]
-        existing.headline = f'{item["signal"]} • {item["setup"]}'[:255]
-        existing.price = float(item["entry"])
-        existing.payload = json.dumps(payload, ensure_ascii=False, default=str)
-        existing.outcome = "OPEN"; existing.status = "ACTIVE"; existing.closed_at = None; existing.result = None; existing.profit_loss = None; existing.r_multiple = None
+        existing.direction=item["signal"]; existing.headline=f'Gold Strategy 2026 · {item["signal"]} · {item.get("confidence",0)}%'[:255]
+        existing.price=float(item["entry"]); existing.payload=json.dumps(payload,ensure_ascii=False,default=str)
+        existing.outcome="OPEN"; existing.status="ACTIVE"; existing.closed_at=None; existing.result=None; existing.profit_loss=None; existing.r_multiple=None
         _history_sync_row(existing,payload); session.commit()
-        return {"saved":False,"updated":True,"id":existing.id,"signal":item}
-    row = SignalHistory(user_id=user.id, symbol=clean_symbol(symbol), interval=interval, direction=item["signal"], headline=f'{item["signal"]} • {item["setup"]}', price=float(item["entry"]), payload=json.dumps(payload,ensure_ascii=False), outcome="OPEN", status="ACTIVE", created_at=datetime.now(timezone.utc), source="Signal Lab", candle_time=live_ct)
+        return {"saved":False,"updated":True,"id":existing.id,"signal":item,"queued":False}
+    row=SignalHistory(user_id=user.id,symbol=clean_symbol(symbol),interval=interval,direction=item["signal"],
+                      headline=f'Gold Strategy 2026 · {item["signal"]} · {item.get("confidence",0)}%'[:255],
+                      price=float(item["entry"]),payload=json.dumps(payload,ensure_ascii=False,default=str),
+                      outcome="OPEN",status="ACTIVE",created_at=datetime.now(timezone.utc),
+                      source=GOLD_STRATEGY_SOURCE,candle_time=live_ct)
     _history_sync_row(row,payload); session.add(row); session.commit(); session.refresh(row)
-    return {"saved":True,"id":row.id,"signal":item}
+    return {"saved":True,"id":row.id,"signal":item,"queued":False}
 
 
 def _setup_strength_from_payload(payload: dict[str, Any], confidence: float | None = None) -> tuple[float, str, bool]:
