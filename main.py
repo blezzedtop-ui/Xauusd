@@ -492,7 +492,7 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
         if str(row.interval or "").strip().lower() in {"1m", "1min", "m1"}:
             continue
         source = _normalize_history_source(str(row.source or "Signals")[:40])
-        if source not in {CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE}:
+        if source not in {CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE}:
             continue
         if _autotrade_source_excluded(source):
             continue
@@ -555,6 +555,16 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
             if not pro_allowed or pro_conf < PRO_ENGINE_AUTOTRADE_THRESHOLD or pro_rr < PRO_ENGINE_MIN_RR:
                 continue
             bridge_rr = pro_rr
+        elif source == FIBONACCI_SOURCE:
+            try:
+                fib_conf = float(row.signal_score or module_payload.get("confidence") or 0)
+                fib_rr = float(row.risk_reward or module_payload.get("risk_reward") or (payload.get("execution_gate") or {}).get("risk_reward") or 0)
+            except Exception:
+                fib_conf, fib_rr = 0.0, 0.0
+            fib_allowed = bool(module_payload.get("fibonacci_autotrade_eligible") and module_payload.get("fibonacci_consensus_passed"))
+            if not fib_allowed or fib_conf < FIBONACCI_AUTOTRADE_THRESHOLD or fib_rr < FIBONACCI_MIN_RR:
+                continue
+            bridge_rr = fib_rr
         entry, sl, tps = _history_row_levels_for_autotrade(row, payload)
         if entry is None or sl is None or not tps:
             continue
@@ -1396,6 +1406,7 @@ def _normalize_history_source(value: str | None) -> str:
         "multi timeframe":"Multi-Timeframe", "multi-timeframe":"Multi-Timeframe", "classic trade":"Classic Trade",
         "algotrade":"Order Block", "order block":"Order Block", "orderblock":"Order Block", "consensus":"Consensus", "snr":"SNR",
         "5 engine consensus":"5 Engine Consensus", "pro engine consensus":"5 Engine Consensus",
+        "fibonacci":"Fibonacci", "fibonacci engine":"Fibonacci", "fib":"Fibonacci",
         "economic calendar":"Economic Calendar", "market sessions":"Market Sessions"
     }
     return aliases.get(raw.lower(), raw)[:40]
@@ -1428,6 +1439,11 @@ PRO_ENGINE_SIGNAL_THRESHOLD = 80
 PRO_ENGINE_AUTOTRADE_THRESHOLD = 85
 PRO_ENGINE_MIN_RR = 1.40
 PRO_ENGINE_REQUIRED_CONFIRMATIONS = 3
+FIBONACCI_SOURCE = "Fibonacci"
+FIBONACCI_SIGNAL_THRESHOLD = 80
+FIBONACCI_AUTOTRADE_THRESHOLD = 85
+FIBONACCI_MIN_RR = 1.40
+FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS = 3
 
 def _signal_source_blocked(value: str | None) -> bool:
     return _normalize_history_source(value) in BLOCKED_SIGNAL_SOURCES
@@ -3507,6 +3523,219 @@ def _fibonacci_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
                   f"{'50-61.8% ZONE' if in_zone else 'WAIT'} · "
                   f"{'CANDLE CONFIRMED' if confirmation != 'WAIT' else 'WAIT CONFIRMATION'}"
     }
+
+
+def _fib_zone_overlap(zone_a: dict[str, Any], zone_b: dict[str, Any]) -> dict[str, Any]:
+    try:
+        alo=float(zone_a.get("low")); ahi=float(zone_a.get("high"))
+        blo=float(zone_b.get("low")); bhi=float(zone_b.get("high"))
+    except Exception:
+        return {"overlap":False,"low":None,"high":None}
+    lo=max(min(alo,ahi),min(blo,bhi))
+    hi=min(max(alo,ahi),max(blo,bhi))
+    return {"overlap":hi>=lo,"low":round(lo,4) if hi>=lo else None,"high":round(hi,4) if hi>=lo else None}
+
+def _fibonacci_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]], c30:list[dict[str,Any]],
+                             c15:list[dict[str,Any]], c5:list[dict[str,Any]]) -> dict[str,Any]:
+    """XAUUSD Fibonacci Confluence Pro.
+
+    HTF trend -> strong impulse -> Fib 50-61.8 pullback -> SNR/OB/FVG confluence
+    -> liquidity sweep -> M15/M5 MSS -> momentum -> RR.
+    Fibonacci touch alone never creates a signal.
+    """
+    base={"signal":"WAIT","confidence":0,"score":0,"entry":None,"stop_loss":None,
+          "take_profit":[],"risk_reward":0.0,"fibonacci_autotrade_eligible":False,
+          "auto_trade_eligible":False,"m1_blocked":True,"execution_timeframe":"5min",
+          "strategy_engine":"XAUUSD Fibonacci Confluence Pro 2026","strategy_version":"FIB-2026-V1"}
+    if min(len(c4),len(c1),len(c30),len(c15),len(c5))<60:
+        return {**base,"blockedReason":"INSUFFICIENT_CLOSED_CANDLES","reason":"INSUFFICIENT_CLOSED_CANDLES"}
+
+    regime=_market_regime_filter(c1,c30,c15,c5)
+    if str(regime.get("regime") or "").upper()!="TRENDING":
+        return {**base,"market_regime":regime,"blockedReason":f"MARKET_REGIME_{regime.get('regime','TRANSITION')}",
+                "reason":f"Fibonacci trend setup blocked: market regime={regime.get('regime','TRANSITION')}"}
+
+    h4=_ict_tf_bias(c4); h1=_ict_tf_bias(c1)
+    htf_aligned=h4.get("bias")==h1.get("bias") and h4.get("bias") in {"BULLISH","BEARISH"}
+    direction="BUY" if htf_aligned and h4.get("bias")=="BULLISH" else "SELL" if htf_aligned and h4.get("bias")=="BEARISH" else "WAIT"
+    desired="BULLISH" if direction=="BUY" else "BEARISH" if direction=="SELL" else "NONE"
+
+    fib=_fibonacci_analysis(c1)
+    fib_dir_ok=bool(fib.get("available") and fib.get("direction")==desired)
+    a1=max(atr(c1),float(c1[-1]["close"])*0.0003)
+    impulse_range=float(fib.get("range") or 0)
+    impulse_atr=impulse_range/max(a1,1e-9)
+    strong_impulse=bool(fib_dir_ok and impulse_atr>=2.5)
+
+    fib_zone=fib.get("retracement_zone") or {}
+    current=float(c5[-1]["close"])
+    try:
+        fib_zone_ok=float(fib_zone.get("low"))<=current<=float(fib_zone.get("high"))
+    except Exception:
+        fib_zone_ok=False
+
+    snr=_snr_zone_analysis(c1)
+    snr_zone=snr.get("support") if direction=="BUY" else snr.get("resistance") if direction=="SELL" else {}
+    snr_overlap=_fib_zone_overlap(fib_zone,snr_zone or {})
+    snr_ok=bool(snr_overlap.get("overlap") and int((snr_zone or {}).get("strength") or 0)>=74)
+
+    a15=max(atr(c15),float(c15[-1]["close"])*0.00025)
+    a5=max(atr(c5),float(c5[-1]["close"])*0.0002)
+    ob5=_ict_order_block(c5,direction,a5) if direction!="WAIT" else {"type":"NONE"}
+    ob15=_ict_order_block(c15,direction,a15) if direction!="WAIT" else {"type":"NONE"}
+    ob=ob5 if ob5.get("type")==desired else ob15 if ob15.get("type")==desired else {"type":"NONE","low":None,"high":None}
+    fvg5=_ict_fvg(c5); fvg15=_ict_fvg(c15)
+    fvg=fvg5 if fvg5.get("type")==desired else fvg15 if fvg15.get("type")==desired else {"type":"NONE","low":None,"high":None}
+    ob_overlap=_fib_zone_overlap(fib_zone,ob)
+    fvg_overlap=_fib_zone_overlap(fib_zone,fvg)
+    institutional_ok=bool(ob_overlap.get("overlap") or fvg_overlap.get("overlap"))
+
+    expected="SSL_SWEEP" if direction=="BUY" else "BSL_SWEEP" if direction=="SELL" else "NONE"
+    sw5=_ict_recent_liquidity_sweep(c5,6)
+    sw15=_ict_recent_liquidity_sweep(c15,5)
+    sweep=sw5 if sw5.get("type")==expected else sw15 if sw15.get("type")==expected else {"type":"NONE","level":None,"extreme":None}
+    sweep_ok=bool(direction!="WAIT" and sweep.get("type")==expected)
+
+    mss5,mss5_level=_ict_mss(c5,direction) if direction!="WAIT" else (False,None)
+    mss15,mss15_level=_ict_mss(c15,direction) if direction!="WAIT" else (False,None)
+    st5=_structure_state(c5[:-1] if len(c5)>2 else c5)
+    st15=_structure_state(c15[:-1] if len(c15)>2 else c15)
+    mss_ok=bool(
+        mss5 or mss15 or st5.get("choch")==desired or st5.get("bos")==desired
+        or st15.get("choch")==desired or st15.get("bos")==desired
+    )
+
+    momentum=_pro_momentum_engine(c15,direction)
+    momentum_ok=bool(momentum.get("signal")==direction or int(momentum.get("score") or 0)>=60)
+
+    checks=[]; score=0
+    def add(name,pts,ok,detail):
+        nonlocal score
+        if ok: score+=pts
+        checks.append({"name":name,"points":pts if ok else 0,"max_points":pts,
+                       "status":"PASS" if ok else "MISS","detail":detail})
+
+    add("H4/H1 Trend",20,htf_aligned,f"H4={h4.get('bias')} H1={h1.get('bias')}")
+    add("Strong Impulse",10,strong_impulse,f"impulse={impulse_atr:.2f} ATR")
+    add("Fib 50-61.8 Zone",20,fib_zone_ok,f"{fib_zone.get('low')}–{fib_zone.get('high')} current={current:.2f}")
+    add("SNR Overlap",10,snr_ok,f"strength={(snr_zone or {}).get('strength',0)} overlap={snr_overlap.get('overlap')}")
+    add("OB/FVG Overlap",15,institutional_ok,f"OB={ob_overlap.get('overlap')} FVG={fvg_overlap.get('overlap')}")
+    add("Liquidity Sweep",10,sweep_ok,str(sweep.get("type")))
+    add("MSS / BOS",10,mss_ok,f"M5={mss5} M15={mss15}")
+    add("Momentum",5,momentum_ok,f"score={momentum.get('score',0)}")
+
+    mandatory=bool(htf_aligned and fib_dir_ok and strong_impulse and fib_zone_ok and sweep_ok and mss_ok)
+    blocked=None
+    if not htf_aligned: blocked="HTF_TREND_CONFLICT"
+    elif not fib_dir_ok: blocked="FIB_IMPULSE_DIRECTION_CONFLICT"
+    elif not strong_impulse: blocked="IMPULSE_TOO_WEAK"
+    elif not fib_zone_ok: blocked="WAIT_FIB_50_61_8_PULLBACK"
+    elif not sweep_ok: blocked="NO_LIQUIDITY_SWEEP"
+    elif not mss_ok: blocked="NO_M15_M5_MSS_BOS"
+    elif score<FIBONACCI_SIGNAL_THRESHOLD: blocked="CONFLUENCE_SCORE_BELOW_80"
+
+    signal=direction if mandatory and score>=FIBONACCI_SIGNAL_THRESHOLD else "WAIT"
+    entry=current if direction!="WAIT" else None
+    sl=None; targets=[]; rr=0.0
+    if direction in {"BUY","SELL"} and entry is not None:
+        fib_low=float((fib.get("anchor_low") or {}).get("price") or 0)
+        fib_high=float((fib.get("anchor_high") or {}).get("price") or 0)
+        rng=max(float(fib.get("range") or 0),1e-9)
+        if direction=="BUY":
+            candidates_sl=[x for x in [sweep.get("extreme"),ob.get("low"),fib_zone.get("low")] if x is not None]
+            sl=(min(float(x) for x in candidates_sl)-a5*0.12) if candidates_sl else entry-a5*1.2
+            raw_targets=[fib_high,fib_high+rng*0.272,fib_high+rng*0.618]
+        else:
+            candidates_sl=[x for x in [sweep.get("extreme"),ob.get("high"),fib_zone.get("high")] if x is not None]
+            sl=(max(float(x) for x in candidates_sl)+a5*0.12) if candidates_sl else entry+a5*1.2
+            raw_targets=[fib_low,fib_low-rng*0.272,fib_low-rng*0.618]
+        risk=abs(entry-sl)
+        if risk>0:
+            if direction=="BUY":
+                targets=[float(x) for x in raw_targets if float(x)>entry and (float(x)-entry)/risk>=FIBONACCI_MIN_RR]
+            else:
+                targets=[float(x) for x in raw_targets if float(x)<entry and (entry-float(x))/risk>=FIBONACCI_MIN_RR]
+            targets=targets[:3]
+            if targets:
+                rr=((targets[0]-entry)/risk) if direction=="BUY" else ((entry-targets[0])/risk)
+
+    if signal in {"BUY","SELL"} and (not targets or rr<FIBONACCI_MIN_RR):
+        signal="WAIT"; blocked="NO_RR_1_40_TARGET"
+
+    base_ready=bool(signal in {"BUY","SELL"} and score>=FIBONACCI_AUTOTRADE_THRESHOLD and rr>=FIBONACCI_MIN_RR)
+    levels=fib.get("levels") or {}
+    ext={
+        "1.272": round((float((fib.get("anchor_high") or {}).get("price") or 0)+float(fib.get("range") or 0)*0.272),4)
+                 if direction=="BUY" else round((float((fib.get("anchor_low") or {}).get("price") or 0)-float(fib.get("range") or 0)*0.272),4) if direction=="SELL" else None,
+        "1.618": round((float((fib.get("anchor_high") or {}).get("price") or 0)+float(fib.get("range") or 0)*0.618),4)
+                 if direction=="BUY" else round((float((fib.get("anchor_low") or {}).get("price") or 0)-float(fib.get("range") or 0)*0.618),4) if direction=="SELL" else None,
+    }
+    return {
+        **base,
+        "signal":signal,"confidence":int(score),"score":int(score),
+        "entry":round(entry,4) if entry is not None and signal!="WAIT" else None,
+        "stop_loss":round(sl,4) if sl is not None and signal!="WAIT" else None,
+        "take_profit":[round(x,4) for x in targets] if signal!="WAIT" else [],
+        "risk_reward":round(rr,2),
+        "fibonacci_autotrade_eligible":base_ready,
+        "auto_trade_eligible":base_ready,
+        "blockedReason":blocked,
+        "reason":f"{signal} · Fib 50-61.8 confluence · score {score}/100 · RR {rr:.2f}" if signal!="WAIT" else str(blocked or "WAIT"),
+        "market_regime":regime,
+        "htf":{"h4":h4,"h1":h1,"aligned":htf_aligned},
+        "impulse":{"direction":fib.get("direction"),"range":fib.get("range"),"atr_multiple":round(impulse_atr,2),
+                   "anchor_low":fib.get("anchor_low"),"anchor_high":fib.get("anchor_high")},
+        "fibonacci":{
+            "levels":levels,"preferred_zone":fib_zone,"nearest_level":fib.get("nearest_level"),
+            "in_preferred_zone":fib_zone_ok,"extension_targets":ext,
+        },
+        "snr":{"zone":snr_zone,"overlap":snr_overlap},
+        "order_block":ob,"fvg":fvg,
+        "institutional_overlap":{"order_block":ob_overlap,"fvg":fvg_overlap},
+        "liquidity":sweep,
+        "mss":{"m5":mss5,"m15":mss15,"m5_level":mss5_level,"m15_level":mss15_level},
+        "momentum":momentum,
+        "checks":checks,
+        "signal_threshold":FIBONACCI_SIGNAL_THRESHOLD,
+        "autotrade_threshold":FIBONACCI_AUTOTRADE_THRESHOLD,
+        "min_autotrade_rr":FIBONACCI_MIN_RR,
+        "required_total_confirmations":FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS,
+        "strategy_chain":["H4/H1 Trend","Strong Impulse","Auto Swing","Fib 38.2/50/61.8/78.6",
+                          "50-61.8 Preferred Zone","SNR Overlap","OB/FVG Overlap","Liquidity Sweep",
+                          "M15/M5 MSS/BOS","Momentum","AI Validation","RR >= 1.40",
+                          "3-strategy Confirmation","MT5 AutoTrade"],
+        "evaluated_at":datetime.now(timezone.utc).isoformat(),
+    }
+
+async def build_fibonacci_engine(symbol:str="XAU/USD") -> dict[str,Any]:
+    key=clean_symbol(symbol)
+    try:
+        (c4,m4,w4),(c1,m1,w1),(c30,m30,w30),(c15,m15,w15),(c5,m5,w5)=await asyncio.gather(
+            get_candles(key,"4h",260),get_candles(key,"1h",260),get_candles(key,"30min",260),
+            get_candles(key,"15min",260),get_candles(key,"5min",260)
+        )
+        item=_fibonacci_strategy_2026(c4,c1,c30,c15,c5)
+        item["candle_time"]=c5[-1].get("time") if c5 else None
+        try:
+            item["ai_validation"]=await ai_validate_module_signal(FIBONACCI_SOURCE,key,"5min",item.get("candle_time"),item)
+        except Exception as exc:
+            item["ai_validation"]={"mode":"fallback","signal":item.get("signal","WAIT"),"confidence":0,
+                                   "agreement":0,"risk_flags":["AI validation exception"],"reasoning":str(exc)[:240]}
+        return {"ok":True,"symbol":key,"source":FIBONACCI_SOURCE,"item":item,
+                "generated_at":datetime.now(timezone.utc).isoformat(),
+                "warnings":[x for x in (w4,w1,w30,w15,w5) if x]}
+    except Exception as exc:
+        return {"ok":False,"symbol":key,"source":FIBONACCI_SOURCE,"reason":str(exc),
+                "item":{"signal":"WAIT","confidence":0,"score":0,
+                        "fibonacci_autotrade_eligible":False,"m1_blocked":True},
+                "generated_at":datetime.now(timezone.utc).isoformat()}
+
+@app.get("/api/v1/fibonacci-engine/{symbol:path}")
+async def fibonacci_engine_endpoint(symbol:str, authorization:str|None=Header(default=None),
+                                    session:Session=Depends(db)) -> dict[str,Any]:
+    require_admin(authorization,session)
+    return await build_fibonacci_engine(symbol)
+
 
 def _snr(candles: list[dict[str, Any]]) -> dict[str, Any]:
     """Strong-zone SNR levels. Prefer repeatedly tested swing clusters over one-off extremes."""
@@ -6564,7 +6793,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
         return None
     normalized_source = _normalize_history_source(source)
-    if normalized_source not in {CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE}:
+    if normalized_source not in {CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE}:
         print(f"[AUTO TRADE QUEUE] AUTOTRADE SOURCE BLOCKED source={source} market={symbol} tf={interval} dir={direction}")
         return None
     source = normalized_source
@@ -6639,6 +6868,18 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
             return None
         if pro_rr < PRO_ENGINE_MIN_RR:
             print(f"[AUTO TRADE QUEUE] 5 ENGINE RR BLOCKED tf={interval} rr={pro_rr:.2f} required={PRO_ENGINE_MIN_RR:.2f}")
+            return None
+    if source == FIBONACCI_SOURCE:
+        try:
+            fib_conf = float(confidence or 0)
+            fib_rr = float(risk_reward or 0)
+        except Exception:
+            fib_conf, fib_rr = 0.0, 0.0
+        if fib_conf < FIBONACCI_AUTOTRADE_THRESHOLD:
+            print(f"[AUTO TRADE QUEUE] FIBONACCI CONFIDENCE BLOCKED tf={interval} conf={fib_conf:.1f} required={FIBONACCI_AUTOTRADE_THRESHOLD}")
+            return None
+        if fib_rr < FIBONACCI_MIN_RR:
+            print(f"[AUTO TRADE QUEUE] FIBONACCI RR BLOCKED tf={interval} rr={fib_rr:.2f} required={FIBONACCI_MIN_RR:.2f}")
             return None
     market = _mt5_market_key(symbol)
     if market != "XAU/USD":
@@ -6715,6 +6956,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     signals_autotrade_count = 0
     order_block_autotrade_count = 0
     pro_engine_autotrade_count = 0
+    fibonacci_autotrade_count = 0
     seen_queue_keys = set()
 
     async def load_symbol_candidates(key: str) -> tuple[list[dict[str, Any]], dict[str, tuple[list[dict[str, Any]], str, str | None]]]:
@@ -6751,7 +6993,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             MTF_AUTOTRADE_STATE.pop(key,None)
             print(f"[WEIGHTED MTF] market={key} ERROR {type(exc).__name__}: {exc}")
 
-        # Signal Lab, Signals and Order Block are independent live strategies.
+        # Signal Lab, Signals, Order Block and Fibonacci are independent live strategies.
         gold_news=await _gold_strategy_news_guard()
         c4_ctx=live_by_tf.get("4h",([],"",None))[0]
         c1_ctx=live_by_tf.get("1h",([],"",None))[0]
@@ -6846,6 +7088,21 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         try:
             c4=live_by_tf.get("4h",([],"",None))[0]
             c1=live_by_tf.get("1h",([],"",None))[0]
+            c30=live_by_tf.get("30min",([],"",None))[0]
+            c15=live_by_tf.get("15min",([],"",None))[0]
+            c5=live_by_tf.get("5min",([],"",None))[0]
+            if min(len(c4),len(c1),len(c30),len(c15),len(c5))>=60:
+                fib_item=_fibonacci_strategy_2026(c4,c1,c30,c15,c5)
+                fib_item["interval"]="5min"
+                if fib_item.get("signal") in {"BUY","SELL"}:
+                    candidates.append({"source":FIBONACCI_SOURCE,"interval":"5min","item":fib_item,
+                                       "response":{"mode":"tradingview","candle_time":c5[-1].get("time")}})
+                print(f"[FIBONACCI ENGINE] market={key} signal={fib_item.get('signal')} score={fib_item.get('score')} rr={fib_item.get('risk_reward')} blocked={fib_item.get('blockedReason')}")
+        except Exception as exc:
+            print(f"[FIBONACCI ENGINE] candidate error={type(exc).__name__}: {exc}")
+        try:
+            c4=live_by_tf.get("4h",([],"",None))[0]
+            c1=live_by_tf.get("1h",([],"",None))[0]
             c15=live_by_tf.get("15min",([],"",None))[0]
             c5=live_by_tf.get("5min",([],"",None))[0]
             if min(len(c4),len(c1),len(c15),len(c5))>=80:
@@ -6933,13 +7190,14 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         }
 
     async def process_symbol(key: str):
-        nonlocal created_history, queued, module_signal_count, ict_autotrade_count, signal_lab_autotrade_count, signals_autotrade_count, order_block_autotrade_count, pro_engine_autotrade_count
+        nonlocal created_history, queued, module_signal_count, ict_autotrade_count, signal_lab_autotrade_count, signals_autotrade_count, order_block_autotrade_count, pro_engine_autotrade_count, fibonacci_autotrade_count
         candidates, live_by_tf = await load_symbol_candidates(key)
         print(f"[SIGNAL FLOW] candidates={len(candidates)} market={key}")
         consensus_ready: list[dict[str, Any]] = []
         signal_lab_ready: list[dict[str, Any]] = []
         signals_ready: list[dict[str, Any]] = []
         order_block_ready: list[dict[str, Any]] = []
+        fibonacci_ready: list[dict[str, Any]] = []
 
         # Persist each module independently in History. MT5 execution is no longer
         # performed here; only the 3-of-4 global consensus created after this loop
@@ -7065,6 +7323,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 is_signals_source = source == SIGNALS_AUTOTRADE_SOURCE
                 is_order_block_source = source == ORDER_BLOCK_SOURCE
                 is_pro_engine_source = source == PRO_ENGINE_SOURCE
+                is_fibonacci_source = source == FIBONACCI_SOURCE
                 ict_rr = float(gate.get("r_multiple") or 0)
                 ict_direct_ready = bool(
                     is_ict_source and tf not in {"1min","1m","m1"}
@@ -7105,6 +7364,15 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                     and pro_ai_conf >= PRO_ENGINE_AUTOTRADE_THRESHOLD
                     and pro_rr >= PRO_ENGINE_MIN_RR
                 )
+                fib_rr = float(gate.get("r_multiple") or 0)
+                fib_ai_conf = float(ai.get("confidence") or 0) if is_fibonacci_source else 0.0
+                fib_base_ready = bool(
+                    is_fibonacci_source and tf not in {"1min","1m","m1"}
+                    and bool(original_item.get("fibonacci_autotrade_eligible") or original_item.get("auto_trade_eligible"))
+                    and conf >= FIBONACCI_AUTOTRADE_THRESHOLD
+                    and fib_ai_conf >= FIBONACCI_AUTOTRADE_THRESHOLD
+                    and fib_rr >= FIBONACCI_MIN_RR
+                )
                 item.update({"entry":entry,"stop_loss":sl,"take_profit":tp,"live_levels_verified":True,
                              "levels_repaired_from_live_chart":repaired,
                              "auto_trade_eligible":bool(ict_direct_ready),
@@ -7116,6 +7384,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                              "order_block_base_autotrade_ready":bool(ob_base_ready) if is_order_block_source else item.get("order_block_base_autotrade_ready"),
                              "order_block_autotrade_eligible":False if is_order_block_source else item.get("order_block_autotrade_eligible"),
                              "pro_engine_autotrade_eligible":bool(pro_direct_ready) if is_pro_engine_source else item.get("pro_engine_autotrade_eligible"),
+                             "fibonacci_base_autotrade_ready":bool(fib_base_ready) if is_fibonacci_source else item.get("fibonacci_base_autotrade_ready"),
+                             "fibonacci_autotrade_eligible":False if is_fibonacci_source else item.get("fibonacci_autotrade_eligible"),
                              "consensus_eligible":bool(is_core_consensus_source),
                              "consensus_required":CONSENSUS_REQUIRED_CONFIRMATIONS,
                              "execution_state":"ICT_AUTOTRADE_READY" if ict_direct_ready else
@@ -7128,6 +7398,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                                                "ORDER_BLOCK_THRESHOLD_BLOCKED" if is_order_block_source else
                                                "PRO_ENGINE_AUTOTRADE_READY" if pro_direct_ready else
                                                "PRO_ENGINE_THRESHOLD_BLOCKED" if is_pro_engine_source else
+                                               "FIBONACCI_CONFIRMATION_WAIT" if fib_base_ready else
+                                               "FIBONACCI_THRESHOLD_BLOCKED" if is_fibonacci_source else
                                                "CONSENSUS_READY" if is_core_consensus_source else "ANALYSIS_ONLY",
                              "execution_reason":"ICT_DIRECT_AUTOTRADE_READY" if ict_direct_ready else
                                                 ("ICT_THRESHOLD_OR_RR_BLOCK" if is_ict_source else
@@ -7139,6 +7411,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                                                  "ORDER_BLOCK_THRESHOLD_OR_RR_BLOCK" if is_order_block_source else
                                                  "5_ENGINE_3_OF_5_AI_RR_PASSED" if pro_direct_ready else
                                                  "5_ENGINE_THRESHOLD_AI_OR_RR_BLOCK" if is_pro_engine_source else
+                                                 "WAITING_FOR_2_CORE_CONFIRMATIONS" if fib_base_ready else
+                                                 "FIBONACCI_THRESHOLD_AI_OR_RR_BLOCK" if is_fibonacci_source else
                                                  "WAITING_FOR_GLOBAL_3_OF_4_CONSENSUS" if is_core_consensus_source else
                                                  "SOURCE_NOT_IN_AUTOTRADE_CONSENSUS"),
                              "risk_reward":gate.get("r_multiple")})
@@ -7171,6 +7445,13 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                         "confidence": conf, "smart_score": float(smart.get("score") or 0),
                         "risk_reward": ob_rr, "item": item,
                     })
+                if fib_base_ready:
+                    fibonacci_ready.append({
+                        "source": source, "interval": tf, "candle_time": candle_time,
+                        "direction": direction, "entry": entry, "sl": sl, "tp": tp,
+                        "confidence": conf, "smart_score": float(smart.get("score") or 0),
+                        "risk_reward": fib_rr, "item": item,
+                    })
 
             payload = {"source":source,"module_signal":item,"symbol":key,"interval":tf,"candle_time":candle_time,
                        "live_generated":True,"execution_gate":{
@@ -7183,6 +7464,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                            "signals_base_ready":bool(item.get("signals_base_autotrade_ready")) if source == SIGNALS_AUTOTRADE_SOURCE else False,
                            "order_block_base_ready":bool(item.get("order_block_base_autotrade_ready")) if source == ORDER_BLOCK_SOURCE else False,
                            "pro_engine_ready":bool(item.get("pro_engine_autotrade_eligible")) if source == PRO_ENGINE_SOURCE else False,
+                           "fibonacci_base_ready":bool(item.get("fibonacci_base_autotrade_ready")) if source == FIBONACCI_SOURCE else False,
                            "risk_reward":gate.get("r_multiple"),"risk":gate.get("risk"),"max_risk":gate.get("max_risk"),
                            "levels_repaired":repaired},
                        "consensus":{"required":CONSENSUS_REQUIRED_CONFIRMATIONS,"core_sources":sorted(CONSENSUS_AUTOTRADE_SOURCES),
@@ -7263,6 +7545,70 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
 
             # Other individual modules cannot queue directly; their only MT5 path is
             # the server-created 3-of-4 Consensus row/order below.
+
+        # Fibonacci AutoTrade:
+        # Fibonacci itself + at least two validated core modules in the same M5 direction = 3 confirmations.
+        for fibrow in fibonacci_ready:
+            tf=str(fibrow.get("interval") or "")
+            candle_time=str(fibrow.get("candle_time") or "")
+            direction=str(fibrow.get("direction") or "").upper()
+            matching={}
+            for x in consensus_ready:
+                if str(x.get("interval") or "")!=tf or str(x.get("candle_time") or "")!=candle_time:
+                    continue
+                if str(x.get("direction") or "").upper()!=direction:
+                    continue
+                src=str(x.get("source") or "")
+                if src in CONSENSUS_AUTOTRADE_SOURCES:
+                    matching[src]=x
+            total_confirmations=1+len(matching)
+            passed=total_confirmations>=FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS
+            row=session.scalar(select(SignalHistory).where(
+                SignalHistory.user_id==user.id, SignalHistory.symbol==key,
+                SignalHistory.interval==tf, SignalHistory.candle_time==candle_time,
+                SignalHistory.source==FIBONACCI_SOURCE,
+            ).order_by(SignalHistory.id.desc()))
+            if row is not None:
+                try: row_payload=json.loads(row.payload or "{}")
+                except Exception: row_payload={}
+                module_payload=row_payload.get("module_signal") if isinstance(row_payload.get("module_signal"),dict) else {}
+                module_payload["fibonacci_consensus_passed"]=passed
+                module_payload["fibonacci_autotrade_eligible"]=passed
+                module_payload["fibonacci_confirmation_count"]=total_confirmations
+                module_payload["fibonacci_confirming_sources"]=sorted(matching.keys())
+                module_payload["execution_state"]="FIBONACCI_AUTOTRADE_READY" if passed else "FIBONACCI_CONFIRMATION_BLOCKED"
+                module_payload["execution_reason"]="3_CONFIRMATIONS_PASSED" if passed else f"ONLY_{total_confirmations}_OF_3_CONFIRMATIONS"
+                row_payload["module_signal"]=module_payload
+                row_payload["fibonacci_consensus"]={
+                    "passed":passed,"required":FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS,
+                    "total_confirmations":total_confirmations,"direction":direction,
+                    "confirming_core_sources":sorted(matching.keys()),
+                }
+                row_payload.setdefault("auto_trade",{})["mode"]="FIBONACCI_PRO_3_CONFIRMATIONS"
+                row.payload=json.dumps(row_payload,ensure_ascii=False,default=str)
+                _history_sync_row(row,row_payload)
+            if not passed:
+                print(f"[FIBONACCI ENGINE] AUTOTRADE BLOCKED market={key} tf={tf} dir={direction} confirmations={total_confirmations}/3 core={sorted(matching.keys())}")
+                continue
+            existing_queue_ids={str(q.get("id")) for q in MT5_ORDER_QUEUE}
+            order=_queue_autotrade_order(
+                symbol=key,source=FIBONACCI_SOURCE,interval=tf,direction=direction,
+                entry=float(fibrow.get("entry")),sl=float(fibrow.get("sl")),tp=list(fibrow.get("tp") or []),
+                volume=MT5_LOT_SIZE,confidence=float(fibrow.get("confidence") or 0),
+                candle_time=candle_time,risk_reward=float(fibrow.get("risk_reward") or 0),
+            )
+            is_new=order is not None and str(order.get("id")) not in existing_queue_ids
+            if order is not None and row is not None:
+                try: row_payload=json.loads(row.payload or "{}")
+                except Exception: row_payload={}
+                row_payload.setdefault("auto_trade",{})["queued"]=True
+                row_payload["auto_trade"]["order_id"]=order.get("id")
+                row.payload=json.dumps(row_payload,ensure_ascii=False,default=str)
+                _history_sync_row(row,row_payload)
+            if is_new:
+                queued.append(order)
+                fibonacci_autotrade_count+=1
+                print(f"[FIBONACCI ENGINE] QUEUED market={key} tf={tf} dir={direction} confirmations={total_confirmations}/3 conf={float(fibrow.get('confidence') or 0):.1f} rr={float(fibrow.get('risk_reward') or 0):.2f}")
 
         # Order Block AutoTrade:
         # Order Block itself + at least two validated core modules in the same M5 direction = 3 confirmations.
@@ -7589,6 +7935,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         "signals_autotrade_queued": signals_autotrade_count,
         "order_block_autotrade_queued": order_block_autotrade_count,
         "pro_engine_autotrade_queued": pro_engine_autotrade_count,
+        "fibonacci_autotrade_queued": fibonacci_autotrade_count,
         "history_count": len(rows),
         "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
         "forward_mode": "CORE 3-of-4; ICT direct; Signal Lab +2 core; Signals +2 core; Order Block +2 core; 5 Engine Consensus internal 3-of-5 direct; all AutoTrade >=85% AI/RR gates; M1 blocked",
@@ -7614,6 +7961,14 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                                  "min_rr": PRO_ENGINE_MIN_RR,
                                  "required_confirmations": PRO_ENGINE_REQUIRED_CONFIRMATIONS,
                                  "engine_count":5,"execution_timeframe":"5min","m1_blocked":True},
+        "fibonacci_autotrade": {"enabled": True, "source": FIBONACCI_SOURCE,
+                                "strategy": "XAUUSD Fibonacci Confluence Pro 2026",
+                                "signal_threshold": FIBONACCI_SIGNAL_THRESHOLD,
+                                "autotrade_threshold": FIBONACCI_AUTOTRADE_THRESHOLD,
+                                "min_rr": FIBONACCI_MIN_RR,
+                                "required_total_confirmations": FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS,
+                                "execution_timeframe":"5min","m1_blocked":True,
+                                "flat_blocked":True,"transition_blocked":True},
         "signal_lab_autotrade": {"enabled": True, "source": GOLD_STRATEGY_SOURCE,
                                  "signal_threshold": GOLD_STRATEGY_SIGNAL_THRESHOLD,
                                  "autotrade_threshold": GOLD_STRATEGY_AUTOTRADE_THRESHOLD,
