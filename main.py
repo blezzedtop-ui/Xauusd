@@ -4088,6 +4088,21 @@ def _ob_zone_freshness(candles: list[dict[str, Any]], zone: dict[str, Any], rece
     return {"fresh":fresh,"retested":retested,"prior_mitigations":prior,
             "recent_touches":recent,"first_retest":fresh and retested}
 
+def _ob_recent_displacement(candles:list[dict[str,Any]], direction:str, max_bars:int=8) -> dict[str,Any]:
+    if direction not in {"BUY","SELL"}:
+        return {"confirmed":False,"atr_ratio":0.0,"bars_ago":None}
+    start=max(20,len(candles)-max_bars)
+    best=0.0
+    best_ago=None
+    for end in range(len(candles),start,-1):
+        ok,ratio=_ict_displacement(candles[:end],direction)
+        best=max(best,float(ratio or 0))
+        if ok:
+            return {"confirmed":True,"atr_ratio":round(float(ratio or 0),2),"bars_ago":len(candles)-end}
+        if best_ago is None or float(ratio or 0)>=best:
+            best_ago=len(candles)-end
+    return {"confirmed":False,"atr_ratio":round(best,2),"bars_ago":best_ago}
+
 def _ob_fvg_overlap(ob: dict[str, Any], fvg: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(ob,dict) or not isinstance(fvg,dict) or ob.get("low") is None or fvg.get("low") is None:
         return {"overlap":False,"low":None,"high":None}
@@ -4135,10 +4150,10 @@ def _order_block_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]],
     sweep=sweep5 if sweep5.get("type")==expected_sweep else sweep15 if sweep15.get("type")==expected_sweep else {"type":"NONE","level":None,"extreme":None}
     sweep_ok=direction!="WAIT" and sweep.get("type")==expected_sweep
 
-    disp5,disp5_ratio=_ict_displacement(c5,direction) if direction!="WAIT" else (False,0.0)
-    disp15,disp15_ratio=_ict_displacement(c15,direction) if direction!="WAIT" else (False,0.0)
-    displacement_ok=bool(disp5 or disp15)
-    displacement_ratio=max(float(disp5_ratio or 0),float(disp15_ratio or 0))
+    disp5=_ob_recent_displacement(c5,direction,8)
+    disp15=_ob_recent_displacement(c15,direction,6)
+    displacement_ok=bool(disp5.get("confirmed") or disp15.get("confirmed"))
+    displacement_ratio=max(float(disp5.get("atr_ratio") or 0),float(disp15.get("atr_ratio") or 0))
 
     st5=_structure_state(c5[:-1] if len(c5)>2 else c5)
     st15=_structure_state(c15[:-1] if len(c15)>2 else c15)
@@ -4153,7 +4168,10 @@ def _order_block_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]],
               (direction=="SELL" and m15b.get("bias")=="BEARISH" and m5b.get("bias")=="BEARISH")
 
     fvg5=_ict_fvg(c5); fvg15=_ict_fvg(c15)
-    fvg=fvg5 if fvg5.get("type")==desired else fvg15 if fvg15.get("type")==desired else {"type":"NONE","low":None,"high":None,"index":None}
+    if entry_ob is ob5:
+        fvg=fvg5 if fvg5.get("type")==desired else {"type":"NONE","low":None,"high":None,"index":None}
+    else:
+        fvg=fvg15 if fvg15.get("type")==desired else {"type":"NONE","low":None,"high":None,"index":None}
     overlap=_ob_fvg_overlap(entry_ob,fvg)
     overlap_zone={"type":desired,"low":overlap.get("low"),"high":overlap.get("high"),"index":max(int(entry_ob.get("index") or 0),int(fvg.get("index") or 0))}
     overlap_retest=_ict_zone_retest(entry_series,overlap_zone,direction,4) if overlap.get("overlap") else {"retested":False}
@@ -4235,7 +4253,8 @@ def _order_block_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]],
         "auto_trade_eligible":base_ready,"execution_timeframe":"5min","m1_blocked":True,
         "htf":{"h4":h4,"h1":h1,"aligned":htf_aligned,"order_block":htf_ob},
         "lower_tf":{"m15":m15b,"m5":m5b,"aligned":ltf_align},
-        "liquidity":sweep,"displacement":{"confirmed":displacement_ok,"atr_ratio":round(displacement_ratio,2)},
+        "liquidity":sweep,"displacement":{"confirmed":displacement_ok,"atr_ratio":round(displacement_ratio,2),
+                                            "m5":disp5,"m15":disp15},
         "mss":{"m5":mss5,"m15":mss15,"m5_level":mss5_level,"m15_level":mss15_level},
         "structure":{"m5":st5,"m15":st15},"order_block":entry_ob,"freshness":freshness,
         "fvg":fvg,"overlap":overlap,"overlap_retest":overlap_retest,
@@ -6289,10 +6308,12 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                     and signals_rr >= SIGNALS_MIN_RR
                 )
                 ob_rr = float(gate.get("r_multiple") or 0)
+                ob_ai_conf = float(ai.get("confidence") or 0) if is_order_block_source else 0.0
                 ob_base_ready = bool(
                     is_order_block_source and tf not in {"1min","1m","m1"}
                     and bool(original_item.get("order_block_autotrade_eligible") or original_item.get("auto_trade_eligible"))
                     and conf >= ORDER_BLOCK_AUTOTRADE_THRESHOLD
+                    and ob_ai_conf >= ORDER_BLOCK_AUTOTRADE_THRESHOLD
                     and ob_rr >= ORDER_BLOCK_MIN_RR
                 )
                 item.update({"entry":entry,"stop_loss":sl,"take_profit":tp,"live_levels_verified":True,
