@@ -742,11 +742,56 @@ async function loadProEngines(force=false){
   renderProEngines(d);
   return d;
 }
+async function loadFibonacciEngine(){
+  if(!IS_ADMIN)return;
+  const status=$('fibEngineStatus');
+  if(status)status.textContent='FIBONACCI ENGINE hisoblanmoqda…';
+  try{
+    const d=await api(`/api/v1/fibonacci-engine/${encodeURIComponent(symbol)}`);
+    if(!d.ok) throw Error(d.reason||'Fibonacci Engine unavailable');
+    const x=d.item||{};
+    const sig=String(x.signal||'WAIT').toUpperCase();
+    const cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
+    setText('fibEngineSignal',sig);
+    if($('fibEngineSignal')) $('fibEngineSignal').className='signal-main '+cls;
+    setText('fibEngineScore',`${x.score??0} / 100`);
+    setText('fibEngineReason',x.reason||x.blockedReason||'—');
+    setText('fibEngineEntry',fmt(x.entry)); setText('fibEngineSL',fmt(x.stop_loss));
+    setText('fibEngineTP1',fmt((x.take_profit||[])[0])); setText('fibEngineTP2',fmt((x.take_profit||[])[1]));
+    setText('fibEngineRR',x.risk_reward?`1 : ${Number(x.risk_reward).toFixed(2)}`:'—');
+    setText('fibEngineRegime',x.market_regime?.regime||'—');
+    setText('fibEngineHtf',`${x.htf?.h4?.bias||'—'} / ${x.htf?.h1?.bias||'—'}`);
+    setText('fibEngineImpulse',x.impulse?.atr_multiple!=null?`${Number(x.impulse.atr_multiple).toFixed(2)} ATR`:'—');
+    const lv=x.fibonacci?.levels||{};
+    setText('fibEngine382',fmt(lv['0.382'])); setText('fibEngine500',fmt(lv['0.5']));
+    setText('fibEngine618',fmt(lv['0.618'])); setText('fibEngine786',fmt(lv['0.786']));
+    const z=x.fibonacci?.preferred_zone||{};
+    setText('fibEngineZone',z.low!=null?`${fmt(z.low)} – ${fmt(z.high)}`:'—');
+    setText('fibEngineSnr',x.snr?.overlap?.overlap?'OVERLAP':'WAIT');
+    setText('fibEngineOb',x.institutional_overlap?.order_block?.overlap?'OVERLAP':'WAIT');
+    setText('fibEngineFvg',x.institutional_overlap?.fvg?.overlap?'OVERLAP':'WAIT');
+    setText('fibEngineSweep',x.liquidity?.type||'NONE');
+    setText('fibEngineMss',`M15 ${x.mss?.m15?'YES':'NO'} · M5 ${x.mss?.m5?'YES':'NO'}`);
+    setText('fibEngineMomentum',`${x.momentum?.signal||'WAIT'} · ${x.momentum?.score??0}/100`);
+    setText('fibEngineAI',`${x.ai_validation?.signal||'WAIT'} · ${x.ai_validation?.confidence??0}%`);
+    const ext=x.fibonacci?.extension_targets||{};
+    setText('fibEngine1272',fmt(ext['1.272'])); setText('fibEngine1618',fmt(ext['1.618']));
+    if($('fibEngineChecks')) $('fibEngineChecks').innerHTML=(x.checks||[]).map(q=>`<div class="component"><small>${escapeHtml(q.name||'Check')}</small><b>${q.status||'MISS'} · ${q.points||0}/${q.max_points||0}</b><div class="mini">${escapeHtml(q.detail||'')}</div></div>`).join('');
+    const base=!!x.fibonacci_autotrade_eligible;
+    if(status)status.textContent=`LIVE · ${base?'BASE READY · WAIT 3-CONFIRM':'AUTOTRADE WAIT'} · AI ≥85 · RR ≥1.40 · M1 BLOCKED · FLAT/TRANSITION BLOCKED`;
+  }catch(e){
+    if(status)status.textContent='ERROR';
+    setText('fibEngineSignal','WAIT');
+    if($('fibEngineSignal')) $('fibEngineSignal').className='signal-main wait';
+    setText('fibEngineReason','Fibonacci Engine error: '+(e.message||'server error'));
+  }
+}
 
-function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'Order Block',trendEngineSection:'Trend Engine',snrBreakoutSection:'SNR Breakout',ictLiquiditySection:'ICT Liquidity',obFvgSection:'OB / FVG Engine',momentumEngineSection:'Technical Momentum'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section'){loadMT5Status().catch(()=>{});loadMT5GatewayAccounts().catch(()=>{});}if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
-if(id==='algotradeSection')loadOrderBlock().catch(()=>{});if(['trendEngineSection','snrBreakoutSection','ictLiquiditySection','obFvgSection','momentumEngineSection'].includes(id))loadProEngines().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
+function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'Order Block',trendEngineSection:'Trend Engine',snrBreakoutSection:'SNR Breakout',ictLiquiditySection:'ICT Liquidity',obFvgSection:'OB / FVG Engine',momentumEngineSection:'Technical Momentum',fibonacciEngineSection:'Fibonacci Engine'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section'){loadMT5Status().catch(()=>{});loadMT5GatewayAccounts().catch(()=>{});}if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
+if(id==='algotradeSection')loadOrderBlock().catch(()=>{});if(id==='fibonacciEngineSection')loadFibonacciEngine().catch(()=>{});if(['trendEngineSection','snrBreakoutSection','ictLiquiditySection','obFvgSection','momentumEngineSection'].includes(id))loadProEngines().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
 
 document.addEventListener('click',e=>{const b=e.target.closest('#refreshAlgoTrade');if(b)loadOrderBlock().catch(()=>{})});
+document.addEventListener('click',e=>{const b=e.target.closest('#refreshFibonacciEngine');if(b)loadFibonacciEngine().catch(err=>showToast(err.message||'Fibonacci error'))});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-refresh-pro-engines]');if(b)loadProEngines(true).catch(err=>showToast(err.message||'Engine error'))});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-classic-interval]');if(b){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===b));classicInterval=b.dataset.classicInterval;loadClassicTrade(classicInterval)}});
 document.addEventListener('click',e=>{
