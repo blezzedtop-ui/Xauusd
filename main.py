@@ -492,7 +492,7 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
         if str(row.interval or "").strip().lower() in {"1m", "1min", "m1"}:
             continue
         source = _normalize_history_source(str(row.source or "Signals")[:40])
-        if source not in {CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE}:
+        if source not in {CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE}:
             continue
         if _autotrade_source_excluded(source):
             continue
@@ -545,6 +545,16 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
             if not ob_allowed or ob_conf < ORDER_BLOCK_AUTOTRADE_THRESHOLD or ob_rr < ORDER_BLOCK_MIN_RR:
                 continue
             bridge_rr = ob_rr
+        elif source == PRO_ENGINE_SOURCE:
+            try:
+                pro_conf = float(row.signal_score or module_payload.get("confidence") or 0)
+                pro_rr = float(row.risk_reward or module_payload.get("risk_reward") or (payload.get("execution_gate") or {}).get("risk_reward") or 0)
+            except Exception:
+                pro_conf, pro_rr = 0.0, 0.0
+            pro_allowed = bool(module_payload.get("pro_engine_autotrade_eligible"))
+            if not pro_allowed or pro_conf < PRO_ENGINE_AUTOTRADE_THRESHOLD or pro_rr < PRO_ENGINE_MIN_RR:
+                continue
+            bridge_rr = pro_rr
         entry, sl, tps = _history_row_levels_for_autotrade(row, payload)
         if entry is None or sl is None or not tps:
             continue
@@ -1385,6 +1395,7 @@ def _normalize_history_source(value: str | None) -> str:
         "auto trend line":"Auto Trend Line", "trend line":"Trend Line", "ict signals":"ICT Signals",
         "multi timeframe":"Multi-Timeframe", "multi-timeframe":"Multi-Timeframe", "classic trade":"Classic Trade",
         "algotrade":"Order Block", "order block":"Order Block", "orderblock":"Order Block", "consensus":"Consensus", "snr":"SNR",
+        "5 engine consensus":"5 Engine Consensus", "pro engine consensus":"5 Engine Consensus",
         "economic calendar":"Economic Calendar", "market sessions":"Market Sessions"
     }
     return aliases.get(raw.lower(), raw)[:40]
@@ -1412,6 +1423,11 @@ ORDER_BLOCK_SIGNAL_THRESHOLD = 80
 ORDER_BLOCK_AUTOTRADE_THRESHOLD = 85
 ORDER_BLOCK_MIN_RR = 1.40
 ORDER_BLOCK_REQUIRED_TOTAL_CONFIRMATIONS = 3
+PRO_ENGINE_SOURCE = "5 Engine Consensus"
+PRO_ENGINE_SIGNAL_THRESHOLD = 80
+PRO_ENGINE_AUTOTRADE_THRESHOLD = 85
+PRO_ENGINE_MIN_RR = 1.40
+PRO_ENGINE_REQUIRED_CONFIRMATIONS = 3
 
 def _signal_source_blocked(value: str | None) -> bool:
     return _normalize_history_source(value) in BLOCKED_SIGNAL_SOURCES
@@ -4305,6 +4321,404 @@ async def build_order_block_signals(symbol:str="XAU/USD") -> dict[str,Any]:
                 "reason":str(exc),"generated_at":datetime.now(timezone.utc).isoformat()}
 
 
+
+def _pro_engine_result(name:str, signal:str, score:int, checks:list[dict[str,Any]],
+                       blocked_reason:str|None=None, **extra:Any) -> dict[str,Any]:
+    sig=str(signal or "WAIT").upper()
+    if sig not in {"BUY","SELL"}:
+        sig="WAIT"
+    return {
+        "engine":name,"signal":sig,"confidence":int(max(0,min(100,score))),"score":int(max(0,min(100,score))),
+        "blockedReason":blocked_reason if sig=="WAIT" else None,"checks":checks,**extra,
+    }
+
+def _pro_structure_direction(candles:list[dict[str,Any]]) -> dict[str,Any]:
+    data=candles[:-1] if len(candles)>2 else candles
+    highs,lows=_ict_swings(data,2)
+    hh=len(highs)>=2 and highs[-1][1]>highs[-2][1]
+    hl=len(lows)>=2 and lows[-1][1]>lows[-2][1]
+    lh=len(highs)>=2 and highs[-1][1]<highs[-2][1]
+    ll=len(lows)>=2 and lows[-1][1]<lows[-2][1]
+    structure="BULLISH" if hh and hl else "BEARISH" if lh and ll else "MIXED"
+    closes=[float(x["close"]) for x in data]
+    e50=_ema(closes[-220:],50)
+    e200=_ema(closes[-260:],200)
+    e50_prev=_ema(closes[-221:-1],50) if len(closes)>55 else e50
+    price=float(data[-1]["close"])
+    ema_dir="BULLISH" if e50>e200 and price>e50 and e50>=e50_prev else "BEARISH" if e50<e200 and price<e50 and e50<=e50_prev else "MIXED"
+    return {"structure":structure,"ema_direction":ema_dir,"ema50":round(e50,4),"ema200":round(e200,4),
+            "ema50_slope":round(e50-e50_prev,6),"price":round(price,4)}
+
+def _pro_trend_engine(c4:list[dict[str,Any]],c1:list[dict[str,Any]],c15:list[dict[str,Any]]) -> dict[str,Any]:
+    h4=_pro_structure_direction(c4); h1=_pro_structure_direction(c1)
+    h4_dir=h4["structure"]; h1_dir=h1["structure"]
+    direction="BUY" if h4_dir=="BULLISH" and h1_dir=="BULLISH" else "SELL" if h4_dir=="BEARISH" and h1_dir=="BEARISH" else "WAIT"
+    desired="BULLISH" if direction=="BUY" else "BEARISH" if direction=="SELL" else "NONE"
+    ema_ok=direction!="WAIT" and h4["ema_direction"]==desired and h1["ema_direction"]==desired
+
+    closed=c15[:-1] if len(c15)>2 else c15
+    closes=[float(x["close"]) for x in closed]
+    e50=_ema(closes[-180:],50); a=max(atr(closed),float(closed[-1]["close"])*0.00025)
+    recent=closed[-8:]
+    if direction=="BUY":
+        pullback=any(float(x["low"])<=e50+a*0.25 for x in recent) and float(closed[-1]["close"])>e50
+    elif direction=="SELL":
+        pullback=any(float(x["high"])>=e50-a*0.25 for x in recent) and float(closed[-1]["close"])<e50
+    else:
+        pullback=False
+    bos,bos_level=_ict_mss(c15,direction) if direction!="WAIT" else (False,None)
+
+    checks=[]; score=0
+    def add(n,p,ok,d):
+        nonlocal score
+        if ok: score+=p
+        checks.append({"name":n,"points":p if ok else 0,"max_points":p,"status":"PASS" if ok else "MISS","detail":d})
+    add("H4 Structure",25,h4_dir==desired,f"H4={h4_dir}")
+    add("H1 Structure",25,h1_dir==desired,f"H1={h1_dir}")
+    add("EMA50/EMA200 Alignment",15,ema_ok,f"H4={h4['ema_direction']} H1={h1['ema_direction']}")
+    add("M15 Corrective Pullback",15,pullback,f"EMA50={e50:.2f}")
+    add("Continuation BOS",20,bos,f"level={bos_level}")
+    signal=direction if direction!="WAIT" and score>=80 else "WAIT"
+    reason=None
+    if direction=="WAIT": reason="H4_H1_STRUCTURE_CONFLICT"
+    elif not ema_ok: reason="EMA_ALIGNMENT_MISSING"
+    elif not pullback: reason="NO_M15_PULLBACK"
+    elif not bos: reason="NO_CONTINUATION_BOS"
+    elif score<80: reason="LOW_CONFIDENCE"
+    return _pro_engine_result("Trend Engine",signal,score,checks,reason,h4=h4,h1=h1,
+                              m15={"ema50":round(e50,4),"pullback":pullback,"bos":bos,"bos_level":bos_level})
+
+def _pro_snr_breakout_engine(c1:list[dict[str,Any]],c15:list[dict[str,Any]],c5:list[dict[str,Any]]) -> dict[str,Any]:
+    zones=_snr_zone_analysis(c1)
+    sup=zones["support"]; res=zones["resistance"]
+    a15=max(atr(c15),float(c15[-1]["close"])*0.00025)
+    recent_start=max(2,len(c15)-10)
+    breakout=None
+    for i in range(recent_start,len(c15)):
+        cur,prev=c15[i],c15[i-1]
+        body=abs(float(cur["close"])-float(cur["open"]))
+        if float(prev["close"])<=float(res["high"]) and float(cur["close"])>float(res["high"])+a15*0.10:
+            breakout={"direction":"BUY","index":i,"close":float(cur["close"]),"body":body}
+        elif float(prev["close"])>=float(sup["low"]) and float(cur["close"])<float(sup["low"])-a15*0.10:
+            breakout={"direction":"SELL","index":i,"close":float(cur["close"]),"body":body}
+    direction=breakout["direction"] if breakout else "WAIT"
+    zone=res if direction=="BUY" else sup if direction=="SELL" else {}
+    quality_ok=bool(zone and int(zone.get("strength") or 0)>=80)
+    close_ok=bool(breakout)
+    displacement_ok=bool(breakout and float(breakout["body"])>=a15*0.60)
+
+    retest=False
+    if breakout:
+        for x in c15[int(breakout["index"])+1:]:
+            if direction=="BUY" and float(x["low"])<=float(res["high"])+a15*0.18 and float(x["close"])>=float(res["low"]):
+                retest=True
+            if direction=="SELL" and float(x["high"])>=float(sup["low"])-a15*0.18 and float(x["close"])<=float(sup["high"]):
+                retest=True
+    m5c=c5[-1]; m5body=abs(float(m5c["close"])-float(m5c["open"])); m5rng=max(float(m5c["high"])-float(m5c["low"]),1e-9)
+    m5_ok=(direction=="BUY" and float(m5c["close"])>float(m5c["open"]) and m5body/m5rng>=0.45) or \
+          (direction=="SELL" and float(m5c["close"])<float(m5c["open"]) and m5body/m5rng>=0.45)
+    m5_mss,_=_ict_mss(c5,direction) if direction!="WAIT" else (False,None)
+    m5_ok=bool(m5_ok or m5_mss)
+
+    checks=[]; score=0
+    def add(n,p,ok,d):
+        nonlocal score
+        if ok: score+=p
+        checks.append({"name":n,"points":p if ok else 0,"max_points":p,"status":"PASS" if ok else "MISS","detail":d})
+    add("HTF SNR Quality",25,quality_ok,f"strength={zone.get('strength') if zone else 0}")
+    add("Breakout Candle Close",20,close_ok,direction)
+    add("Breakout Displacement",15,displacement_ok,f"body/ATR={(float(breakout['body'])/a15 if breakout else 0):.2f}")
+    add("Clean Retest",25,retest,f"1-8 M15 candles")
+    add("M5 Confirmation",15,m5_ok,f"MSS={m5_mss}")
+    signal=direction if direction!="WAIT" and score>=80 else "WAIT"
+    reason=None
+    if not breakout: reason="NO_CONFIRMED_BREAKOUT"
+    elif not displacement_ok: reason="WEAK_BREAKOUT_DISPLACEMENT"
+    elif not retest: reason="NO_CLEAN_RETEST"
+    elif not m5_ok: reason="NO_M5_CONFIRMATION"
+    elif score<80: reason="LOW_CONFIDENCE"
+    return _pro_engine_result("SNR / Breakout Engine",signal,score,checks,reason,zones=zones,breakout=breakout,retest=retest)
+
+def _pro_liquidity_pool(candles:list[dict[str,Any]],direction:str) -> dict[str,Any]:
+    highs,lows=_ict_swings(candles[:-1],2)
+    pts=lows[-10:] if direction=="BUY" else highs[-10:] if direction=="SELL" else []
+    if len(pts)<2:
+        return {"strong":False,"level":None,"matches":0}
+    a=max(atr(candles),float(candles[-1]["close"])*0.0002)
+    best_level=None; best=0
+    for _,v in pts:
+        matches=sum(1 for _,x in pts if abs(float(x)-float(v))<=a*0.18)
+        if matches>best:
+            best=matches; best_level=float(v)
+    return {"strong":best>=2,"level":round(best_level,4) if best_level is not None else None,"matches":best}
+
+def _pro_ict_liquidity_engine(c4:list[dict[str,Any]],c1:list[dict[str,Any]],c15:list[dict[str,Any]],c5:list[dict[str,Any]]) -> dict[str,Any]:
+    h4=_ict_tf_bias(c4); h1=_ict_tf_bias(c1)
+    htf_ok=h4["bias"]==h1["bias"] and h4["bias"] in {"BULLISH","BEARISH"}
+    direction="BUY" if htf_ok and h4["bias"]=="BULLISH" else "SELL" if htf_ok and h4["bias"]=="BEARISH" else "WAIT"
+    pd=_ict_premium_discount(c1)
+    pd_ok=(direction=="BUY" and pd["zone"]=="DISCOUNT") or (direction=="SELL" and pd["zone"]=="PREMIUM")
+    pool=_pro_liquidity_pool(c15,direction)
+    expected="SSL_SWEEP" if direction=="BUY" else "BSL_SWEEP" if direction=="SELL" else "NONE"
+    s5=_ict_recent_liquidity_sweep(c5,5); s15=_ict_recent_liquidity_sweep(c15,4)
+    sweep=s5 if s5.get("type")==expected else s15 if s15.get("type")==expected else {"type":"NONE"}
+    sweep_ok=sweep.get("type")==expected and direction!="WAIT"
+    mss5,_=_ict_mss(c5,direction) if direction!="WAIT" else (False,None)
+    mss15,_=_ict_mss(c15,direction) if direction!="WAIT" else (False,None)
+    d5=_ob_recent_displacement(c5,direction,8); d15=_ob_recent_displacement(c15,direction,6)
+    mss_disp=bool((mss5 or mss15) and (d5.get("confirmed") or d15.get("confirmed")))
+    kz=_ict_killzone(c5[-1].get("time"))
+
+    checks=[]; score=0
+    def add(n,p,ok,d):
+        nonlocal score
+        if ok: score+=p
+        checks.append({"name":n,"points":p if ok else 0,"max_points":p,"status":"PASS" if ok else "MISS","detail":d})
+    add("HTF Bias",20,htf_ok,f"H4={h4['bias']} H1={h1['bias']}")
+    add("Premium / Discount",10,pd_ok,pd["zone"])
+    add("Strong Liquidity Pool",20,bool(pool.get("strong")),f"matches={pool.get('matches')}")
+    add("Clean Sweep",20,sweep_ok,str(sweep.get("type")))
+    add("MSS + Displacement",25,mss_disp,f"M5 MSS={mss5} M15 MSS={mss15}")
+    add("Session",5,bool(kz.get("active")),str(kz.get("name")))
+    signal=direction if direction!="WAIT" and score>=80 else "WAIT"
+    reason=None
+    if not htf_ok: reason="HTF_BIAS_CONFLICT"
+    elif not pd_ok: reason="PREMIUM_DISCOUNT_MISMATCH"
+    elif not pool.get("strong"): reason="NO_STRONG_LIQUIDITY_POOL"
+    elif not sweep_ok: reason="NO_CLEAN_SWEEP"
+    elif not mss_disp: reason="NO_MSS_DISPLACEMENT"
+    elif score<80: reason="LOW_CONFIDENCE"
+    return _pro_engine_result("ICT Liquidity Engine",signal,score,checks,reason,
+                              htf={"h4":h4,"h1":h1},premium_discount=pd,liquidity_pool=pool,
+                              sweep=sweep,mss={"m5":mss5,"m15":mss15},displacement={"m5":d5,"m15":d15},killzone=kz)
+
+def _pro_ob_fvg_engine(c15:list[dict[str,Any]],c5:list[dict[str,Any]],direction_hint:str) -> dict[str,Any]:
+    direction=direction_hint if direction_hint in {"BUY","SELL"} else "WAIT"
+    desired="BULLISH" if direction=="BUY" else "BEARISH" if direction=="SELL" else "NONE"
+    a5=max(atr(c5),float(c5[-1]["close"])*0.0002); a15=max(atr(c15),float(c15[-1]["close"])*0.00025)
+    ob5=_ict_order_block(c5,direction,a5) if direction!="WAIT" else {"type":"NONE"}
+    ob15=_ict_order_block(c15,direction,a15) if direction!="WAIT" else {"type":"NONE"}
+    ob=ob5 if ob5.get("type")==desired else ob15 if ob15.get("type")==desired else {"type":"NONE","low":None,"high":None,"index":None}
+    series=c5 if ob is ob5 else c15
+    fresh=_ob_zone_freshness(series,ob,3)
+    fvg_raw=_ict_fvg(series)
+    fvg=fvg_raw if fvg_raw.get("type")==desired else {"type":"NONE","low":None,"high":None,"index":None}
+    overlap=_ob_fvg_overlap(ob,fvg)
+    overlap_zone={"type":desired,"low":overlap.get("low"),"high":overlap.get("high"),
+                  "index":max(int(ob.get("index") or 0),int(fvg.get("index") or 0))}
+    reaction=_ict_zone_retest(series,overlap_zone,direction,4) if overlap.get("overlap") else {"retested":False}
+    disp=_ob_recent_displacement(series,direction,8)
+    st=_structure_state(series[:-1] if len(series)>2 else series)
+    structure_break=(st.get("bos")==desired or st.get("choch")==desired)
+    if not structure_break and direction!="WAIT":
+        structure_break,_=_ict_mss(series,direction)
+
+    checks=[]; score=0
+    def add(n,p,ok,d):
+        nonlocal score
+        if ok: score+=p
+        checks.append({"name":n,"points":p if ok else 0,"max_points":p,"status":"PASS" if ok else "MISS","detail":d})
+    add("Structure Break",15,bool(structure_break),f"BOS={st.get('bos')} CHoCH={st.get('choch')}")
+    add("Strong Displacement",20,bool(disp.get("confirmed")),f"{disp.get('atr_ratio')} ATR")
+    add("Fresh OB",20,bool(fresh.get("fresh")),f"prior mitigations={fresh.get('prior_mitigations')}")
+    add("Valid FVG",15,fvg.get("type")==desired,str(fvg.get("type")))
+    add("OB + FVG Overlap",20,bool(overlap.get("overlap")),f"{overlap.get('low')}–{overlap.get('high')}")
+    add("First Retest Reaction",10,bool(reaction.get("retested") and fresh.get("first_retest")),f"retest={reaction.get('retested')}")
+    signal=direction if direction!="WAIT" and score>=80 else "WAIT"
+    reason=None
+    if direction=="WAIT": reason="NO_DIRECTION_HINT"
+    elif not structure_break: reason="NO_STRUCTURE_BREAK"
+    elif not disp.get("confirmed"): reason="NO_STRONG_DISPLACEMENT"
+    elif not fresh.get("fresh"): reason="OB_NOT_FRESH"
+    elif fvg.get("type")!=desired: reason="NO_VALID_FVG"
+    elif not overlap.get("overlap"): reason="NO_OB_FVG_OVERLAP"
+    elif not reaction.get("retested"): reason="NO_FIRST_RETEST_REACTION"
+    elif score<80: reason="LOW_CONFIDENCE"
+
+    entry=float(c5[-1]["close"]) if direction!="WAIT" else None
+    sl=None; targets=[]; rr=0.0
+    if direction in {"BUY","SELL"} and entry is not None and ob.get("low") is not None:
+        a=a5
+        sl=float(ob["low"])-a*0.15 if direction=="BUY" else float(ob["high"])+a*0.15
+        risk=abs(entry-sl)
+        raw=_ict_liquidity_targets([c5,c15],direction,entry)
+        if risk>0:
+            if direction=="BUY":
+                targets=[float(x) for x in raw if float(x)>entry and (float(x)-entry)/risk>=PRO_ENGINE_MIN_RR][:3]
+            else:
+                targets=[float(x) for x in raw if float(x)<entry and (entry-float(x))/risk>=PRO_ENGINE_MIN_RR][:3]
+            if targets:
+                rr=((targets[0]-entry)/risk) if direction=="BUY" else ((entry-targets[0])/risk)
+    if signal in {"BUY","SELL"} and (not targets or rr<PRO_ENGINE_MIN_RR):
+        signal="WAIT"; reason="RR_BELOW_1_40_OR_NO_TARGET"
+    return _pro_engine_result("Order Block / FVG Engine",signal,score,checks,reason,
+                              entry=round(entry,4) if entry is not None else None,
+                              stop_loss=round(sl,4) if sl is not None else None,
+                              take_profit=[round(x,4) for x in targets],
+                              risk_reward=round(rr,2),order_block=ob,freshness=fresh,fvg=fvg,overlap=overlap,retest=reaction)
+
+def _pro_macd_state(candles:list[dict[str,Any]]) -> dict[str,Any]:
+    closes=[float(x["close"]) for x in candles]
+    def line(vals):
+        return _ema(vals[-180:],12)-_ema(vals[-180:],26)
+    macd=line(closes)
+    history=[]
+    for cut in range(max(30,len(closes)-12),len(closes)+1):
+        vals=closes[:cut]
+        history.append(line(vals))
+    signal=_ema(history,9)
+    hist=macd-signal
+    prev_hist=None
+    if len(closes)>2:
+        prev_vals=closes[:-1]
+        prev_line=line(prev_vals)
+        prev_history=[]
+        for cut in range(max(30,len(prev_vals)-12),len(prev_vals)+1):
+            prev_history.append(line(prev_vals[:cut]))
+        prev_signal=_ema(prev_history,9)
+        prev_hist=prev_line-prev_signal
+    return {"line":macd,"signal":signal,"histogram":hist,"previous_histogram":prev_hist if prev_hist is not None else hist}
+
+def _pro_adx_dmi(candles:list[dict[str,Any]],period:int=14) -> dict[str,Any]:
+    if len(candles)<period*2+3:
+        return {"adx":0.0,"plus_di":0.0,"minus_di":0.0}
+    def window_metrics(end:int):
+        start=max(1,end-period)
+        tr_sum=plus_sum=minus_sum=0.0
+        for i in range(start,end):
+            cur,prev=candles[i],candles[i-1]
+            up=float(cur["high"])-float(prev["high"])
+            down=float(prev["low"])-float(cur["low"])
+            plus=up if up>down and up>0 else 0.0
+            minus=down if down>up and down>0 else 0.0
+            tr=max(float(cur["high"])-float(cur["low"]),
+                   abs(float(cur["high"])-float(prev["close"])),
+                   abs(float(cur["low"])-float(prev["close"])))
+            tr_sum+=tr; plus_sum+=plus; minus_sum+=minus
+        pdi=100*plus_sum/max(tr_sum,1e-9); mdi=100*minus_sum/max(tr_sum,1e-9)
+        dx=100*abs(pdi-mdi)/max(pdi+mdi,1e-9)
+        return pdi,mdi,dx
+    dxs=[]
+    pdi=mdi=0.0
+    for end in range(len(candles)-period+1,len(candles)+1):
+        pdi,mdi,dx=window_metrics(end)
+        dxs.append(dx)
+    return {"adx":sum(dxs)/max(1,len(dxs)),"plus_di":pdi,"minus_di":mdi}
+
+def _pro_momentum_engine(c15:list[dict[str,Any]],direction_hint:str) -> dict[str,Any]:
+    direction=direction_hint if direction_hint in {"BUY","SELL"} else "WAIT"
+    r=float(rsi(c15)); rprev=float(rsi(c15[:-1])) if len(c15)>16 else r
+    macd=_pro_macd_state(c15); dmi=_pro_adx_dmi(c15)
+    a_now=max(atr(c15),1e-9); a_prev=max(atr(c15[:-1]),1e-9)
+    cur=c15[-1]; body=abs(float(cur["close"])-float(cur["open"])); rng=max(float(cur["high"])-float(cur["low"]),1e-9)
+    body_ratio=body/rng
+    close_pos=(float(cur["close"])-float(cur["low"]))/rng
+
+    rsi_ok=(direction=="BUY" and r>52 and r>rprev) or (direction=="SELL" and r<48 and r<rprev)
+    macd_dir=(direction=="BUY" and macd["line"]>macd["signal"]) or (direction=="SELL" and macd["line"]<macd["signal"])
+    hist_expand=(direction=="BUY" and macd["histogram"]>0 and macd["histogram"]>macd["previous_histogram"]) or \
+                (direction=="SELL" and macd["histogram"]<0 and macd["histogram"]<macd["previous_histogram"])
+    dmi_ok=(direction=="BUY" and dmi["adx"]>=23 and dmi["plus_di"]>dmi["minus_di"]) or \
+           (direction=="SELL" and dmi["adx"]>=23 and dmi["minus_di"]>dmi["plus_di"])
+    atr_ok=a_now>=a_prev*1.02
+    candle_ok=(direction=="BUY" and float(cur["close"])>float(cur["open"]) and body_ratio>=0.60 and close_pos>=0.72) or \
+              (direction=="SELL" and float(cur["close"])<float(cur["open"]) and body_ratio>=0.60 and close_pos<=0.28)
+
+    checks=[]; score=0
+    def add(n,p,ok,d):
+        nonlocal score
+        if ok: score+=p
+        checks.append({"name":n,"points":p if ok else 0,"max_points":p,"status":"PASS" if ok else "MISS","detail":d})
+    add("RSI Regime",20,rsi_ok,f"RSI={r:.1f} prev={rprev:.1f}")
+    add("MACD Direction",20,macd_dir,f"line={macd['line']:.5f} signal={macd['signal']:.5f}")
+    add("MACD Histogram Expansion",15,hist_expand,f"hist={macd['histogram']:.5f}")
+    add("ADX / DMI",20,dmi_ok,f"ADX={dmi['adx']:.1f} +DI={dmi['plus_di']:.1f} -DI={dmi['minus_di']:.1f}")
+    add("ATR Regime",10,atr_ok,f"ATR ratio={a_now/max(a_prev,1e-9):.2f}")
+    add("Candle Momentum",15,candle_ok,f"body/range={body_ratio:.2f}")
+    signal=direction if direction!="WAIT" and score>=80 else "WAIT"
+    reason=None
+    if direction=="WAIT": reason="NO_DIRECTION_HINT"
+    elif not rsi_ok: reason="RSI_REGIME_MISSING"
+    elif not macd_dir: reason="MACD_DIRECTION_MISSING"
+    elif not dmi_ok: reason="ADX_DMI_WEAK"
+    elif score<80: reason="LOW_CONFIDENCE"
+    return _pro_engine_result("Technical Momentum Engine",signal,score,checks,reason,
+                              rsi=round(r,2),macd={k:round(float(v),6) for k,v in macd.items()},
+                              adx_dmi={k:round(float(v),2) for k,v in dmi.items()},
+                              atr_ratio=round(a_now/max(a_prev,1e-9),2),candle_body_ratio=round(body_ratio,2))
+
+def _build_pro_engine_suite(c4:list[dict[str,Any]],c1:list[dict[str,Any]],
+                            c15:list[dict[str,Any]],c5:list[dict[str,Any]]) -> dict[str,Any]:
+    if min(len(c4),len(c1),len(c15),len(c5))<210:
+        return {"ok":False,"reason":"INSUFFICIENT_CANDLES","engines":{},"final":{
+            "signal":"WAIT","confidence":0,"score":0,"blockedReason":"INSUFFICIENT_CANDLES",
+            "entry":None,"stop_loss":None,"take_profit":[],"risk_reward":0,
+            "pro_engine_autotrade_eligible":False,"m1_blocked":True}}
+    trend=_pro_trend_engine(c4,c1,c15)
+    direction_hint=trend.get("signal") if trend.get("signal") in {"BUY","SELL"} else "WAIT"
+    snr=_pro_snr_breakout_engine(c1,c15,c5)
+    ict=_pro_ict_liquidity_engine(c4,c1,c15,c5)
+    ob=_pro_ob_fvg_engine(c15,c5,direction_hint)
+    momentum=_pro_momentum_engine(c15,direction_hint)
+    engines={"trend":trend,"snr_breakout":snr,"ict_liquidity":ict,"ob_fvg":ob,"momentum":momentum}
+    votes={k:str(v.get("signal") or "WAIT") for k,v in engines.items()}
+    buy=[k for k,v in votes.items() if v=="BUY"]; sell=[k for k,v in votes.items() if v=="SELL"]
+    winner="BUY" if len(buy)>=PRO_ENGINE_REQUIRED_CONFIRMATIONS else "SELL" if len(sell)>=PRO_ENGINE_REQUIRED_CONFIRMATIONS else "WAIT"
+    winner_keys=buy if winner=="BUY" else sell if winner=="SELL" else []
+    trend_required=trend.get("signal")==winner and winner!="WAIT"
+    ob_required=ob.get("signal")==winner and winner!="WAIT"
+    confidence=round(sum(float(engines[k].get("confidence") or 0) for k in winner_keys)/max(1,len(winner_keys)),1) if winner_keys else 0.0
+    rr=float(ob.get("risk_reward") or 0)
+    entry=ob.get("entry"); sl=ob.get("stop_loss"); tp=list(ob.get("take_profit") or [])
+    blocked=None
+    if winner=="WAIT": blocked=f"CONSENSUS_BELOW_3_OF_5 BUY={len(buy)} SELL={len(sell)}"
+    elif not trend_required: blocked="TREND_ENGINE_DIRECTION_REQUIRED"
+    elif not ob_required: blocked="OB_FVG_ENTRY_REQUIRED"
+    elif confidence<PRO_ENGINE_SIGNAL_THRESHOLD: blocked="GLOBAL_CONFIDENCE_BELOW_80"
+    elif rr<PRO_ENGINE_MIN_RR: blocked="RR_BELOW_1_40"
+    signal=winner if blocked is None else "WAIT"
+    base_ready=bool(signal in {"BUY","SELL"} and confidence>=PRO_ENGINE_AUTOTRADE_THRESHOLD and rr>=PRO_ENGINE_MIN_RR)
+    final={
+        "signal":signal,"direction_candidate":winner,"confidence":confidence,"score":confidence,
+        "blockedReason":blocked,"entry":entry if signal!="WAIT" else None,"stop_loss":sl if signal!="WAIT" else None,
+        "take_profit":tp if signal!="WAIT" else [],"risk_reward":round(rr,2),
+        "confirmation_count":len(winner_keys),"required_confirmations":PRO_ENGINE_REQUIRED_CONFIRMATIONS,
+        "confirmed_engines":winner_keys,"votes":votes,"agreement_pct":round(len(winner_keys)/5*100,1),
+        "pro_engine_autotrade_eligible":base_ready,"auto_trade_eligible":base_ready,
+        "signal_threshold":PRO_ENGINE_SIGNAL_THRESHOLD,"autotrade_threshold":PRO_ENGINE_AUTOTRADE_THRESHOLD,
+        "min_rr":PRO_ENGINE_MIN_RR,"execution_timeframe":"5min","m1_blocked":True,
+        "strategy_engine":"XAUUSD 5 Engine Decision Pipeline 2026","strategy_version":"PRO5-2026-V1",
+        "strategy_chain":["Trend Engine","SNR / Breakout Engine","ICT Liquidity Engine","Order Block / FVG Engine",
+                          "Technical Momentum Engine","AI Validation","3/5 Consensus","RR >= 1.40","MT5 AutoTrade"],
+        "reason":f"{signal} · votes={votes} · confirmations={len(winner_keys)}/5 · confidence={confidence:.1f}% · RR={rr:.2f}" if signal!="WAIT" else blocked,
+        "candle_time":c5[-1].get("time"),
+    }
+    return {"ok":True,"engines":engines,"final":final,"m1_blocked":True,
+            "generated_at":datetime.now(timezone.utc).isoformat()}
+
+async def build_pro_engine_suite(symbol:str="XAU/USD") -> dict[str,Any]:
+    key=clean_symbol(symbol)
+    try:
+        (c4,m4,w4),(c1,m1,w1),(c15,m15,w15),(c5,m5,w5)=await asyncio.gather(
+            get_candles(key,"4h",260),get_candles(key,"1h",260),get_candles(key,"15min",260),get_candles(key,"5min",260)
+        )
+        suite=_build_pro_engine_suite(c4,c1,c15,c5)
+        suite.update({"symbol":key,"source":PRO_ENGINE_SOURCE,
+                      "warnings":[x for x in (w4,w1,w15,w5) if x]})
+        return suite
+    except Exception as exc:
+        return {"ok":False,"symbol":key,"source":PRO_ENGINE_SOURCE,"reason":str(exc),
+                "engines":{},"final":{"signal":"WAIT","confidence":0,"score":0,"blockedReason":str(exc),
+                                      "entry":None,"stop_loss":None,"take_profit":[],"risk_reward":0,
+                                      "pro_engine_autotrade_eligible":False,"m1_blocked":True},
+                "m1_blocked":True,"generated_at":datetime.now(timezone.utc).isoformat()}
+
+@app.get("/api/v1/pro-engines/{symbol:path}")
+async def pro_engines_endpoint(symbol:str, authorization:str|None=Header(default=None), session:Session=Depends(db)) -> dict[str,Any]:
+    require_admin(authorization,session)
+    return await build_pro_engine_suite(symbol)
+
+
 async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[str, Any]:
     """Signal Lab = Gold Strategy 2026 across all dashboard timeframes.
 
@@ -5848,7 +6262,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
         return None
     normalized_source = _normalize_history_source(source)
-    if normalized_source not in {CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE}:
+    if normalized_source not in {CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE}:
         print(f"[AUTO TRADE QUEUE] AUTOTRADE SOURCE BLOCKED source={source} market={symbol} tf={interval} dir={direction}")
         return None
     source = normalized_source
@@ -5903,6 +6317,18 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
             return None
         if ob_rr < ORDER_BLOCK_MIN_RR:
             print(f"[AUTO TRADE QUEUE] ORDER BLOCK RR BLOCKED tf={interval} rr={ob_rr:.2f} required={ORDER_BLOCK_MIN_RR:.2f}")
+            return None
+    if source == PRO_ENGINE_SOURCE:
+        try:
+            pro_conf = float(confidence or 0)
+            pro_rr = float(risk_reward or 0)
+        except Exception:
+            pro_conf, pro_rr = 0.0, 0.0
+        if pro_conf < PRO_ENGINE_AUTOTRADE_THRESHOLD:
+            print(f"[AUTO TRADE QUEUE] 5 ENGINE CONFIDENCE BLOCKED tf={interval} conf={pro_conf:.1f} required={PRO_ENGINE_AUTOTRADE_THRESHOLD}")
+            return None
+        if pro_rr < PRO_ENGINE_MIN_RR:
+            print(f"[AUTO TRADE QUEUE] 5 ENGINE RR BLOCKED tf={interval} rr={pro_rr:.2f} required={PRO_ENGINE_MIN_RR:.2f}")
             return None
     market = _mt5_market_key(symbol)
     if market != "XAU/USD":
@@ -5977,6 +6403,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     signal_lab_autotrade_count = 0
     signals_autotrade_count = 0
     order_block_autotrade_count = 0
+    pro_engine_autotrade_count = 0
     seen_queue_keys = set()
 
     async def load_symbol_candidates(key: str) -> tuple[list[dict[str, Any]], dict[str, tuple[list[dict[str, Any]], str, str | None]]]:
@@ -6084,6 +6511,22 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                                    "response":{"mode":"tradingview","candle_time":c5[-1].get("time")}})
         except Exception as exc:
             print(f"[ORDER BLOCK PRO] candidate error={type(exc).__name__}: {exc}")
+        try:
+            c4=live_by_tf.get("4h",([],"",None))[0]
+            c1=live_by_tf.get("1h",([],"",None))[0]
+            c15=live_by_tf.get("15min",([],"",None))[0]
+            c5=live_by_tf.get("5min",([],"",None))[0]
+            if min(len(c4),len(c1),len(c15),len(c5))>=210:
+                suite=_build_pro_engine_suite(c4,c1,c15,c5)
+                final=dict(suite.get("final") or {})
+                final["engines"]=suite.get("engines") or {}
+                final["interval"]="5min"
+                if final.get("signal") in {"BUY","SELL"}:
+                    candidates.append({"source":PRO_ENGINE_SOURCE,"interval":"5min","item":final,
+                                       "response":{"mode":"tradingview","candle_time":c5[-1].get("time"),
+                                                   "engine_suite":suite.get("engines")}})
+        except Exception as exc:
+            print(f"[5 ENGINE PIPELINE] candidate error={type(exc).__name__}: {exc}")
         return candidates, live_by_tf
 
     def _build_consensus(validated: list[dict[str, Any]], interval: str, candle_time: str) -> dict[str, Any]:
@@ -6155,7 +6598,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         }
 
     async def process_symbol(key: str):
-        nonlocal created_history, queued, module_signal_count, ict_autotrade_count, signal_lab_autotrade_count, signals_autotrade_count, order_block_autotrade_count
+        nonlocal created_history, queued, module_signal_count, ict_autotrade_count, signal_lab_autotrade_count, signals_autotrade_count, order_block_autotrade_count, pro_engine_autotrade_count
         candidates, live_by_tf = await load_symbol_candidates(key)
         print(f"[SIGNAL FLOW] candidates={len(candidates)} market={key}")
         consensus_ready: list[dict[str, Any]] = []
@@ -6286,6 +6729,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 is_signal_lab_source = source == GOLD_STRATEGY_SOURCE
                 is_signals_source = source == SIGNALS_AUTOTRADE_SOURCE
                 is_order_block_source = source == ORDER_BLOCK_SOURCE
+                is_pro_engine_source = source == PRO_ENGINE_SOURCE
                 ict_rr = float(gate.get("r_multiple") or 0)
                 ict_direct_ready = bool(
                     is_ict_source and tf not in {"1min","1m","m1"}
@@ -6316,6 +6760,16 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                     and ob_ai_conf >= ORDER_BLOCK_AUTOTRADE_THRESHOLD
                     and ob_rr >= ORDER_BLOCK_MIN_RR
                 )
+                pro_rr = float(gate.get("r_multiple") or 0)
+                pro_ai_conf = float(ai.get("confidence") or 0) if is_pro_engine_source else 0.0
+                pro_direct_ready = bool(
+                    is_pro_engine_source and tf not in {"1min","1m","m1"}
+                    and bool(original_item.get("pro_engine_autotrade_eligible") or original_item.get("auto_trade_eligible"))
+                    and int(original_item.get("confirmation_count") or 0) >= PRO_ENGINE_REQUIRED_CONFIRMATIONS
+                    and conf >= PRO_ENGINE_AUTOTRADE_THRESHOLD
+                    and pro_ai_conf >= PRO_ENGINE_AUTOTRADE_THRESHOLD
+                    and pro_rr >= PRO_ENGINE_MIN_RR
+                )
                 item.update({"entry":entry,"stop_loss":sl,"take_profit":tp,"live_levels_verified":True,
                              "levels_repaired_from_live_chart":repaired,
                              "auto_trade_eligible":bool(ict_direct_ready),
@@ -6326,6 +6780,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                              "signals_autotrade_eligible":False if is_signals_source else item.get("signals_autotrade_eligible"),
                              "order_block_base_autotrade_ready":bool(ob_base_ready) if is_order_block_source else item.get("order_block_base_autotrade_ready"),
                              "order_block_autotrade_eligible":False if is_order_block_source else item.get("order_block_autotrade_eligible"),
+                             "pro_engine_autotrade_eligible":bool(pro_direct_ready) if is_pro_engine_source else item.get("pro_engine_autotrade_eligible"),
                              "consensus_eligible":bool(is_core_consensus_source),
                              "consensus_required":CONSENSUS_REQUIRED_CONFIRMATIONS,
                              "execution_state":"ICT_AUTOTRADE_READY" if ict_direct_ready else
@@ -6336,6 +6791,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                                                "SIGNALS_THRESHOLD_BLOCKED" if is_signals_source else
                                                "ORDER_BLOCK_CONFIRMATION_WAIT" if ob_base_ready else
                                                "ORDER_BLOCK_THRESHOLD_BLOCKED" if is_order_block_source else
+                                               "PRO_ENGINE_AUTOTRADE_READY" if pro_direct_ready else
+                                               "PRO_ENGINE_THRESHOLD_BLOCKED" if is_pro_engine_source else
                                                "CONSENSUS_READY" if is_core_consensus_source else "ANALYSIS_ONLY",
                              "execution_reason":"ICT_DIRECT_AUTOTRADE_READY" if ict_direct_ready else
                                                 ("ICT_THRESHOLD_OR_RR_BLOCK" if is_ict_source else
@@ -6345,6 +6802,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                                                  "SIGNALS_THRESHOLD_OR_RR_BLOCK" if is_signals_source else
                                                  "WAITING_FOR_2_CORE_CONFIRMATIONS" if ob_base_ready else
                                                  "ORDER_BLOCK_THRESHOLD_OR_RR_BLOCK" if is_order_block_source else
+                                                 "5_ENGINE_3_OF_5_AI_RR_PASSED" if pro_direct_ready else
+                                                 "5_ENGINE_THRESHOLD_AI_OR_RR_BLOCK" if is_pro_engine_source else
                                                  "WAITING_FOR_GLOBAL_3_OF_4_CONSENSUS" if is_core_consensus_source else
                                                  "SOURCE_NOT_IN_AUTOTRADE_CONSENSUS"),
                              "risk_reward":gate.get("r_multiple")})
@@ -6388,6 +6847,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                            "signal_lab_base_ready":bool(item.get("signal_lab_base_autotrade_ready")) if source == GOLD_STRATEGY_SOURCE else False,
                            "signals_base_ready":bool(item.get("signals_base_autotrade_ready")) if source == SIGNALS_AUTOTRADE_SOURCE else False,
                            "order_block_base_ready":bool(item.get("order_block_base_autotrade_ready")) if source == ORDER_BLOCK_SOURCE else False,
+                           "pro_engine_ready":bool(item.get("pro_engine_autotrade_eligible")) if source == PRO_ENGINE_SOURCE else False,
                            "risk_reward":gate.get("r_multiple"),"risk":gate.get("risk"),"max_risk":gate.get("max_risk"),
                            "levels_repaired":repaired},
                        "consensus":{"required":CONSENSUS_REQUIRED_CONFIRMATIONS,"core_sources":sorted(CONSENSUS_AUTOTRADE_SOURCES),
@@ -6444,6 +6904,27 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                     queued.append(order)
                     ict_autotrade_count += 1
                     print(f"[ICT AUTOTRADE] QUEUED market={key} tf={tf} dir={direction} conf={conf:.1f} rr={float(gate.get('r_multiple') or 0):.2f}")
+
+            if source == PRO_ENGINE_SOURCE and bool(item.get("pro_engine_autotrade_eligible")) and direction in {"BUY","SELL"} and tp:
+                existing_queue_ids = {str(q.get("id")) for q in MT5_ORDER_QUEUE}
+                order = _queue_autotrade_order(
+                    symbol=key, source=PRO_ENGINE_SOURCE, interval=tf, direction=direction,
+                    entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
+                    confidence=conf, candle_time=candle_time, risk_reward=float(gate.get("r_multiple") or 0),
+                )
+                is_new_pro = order is not None and str(order.get("id")) not in existing_queue_ids
+                if order is not None:
+                    payload["auto_trade"]["queued"] = True
+                    payload["auto_trade"]["mode"] = "5_ENGINE_3_OF_5_DIRECT"
+                    payload["auto_trade"]["order_id"] = order.get("id")
+                    target_row = recent if recent is not None else history_row
+                    if target_row is not None:
+                        target_row.payload = json.dumps(payload, ensure_ascii=False, default=str)
+                        _history_sync_row(target_row, payload)
+                if is_new_pro:
+                    queued.append(order)
+                    pro_engine_autotrade_count += 1
+                    print(f"[5 ENGINE AUTOTRADE] QUEUED market={key} tf={tf} dir={direction} conf={conf:.1f} rr={float(gate.get('r_multiple') or 0):.2f}")
 
             # Other individual modules cannot queue directly; their only MT5 path is
             # the server-created 3-of-4 Consensus row/order below.
@@ -6772,9 +7253,10 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         "signal_lab_autotrade_queued": signal_lab_autotrade_count,
         "signals_autotrade_queued": signals_autotrade_count,
         "order_block_autotrade_queued": order_block_autotrade_count,
+        "pro_engine_autotrade_queued": pro_engine_autotrade_count,
         "history_count": len(rows),
         "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
-        "forward_mode": "CORE: GLOBAL 3-of-4; ICT direct; Signal Lab Gold Strategy +2 core; Signals Adaptive ICT Trend +2 core; all direct candidates >=85% RR>=1.40; M1 blocked",
+        "forward_mode": "CORE 3-of-4; ICT direct; Signal Lab +2 core; Signals +2 core; Order Block +2 core; 5 Engine Consensus internal 3-of-5 direct; all AutoTrade >=85% AI/RR gates; M1 blocked",
         "consensus_sources": sorted(CONSENSUS_AUTOTRADE_SOURCES),
         "signals_autotrade": {"enabled": True, "source": SIGNALS_AUTOTRADE_SOURCE,
                               "strategy": "XAUUSD Adaptive ICT Trend Strategy 2026",
@@ -6790,6 +7272,13 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                                   "min_rr": ORDER_BLOCK_MIN_RR,
                                   "required_total_confirmations": ORDER_BLOCK_REQUIRED_TOTAL_CONFIRMATIONS,
                                   "execution_timeframe":"5min","m1_blocked": True},
+        "pro_engine_autotrade": {"enabled": True, "source": PRO_ENGINE_SOURCE,
+                                 "strategy": "XAUUSD 5 Engine Decision Pipeline 2026",
+                                 "signal_threshold": PRO_ENGINE_SIGNAL_THRESHOLD,
+                                 "autotrade_threshold": PRO_ENGINE_AUTOTRADE_THRESHOLD,
+                                 "min_rr": PRO_ENGINE_MIN_RR,
+                                 "required_confirmations": PRO_ENGINE_REQUIRED_CONFIRMATIONS,
+                                 "engine_count":5,"execution_timeframe":"5min","m1_blocked":True},
         "signal_lab_autotrade": {"enabled": True, "source": GOLD_STRATEGY_SOURCE,
                                  "signal_threshold": GOLD_STRATEGY_SIGNAL_THRESHOLD,
                                  "autotrade_threshold": GOLD_STRATEGY_AUTOTRADE_THRESHOLD,
