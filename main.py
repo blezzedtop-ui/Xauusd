@@ -5565,6 +5565,8 @@ async def ai_signals_live(symbol: str, interval: str = DEFAULT_INTERVAL, authori
 @app.post("/api/v1/signals/save-advanced")
 async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     user = current_user(authorization, session)
+    if _signal_source_blocked("Signal Lab"):
+        return {"saved": False, "blocked": True, "reason": "SOURCE_BLOCKED", "source": "Signal Lab"}
     interval = validate_interval(interval)
     candles_data, mode, warning = await get_candles(clean_symbol(symbol), interval, 260)
     item = {**build_advanced_signal(candles_data, interval, news_blocked=False), "mode":mode, "warning":warning}
