@@ -255,7 +255,7 @@ async function loadStats(){
   }catch(e){if($('historySummary'))$('historySummary').innerHTML=`<div class="card">Analytics error: ${e?.message||'server xatosi'}</div>`;}
 }
 const SIGNAL_RECORD_SEEN=new Map();
-const BLOCKED_SIGNAL_SOURCES=new Set(['AlgoTrade']);
+const BLOCKED_SIGNAL_SOURCES=new Set();
 function recordModuleSignal(source, response, item, intervalName, candleTime){
   if(!token || BLOCKED_SIGNAL_SOURCES.has(String(source||'').trim())) return;
   const x=item||{}; const direction=String(x.signal||response?.direction||'WAIT').toUpperCase();
@@ -616,43 +616,47 @@ function bindAiQa(){
 }
 bindAiQa();
 
-async function loadAlgoTrade(){
-
+async function loadOrderBlock(){
   if(!IS_ADMIN)return;
   const status=$('algoStatus');
-  if(status)status.textContent='CALCULATING…';
+  if(status)status.textContent='ORDER BLOCK PRO hisoblanmoqda…';
   try{
-    const d=await api(`/api/v1/algotrade/${encodeURIComponent(symbol)}`);
-    const rawSig=String(d.signal||'WAIT').toUpperCase();
-    const sig='WAIT';
-    const cls='wait';
-    $('algoSignal').textContent='BLOCKED';
-    $('algoSignal').className='signal-main wait';
-    $('algoScore').textContent=`${d.score??0} / 100 · ANALYSIS ONLY`;
-    $('algoEntry').textContent='—'; $('algoSL').textContent='—';
-    $('algoTP1').textContent='—'; $('algoTP2').textContent='—';
-    $('algoRR').textContent='—';
-    $('algoMtf').textContent=d.checks?.mtf_match?'MATCH':'WAIT';
-    $('algoM15').textContent=d.checks?.m15_confirmation?'OK':'WAIT';
-    $('algoM5').textContent=d.checks?.m5_confirmation?'OK':'WAIT';
-    $('algoReason').textContent='AlgoTrade signal source blocked · analysis only · History/AutoTrade OFF' + (d.reason?(' | '+d.reason):'');
+    const d=await api(`/api/v1/order-block/${encodeURIComponent(symbol)}`);
+    if(!d.ok) throw Error(d.reason||'Order Block unavailable');
+    const x=d.item||d;
+    const sig=String(x.signal||'WAIT').toUpperCase();
+    const cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
+    $('algoSignal').textContent=sig;
+    $('algoSignal').className='signal-main '+cls;
+    $('algoScore').textContent=`${x.score??0} / 100`;
+    $('algoEntry').textContent=fmt(x.entry); $('algoSL').textContent=fmt(x.stop_loss);
+    $('algoTP1').textContent=fmt((x.take_profit||[])[0]); $('algoTP2').textContent=fmt((x.take_profit||[])[1]);
+    $('algoRR').textContent=x.risk_reward?`1 : ${x.risk_reward}`:'—';
+    $('algoMtf').textContent=x.htf?.aligned?'H4/H1 MATCH':'HTF WAIT';
+    $('algoM15').textContent=x.lower_tf?.m15?.bias||'WAIT';
+    $('algoM5').textContent=x.lower_tf?.m5?.bias||'WAIT';
+    const fresh=x.freshness||{}, overlap=x.overlap||{}, kz=x.killzone||{};
+    const at=x.order_block_autotrade_eligible?'BASE READY · WAIT 3-CONFIRM':'AUTOTRADE WAIT';
+    $('algoReason').textContent=`${x.reason||'—'} | Fresh=${fresh.fresh?'YES':'NO'} · First retest=${fresh.first_retest?'YES':'NO'} · FVG overlap=${overlap.overlap?'YES':'NO'} · Session=${kz.name||'OFF'} · ${at}`;
     const order=[['4h','H4'],['1h','H1'],['15min','M15'],['5min','M5']];
     $('algoTimeframes').innerHTML=order.map(([tf,label])=>{
-      const x=d.timeframes?.[tf]||{}; const s='WAIT'; const c='wait';
-      const ch=x.checks||{};
-      return `<div class="advanced-card"><div class="advanced-head"><div><div class="mini">${label}</div><div class="advanced-signal ${c}">BLOCKED</div></div><span class="pill">ANALYSIS</span></div><div class="component-grid"><div class="component"><small>Trend</small><b>${x.trend||'—'}</b></div><div class="component"><small>Structure</small><b>${x.structure?.bos||x.structure?.choch||'—'}</b></div><div class="component"><small>Liquidity</small><b>${x.liquidity?.type||'NONE'}</b></div><div class="component"><small>OB / FVG</small><b>${x.order_block?.type||'NONE'} / ${x.fvg?.type||'NONE'}</b></div></div></div>`;
+      const t=d.timeframes?.[tf]||{}; const bias=t.bias||{}; const ob=t.order_block||{}; const st=t.structure||{};
+      const b=bias.bias||'NEUTRAL'; const c=b==='BULLISH'?'buy':b==='BEARISH'?'sell':'wait';
+      return `<div class="advanced-card"><div class="advanced-head"><div><div class="mini">${label}</div><div class="advanced-signal ${c}">${b}</div></div><span class="pill">${ob.type||'NO OB'}</span></div><div class="component-grid"><div class="component"><small>Order Block</small><b>${ob.type||'NONE'}</b><div class="mini">${ob.low!=null?fmt(ob.low)+' – '+fmt(ob.high):'—'}</div></div><div class="component"><small>Structure</small><b>${st.choch||st.bos||'—'}</b></div><div class="component"><small>MSS</small><b>${t.mss?'YES':'—'}</b></div><div class="component"><small>Bias</small><b>${b}</b></div></div></div>`;
     }).join('');
-    if(status)status.textContent=`BLOCKED · analysis only · ${new Date(d.generated_at).toLocaleTimeString()}`;
+    if(token) recordModuleSignal('Order Block',d,x,'5min',x.candle_time||liveCandle?.time);
+    if(status)status.textContent=`LIVE · Signal ≥80 · AutoTrade ≥85 + RR≥1.40 + 3 confirmations · M1 BLOCKED · ${new Date(d.generated_at).toLocaleTimeString()}`;
   }catch(e){
     if(status)status.textContent='ERROR';
     $('algoSignal').textContent='WAIT'; $('algoSignal').className='signal-main wait';
-    $('algoReason').textContent='AlgoTrade error: '+(e.message||'server error');
+    $('algoReason').textContent='Order Block error: '+(e.message||'server error');
   }
 }
-function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'AlgoTrade'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section'){loadMT5Status().catch(()=>{});loadMT5GatewayAccounts().catch(()=>{});}if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
-if(id==='algotradeSection')loadAlgoTrade().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
 
-document.addEventListener('click',e=>{const b=e.target.closest('#refreshAlgoTrade');if(b)loadAlgoTrade().catch(()=>{})});
+function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'Order Block'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section'){loadMT5Status().catch(()=>{});loadMT5GatewayAccounts().catch(()=>{});}if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
+if(id==='algotradeSection')loadOrderBlock().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
+
+document.addEventListener('click',e=>{const b=e.target.closest('#refreshAlgoTrade');if(b)loadOrderBlock().catch(()=>{})});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-classic-interval]');if(b){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===b));classicInterval=b.dataset.classicInterval;loadClassicTrade(classicInterval)}});
 document.addEventListener('click',e=>{
   const b=e.target.closest('[data-pivot-interval]');
@@ -1014,7 +1018,7 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
       if($('calendarSection').classList.contains('active')) loadCalendar().catch(()=>{});
       if($('sessionsSection').classList.contains('active')) loadSessions().catch(()=>{});
       if($('trendLineSection').classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{});
-      if(IS_ADMIN && $('algotradeSection').classList.contains('active')) loadAlgoTrade().catch(()=>{});
+      if(IS_ADMIN && $('algotradeSection').classList.contains('active')) loadOrderBlock().catch(()=>{});
       if(!phone || $('mt5Section').classList.contains('active')) loadMT5Status().catch(()=>{});
       if(!phone && IS_ADMIN && $('overview').classList.contains('active')) loadAIProviders().then(()=>bindAIControls()).catch(()=>{});
       if(token && $('historySection').classList.contains('active')) loadHistory().catch(()=>{});
