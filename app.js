@@ -227,15 +227,23 @@ async function loadMtf(){
     $('mtfOverall').textContent=d.overall||'—';
     const order=['1h','30min','15min','5min','1min','4h','1day'];
     const frames=d.timeframes||{};
+    const r=w.market_regime||{}, rm=r.metrics||{};
     const summary=`<div class="card" style="grid-column:1/-1;margin:0">
-      <div class="section-head"><div><h3>Weighted MTF AutoTrade Filter</h3><div class="mini">H1 40% · M30 25% · M15 20% · M5 15% · M1 AUTOTRADE BLOCKED</div></div><span class="pill">${escapeHtml(w.autotrade_direction||'WAIT')}</span></div>
+      <div class="section-head"><div><h3>Market Regime + Weighted MTF</h3><div class="mini">Regime first → TRENDING / FLAT / TRANSITION · then H1 40% · M30 25% · M15 20% · M5 15% · M1 BLOCKED</div></div><span class="pill">${escapeHtml(r.regime||'TRANSITION')} · ${escapeHtml(w.autotrade_direction||'WAIT')}</span></div>
       <div class="grid4" style="margin-top:10px">
+        <div class="metric"><small>Market Regime</small><b>${escapeHtml(r.regime||'—')}</b><div class="mini">${r.confidence??0}% confidence · flat ${r.flat_score??0}/5 · trend ${r.trend_score??0}/5</div></div>
         <div class="metric"><small>BUY Weight</small><b class="buy">${w.buy_weight??0}%</b></div>
         <div class="metric"><small>SELL Weight</small><b class="sell">${w.sell_weight??0}%</b></div>
         <div class="metric"><small>Signed Score</small><b>${Number(w.signed_score||0)>=0?'+':''}${w.signed_score??0}</b></div>
+      </div>
+      <div class="grid4" style="margin-top:8px">
+        <div class="metric"><small>ADX H1</small><b>${rm.adx!=null?fmt(rm.adx):'—'}</b></div>
+        <div class="metric"><small>EMA50/200 sep.</small><b>${rm.ema_separation_atr!=null?fmt(rm.ema_separation_atr)+' ATR':'—'}</b></div>
+        <div class="metric"><small>ATR Regime</small><b>${rm.atr_ratio!=null?fmt(rm.atr_ratio):'—'}</b></div>
         <div class="metric"><small>Context</small><b>${escapeHtml(w.context||'—')}</b></div>
       </div>
       <div class="mini" style="margin-top:8px">AutoTrade: ${w.autotrade_ready?'READY':'WAIT'} · H1 match: ${w.h1_match?'YES':'NO'} · M5 trigger: ${w.m5_trigger_match?'YES':'NO'}${w.blocked_reason?' · '+escapeHtml(w.blocked_reason):''}</div>
+      <div class="mini" style="margin-top:5px">FLAT mode: trend-based AutoTrade blocked; only validated ICT liquidity/range path may pass. TRANSITION: all AutoTrade WAIT.</div>
     </div>`;
     const cards=order.map(tf=>{
       const x=frames[tf]||{};
