@@ -644,7 +644,6 @@ async function loadOrderBlock(){
       const b=bias.bias||'NEUTRAL'; const c=b==='BULLISH'?'buy':b==='BEARISH'?'sell':'wait';
       return `<div class="advanced-card"><div class="advanced-head"><div><div class="mini">${label}</div><div class="advanced-signal ${c}">${b}</div></div><span class="pill">${ob.type||'NO OB'}</span></div><div class="component-grid"><div class="component"><small>Order Block</small><b>${ob.type||'NONE'}</b><div class="mini">${ob.low!=null?fmt(ob.low)+' – '+fmt(ob.high):'—'}</div></div><div class="component"><small>Structure</small><b>${st.choch||st.bos||'—'}</b></div><div class="component"><small>MSS</small><b>${t.mss?'YES':'—'}</b></div><div class="component"><small>Bias</small><b>${b}</b></div></div></div>`;
     }).join('');
-    if(token) recordModuleSignal('Order Block',d,x,'5min',x.candle_time||liveCandle?.time);
     if(status)status.textContent=`LIVE · Signal ≥80 · AutoTrade ≥85 + RR≥1.40 + 3 confirmations · M1 BLOCKED · ${new Date(d.generated_at).toLocaleTimeString()}`;
   }catch(e){
     if(status)status.textContent='ERROR';
