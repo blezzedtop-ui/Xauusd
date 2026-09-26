@@ -4385,7 +4385,7 @@ def _pro_trend_engine(c4:list[dict[str,Any]],c1:list[dict[str,Any]],c15:list[dic
     elif not pullback: reason="NO_M15_PULLBACK"
     elif not bos: reason="NO_CONTINUATION_BOS"
     elif score<80: reason="LOW_CONFIDENCE"
-    return _pro_engine_result("Trend Engine",signal,score,checks,reason,h4=h4,h1=h1,
+    return _pro_engine_result("Trend Engine",signal,score,checks,reason,direction_candidate=direction,h4=h4,h1=h1,
                               m15={"ema50":round(e50,4),"pullback":pullback,"bos":bos,"bos_level":bos_level})
 
 def _pro_snr_breakout_engine(c1:list[dict[str,Any]],c15:list[dict[str,Any]],c5:list[dict[str,Any]]) -> dict[str,Any]:
@@ -4649,13 +4649,13 @@ def _pro_momentum_engine(c15:list[dict[str,Any]],direction_hint:str) -> dict[str
 
 def _build_pro_engine_suite(c4:list[dict[str,Any]],c1:list[dict[str,Any]],
                             c15:list[dict[str,Any]],c5:list[dict[str,Any]]) -> dict[str,Any]:
-    if min(len(c4),len(c1),len(c15),len(c5))<210:
+    if min(len(c4),len(c1),len(c15),len(c5))<80:
         return {"ok":False,"reason":"INSUFFICIENT_CANDLES","engines":{},"final":{
             "signal":"WAIT","confidence":0,"score":0,"blockedReason":"INSUFFICIENT_CANDLES",
             "entry":None,"stop_loss":None,"take_profit":[],"risk_reward":0,
             "pro_engine_autotrade_eligible":False,"m1_blocked":True}}
     trend=_pro_trend_engine(c4,c1,c15)
-    direction_hint=trend.get("signal") if trend.get("signal") in {"BUY","SELL"} else "WAIT"
+    direction_hint=trend.get("direction_candidate") if trend.get("direction_candidate") in {"BUY","SELL"} else "WAIT"
     snr=_pro_snr_breakout_engine(c1,c15,c5)
     ict=_pro_ict_liquidity_engine(c4,c1,c15,c5)
     ob=_pro_ob_fvg_engine(c15,c5,direction_hint)
@@ -6516,15 +6516,18 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             c1=live_by_tf.get("1h",([],"",None))[0]
             c15=live_by_tf.get("15min",([],"",None))[0]
             c5=live_by_tf.get("5min",([],"",None))[0]
-            if min(len(c4),len(c1),len(c15),len(c5))>=210:
+            if min(len(c4),len(c1),len(c15),len(c5))>=80:
                 suite=_build_pro_engine_suite(c4,c1,c15,c5)
                 final=dict(suite.get("final") or {})
                 final["engines"]=suite.get("engines") or {}
                 final["interval"]="5min"
+                print(f"[5 ENGINE PIPELINE] market={key} signal={final.get('signal')} votes={final.get('votes')} confirmations={final.get('confirmation_count')}/5 conf={float(final.get('confidence') or 0):.1f} rr={float(final.get('risk_reward') or 0):.2f} blocked={final.get('blockedReason')}")
                 if final.get("signal") in {"BUY","SELL"}:
                     candidates.append({"source":PRO_ENGINE_SOURCE,"interval":"5min","item":final,
                                        "response":{"mode":"tradingview","candle_time":c5[-1].get("time"),
                                                    "engine_suite":suite.get("engines")}})
+            else:
+                print(f"[5 ENGINE PIPELINE] market={key} WAIT insufficient bars H4={len(c4)} H1={len(c1)} M15={len(c15)} M5={len(c5)}")
         except Exception as exc:
             print(f"[5 ENGINE PIPELINE] candidate error={type(exc).__name__}: {exc}")
         return candidates, live_by_tf
