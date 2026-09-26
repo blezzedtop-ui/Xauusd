@@ -796,6 +796,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
     <button type="button" data-section="mtfSection"><span class="sx-nav-icon" data-icon="time" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Multi-Timeframe</span></button>
     <button type="button" data-section="calendarSection"><span class="sx-nav-icon" data-icon="calendar" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M7 3v4M17 3v4M3.5 9h17M7 13h3m2 0h3m-8 4h3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Economic Calendar</span></button>
     <button type="button" data-section="sessionsSection"><span class="sx-nav-icon" data-icon="globe" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M3.8 12h16.4M12 3.5c2.3 2.4 3.5 5.2 3.5 8.5s-1.2 6.1-3.5 8.5c-2.3-2.4-3.5-5.2-3.5-8.5S9.7 5.9 12 3.5z" fill="none" stroke="currentColor" stroke-width="1.35"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Market Sessions</span></button>
+    <button type="button" class="admin-only" data-section="strategyPerformanceSection"><span class="sx-nav-icon" data-icon="analysis" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 19h16M6 16v-5m4 5V7m4 9v-3m4 3V4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Strategy Performance</span></button>
     <button type="button" data-section="historySection"><span class="sx-nav-icon" data-icon="history" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h13M4 12h16M4 17h10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M18 4v6l3-3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Signal History</span></button>
     <button type="button" data-section="activeSessionsSection"><span class="sx-nav-icon" data-icon="status" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="12" cy="12" r="3" fill="currentColor"/><path d="M12 2v3m0 14v3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">Aktiv Seanslar</span></button>
     <button type="button" class="admin-only" data-section="mt5Section"><span class="sx-nav-icon" data-icon="terminal" aria-hidden="true"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="m7 9 3 3-3 3m5 0h4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></span><span class="sx-nav-divider"></span><span class="sx-nav-label">MetaTrader 5</span></button>
@@ -1061,6 +1062,20 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
     </div>
   </div>
 </section>
+<section class="section admin-only" id="strategyPerformanceSection">
+  <div class="card">
+    <div class="section-head">
+      <div><h2>Strategy Performance Dashboard</h2><div class="mini">Signal History asosida real natija · Winrate · RR · R-multiple · Blocked · Best Timeframe</div></div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="pill" id="strategyPerformanceStatus">READY</span><button class="btn primary" id="refreshStrategyPerformance" type="button">↻ Yangilash</button></div>
+    </div>
+    <div class="sx-kpi-grid" id="strategyPerformanceKpis" style="margin-top:12px"></div>
+    <div class="sx-history-subhead"><h3>AutoTrade Strategy Performance</h3><div class="mini">Faqat History’da qayd etilgan real signal natijalari hisoblanadi.</div></div>
+    <div class="sx-module-grid" id="strategyPerformanceGrid"></div>
+    <div class="sx-history-subhead"><h3>Analysis-only Performance</h3><div class="mini">AutoTrade bermaydigan, lekin History’da signal sifatida qayd etilgan modullar.</div></div>
+    <div class="sx-module-grid" id="strategyAnalysisPerformance"></div>
+    <div class="mini" style="margin-top:12px">Win = TP2 HIT · Loss = SL HIT · Completed = Win + Loss · Blocked = CANCELLED/EXPIRED yoki execution BLOCKED/FAILED. Best Timeframe faqat completed trade’lar asosida hisoblanadi.</div>
+  </div>
+</section>
 <section class="section" id="historySection">
   <div class="sx-history-v2">
     <div class="sx-history-header"><div><h2>Signal History</h2><div class="mini">Professional trading journal · signal → analysis → evidence → result → performance</div></div><button class="btn" id="historyV2Refresh" type="button">↻ Yangilash</button></div>
@@ -1069,7 +1084,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
       <label class="filter-block"><span>START DATE</span><input id="historyV2Start" type="date"></label><label class="filter-block"><span>END DATE</span><input id="historyV2End" type="date"></label>
       <label class="filter-block"><span>SYMBOL</span><select id="historyV2Symbol"><option value="">ALL</option><option value="XAU/USD">XAUUSD</option><option value="EUR/USD">EURUSD</option></select></label><label class="filter-block"><span>DIRECTION</span><select id="historyV2Direction"><option value="">ALL</option><option>BUY</option><option>SELL</option></select></label>
       <label class="filter-block"><span>RESULT</span><select id="historyV2Result"><option value="">ALL</option><option>ACTIVE</option><option>TP1 HIT</option><option>TP2 HIT</option><option>SL HIT</option><option>EXPIRED</option><option>TARGET_REACHED</option><option>CANCELLED</option></select></label>
-      <label class="filter-block wide"><span>MODULE</span><select id="historyV2Module"><option value="">ALL</option><option>Technical Analysis</option><option>AI Smart Analysis</option><option>AI Fallback Network</option><option>SNR</option><option>Trend Line</option><option>Signal Lab</option><option>ICT Signals</option><option>Multi-Timeframe</option><option>Classic Trade</option><option>Economic Calendar</option><option>Market Sessions</option><option>Order Block</option><option>Fibonacci</option><option>5 Engine Consensus</option><option>Consensus</option><option>Signals</option></select></label>
+      <label class="filter-block wide"><span>MODULE</span><select id="historyV2Module"><option value="">ALL</option><option>Technical Analysis</option><option>AI Smart Analysis</option><option>AI Fallback Network</option><option>SNR</option><option>Trend Line</option><option>Signal Lab</option><option>ICT Signals</option><option>Multi-Timeframe</option><option>Classic Trade</option><option>Economic Calendar</option><option>Market Sessions</option><option>Order Block</option><option>Fibonacci</option><option>Trend Engine</option><option>SNR / Breakout Engine</option><option>ICT Liquidity Engine</option><option>Order Block / FVG Engine</option><option>Technical Momentum Engine</option><option>5 Engine Consensus</option><option>Consensus</option><option>Signals</option></select></label>
     </div>
     <div class="sx-kpi-grid" id="historyV2Kpis"></div><div class="sx-history-subhead"><h3>Daily Performance</h3><div class="mini">Tanlangan sana / period · Asia/Tashkent</div></div><div class="sx-day-performance" id="historyV2Daily"></div>
     <div class="sx-history-subhead"><h3>Module Performance</h3></div><div class="sx-module-grid" id="historyV2Modules"></div>
@@ -1098,7 +1113,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
 </div>
 
 <script src="config.js?v=20260908f"></script>
-<script src="app.js?v=20260926-fibonacci-engine-v1"></script>
+<script src="app.js?v=20260926-strategy-performance-v1"></script>
 
 <script id="signalx-sidebar-fix-20260913">
 (function(){
@@ -1142,7 +1157,7 @@ body:before{content:""!important;position:fixed!important;inset:0!important;z-in
     document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
     target.classList.add('active');
     document.querySelectorAll('.sidebar .nav button[data-section]').forEach(b=>b.classList.toggle('active',b.dataset.section===id));
-    const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',signalEngineSection:'Signal Engine',aiFallbackSection:'AI Fallback Network',classicSection:'Classic Trade',snrSection:'SNR',trendLineSection:'Auto Trend Line',signalSection:'Signal Lab',ictSection:'ICT Signals',signalsSection:'Signals',mtfSection:'Multi-Timeframe Analysis',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',mt5Section:'MetaTrader 5'};
+    const titles={overview:'Market Overview',chartSection:'Live Chart',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',signalEngineSection:'Signal Engine',aiFallbackSection:'AI Fallback Network',classicSection:'Classic Trade',snrSection:'SNR',trendLineSection:'Auto Trend Line',signalSection:'Signal Lab',ictSection:'ICT Signals',signalsSection:'Signals',mtfSection:'Multi-Timeframe Analysis',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',strategyPerformanceSection:'Strategy Performance',mt5Section:'MetaTrader 5'};
     const t=document.getElementById('pageTitle'); if(t) t.textContent=titles[id]||'Trading SaaS';
     closeMobile();
     // Every dashboard section, especially Signal History, opens from the top.
