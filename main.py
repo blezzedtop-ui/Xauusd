@@ -2268,8 +2268,111 @@ def timeframe_trend(candles: list[dict[str, Any]]) -> dict[str, Any]:
 MTF_AUTOTRADE_WEIGHTS = {"1h":40, "30min":25, "15min":20, "5min":15}
 MTF_AUTOTRADE_STATE: dict[str, dict[str, Any]] = {}
 MTF_AUTOTRADE_STATE_TTL_SECONDS = 180
+MTF_FLAT_ALLOWED_SOURCES = frozenset({"ICT Signals"})
 
-def _weighted_mtf_decision(timeframes: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _regime_tr(candles: list[dict[str, Any]]) -> list[float]:
+    out=[]
+    for i in range(1,len(candles)):
+        cur,prev=candles[i],candles[i-1]
+        out.append(max(
+            float(cur["high"])-float(cur["low"]),
+            abs(float(cur["high"])-float(prev["close"])),
+            abs(float(cur["low"])-float(prev["close"])),
+        ))
+    return out
+
+def _market_regime_filter(c1: list[dict[str, Any]], c30: list[dict[str, Any]],
+                          c15: list[dict[str, Any]], c5: list[dict[str, Any]]) -> dict[str, Any]:
+    """Classify XAUUSD as TRENDING / FLAT / TRANSITION before weighted MTF execution."""
+    if min(len(c1),len(c30),len(c15),len(c5)) < 55:
+        return {
+            "regime":"TRANSITION","confidence":0,"blocked_reason":"REGIME_INSUFFICIENT_CANDLES",
+            "flat_score":0,"trend_score":0,"checks":{},
+        }
+
+    c1c=c1[:-1] if len(c1)>2 else c1
+    closes=[float(x["close"]) for x in c1c]
+    e50=_ema(closes[-180:],50)
+    e200=_ema(closes[-260:],200)
+    a1=max(atr(c1c),float(c1c[-1]["close"])*0.0002)
+    ema_sep_atr=abs(e50-e200)/max(a1,1e-9)
+
+    try:
+        dmi=_pro_adx_dmi(c1c)
+        adx=float(dmi.get("adx") or 0)
+    except Exception:
+        adx=0.0
+        dmi={"adx":0.0,"plus_di":0.0,"minus_di":0.0}
+
+    tr=_regime_tr(c1c)
+    short_atr=sum(tr[-14:])/max(1,min(14,len(tr))) if tr else a1
+    long_atr=sum(tr[-50:])/max(1,min(50,len(tr))) if tr else short_atr
+    atr_ratio=short_atr/max(long_atr,1e-9)
+
+    recent=c1c[-24:]
+    range_height=(max(float(x["high"]) for x in recent)-min(float(x["low"]) for x in recent)) if recent else 0.0
+    range_atr=range_height/max(a1,1e-9)
+
+    h1=timeframe_trend(c1)
+    m30=timeframe_trend(c30)
+    h1_dir=str(h1.get("trend") or "NEUTRAL")
+    m30_dir=str(m30.get("trend") or "NEUTRAL")
+    aligned_directional=h1_dir==m30_dir and h1_dir in {"BULLISH","BEARISH"}
+    mixed_structure=(h1_dir=="NEUTRAL" or m30_dir=="NEUTRAL" or h1_dir!=m30_dir)
+
+    flat_checks={
+        "adx_low": adx < 20.0,
+        "ema_compressed": ema_sep_atr < 0.85,
+        "atr_contracted": atr_ratio < 0.88,
+        "structure_mixed": mixed_structure,
+        "range_compressed": range_atr < 6.0,
+    }
+    trend_checks={
+        "adx_trending": adx >= 24.0,
+        "ema_separated": ema_sep_atr >= 1.15,
+        "atr_healthy": atr_ratio >= 0.90,
+        "h1_m30_aligned": aligned_directional,
+        "range_expanded": range_atr >= 6.0,
+    }
+    flat_score=sum(1 for v in flat_checks.values() if v)
+    trend_score=sum(1 for v in trend_checks.values() if v)
+
+    if flat_score >= 4 and trend_score <= 2:
+        regime="FLAT"
+        confidence=min(95,55+flat_score*8)
+        reason=None
+    elif trend_score >= 4 and flat_score <= 2:
+        regime="TRENDING"
+        confidence=min(95,55+trend_score*8)
+        reason=None
+    else:
+        regime="TRANSITION"
+        confidence=min(90,50+max(flat_score,trend_score)*6)
+        reason="REGIME_NOT_CLEAN"
+
+    return {
+        "regime":regime,
+        "confidence":int(confidence),
+        "blocked_reason":reason,
+        "flat_score":flat_score,
+        "trend_score":trend_score,
+        "checks":{"flat":flat_checks,"trend":trend_checks},
+        "metrics":{
+            "adx":round(adx,2),
+            "plus_di":round(float(dmi.get("plus_di") or 0),2),
+            "minus_di":round(float(dmi.get("minus_di") or 0),2),
+            "ema50":round(e50,4),
+            "ema200":round(e200,4),
+            "ema_separation_atr":round(ema_sep_atr,2),
+            "atr_ratio":round(atr_ratio,2),
+            "range_atr":round(range_atr,2),
+            "h1_trend":h1_dir,
+            "m30_trend":m30_dir,
+        },
+        "flat_autotrade_sources":sorted(MTF_FLAT_ALLOWED_SOURCES),
+    }
+
+def _weighted_mtf_decision(timeframes: dict[str, dict[str, Any]], regime: dict[str, Any] | None = None) -> dict[str, Any]:
     """Hierarchical weighted MTF model used as the global AutoTrade direction filter.
 
     H1 sets the primary direction, M30 provides context, M15 is setup/pullback,
@@ -2345,7 +2448,18 @@ def _weighted_mtf_decision(timeframes: dict[str, dict[str, Any]]) -> dict[str, A
     else:
         blocked_reason=None
 
-    autotrade_direction=weighted_direction if blocked_reason is None else "WAIT"
+    regime_info=regime or {"regime":"TRANSITION","confidence":0,"blocked_reason":"REGIME_UNAVAILABLE"}
+    regime_name=str(regime_info.get("regime") or "TRANSITION").upper()
+    if regime_name=="TRANSITION":
+        blocked_reason="MARKET_REGIME_TRANSITION"
+        autotrade_direction="WAIT"
+    elif regime_name=="FLAT":
+        # Directional weighted trend execution is disabled in flat markets.
+        # Source-specific flat-mode permission is handled by _mtf_autotrade_gate().
+        autotrade_direction="WAIT"
+        blocked_reason="MARKET_REGIME_FLAT"
+    else:
+        autotrade_direction=weighted_direction if blocked_reason is None else "WAIT"
     return {
         "weights":dict(MTF_AUTOTRADE_WEIGHTS),
         "detail":detail,
@@ -2361,12 +2475,14 @@ def _weighted_mtf_decision(timeframes: dict[str, dict[str, Any]]) -> dict[str, A
         "m5_trigger_match":m5_match,
         "context":context,
         "blocked_reason":blocked_reason,
+        "market_regime":regime_info,
         "m1_autotrade_blocked":True,
     }
 
-def _update_mtf_autotrade_state(symbol: str, timeframes: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _update_mtf_autotrade_state(symbol: str, timeframes: dict[str, dict[str, Any]],
+                                regime: dict[str, Any] | None = None) -> dict[str, Any]:
     key=clean_symbol(symbol)
-    decision=_weighted_mtf_decision(timeframes)
+    decision=_weighted_mtf_decision(timeframes,regime)
     MTF_AUTOTRADE_STATE[key]={
         "updated_at_epoch":datetime.now(timezone.utc).timestamp(),
         "updated_at":datetime.now(timezone.utc).isoformat(),
@@ -2374,7 +2490,7 @@ def _update_mtf_autotrade_state(symbol: str, timeframes: dict[str, dict[str, Any
     }
     return decision
 
-def _mtf_autotrade_gate(symbol: str, direction: str) -> dict[str, Any]:
+def _mtf_autotrade_gate(symbol: str, direction: str, source: str | None = None) -> dict[str, Any]:
     key=clean_symbol(symbol)
     state=MTF_AUTOTRADE_STATE.get(key)
     if not state:
@@ -2384,9 +2500,38 @@ def _mtf_autotrade_gate(symbol: str, direction: str) -> dict[str, Any]:
         return {"ok":False,"reason":"MTF_STATE_STALE","direction":"WAIT","age_seconds":round(age,1)}
     d=state.get("decision") or {}
     wanted=str(direction or "").upper()
+    normalized_source=_normalize_history_source(source or "")
+    regime=d.get("market_regime") or {}
+    regime_name=str(regime.get("regime") or "TRANSITION").upper()
     allowed=str(d.get("autotrade_direction") or "WAIT").upper()
     if wanted not in {"BUY","SELL"}:
-        return {"ok":False,"reason":"INVALID_DIRECTION","direction":allowed}
+        return {"ok":False,"reason":"INVALID_DIRECTION","direction":allowed,"market_regime":regime}
+
+    if regime_name=="TRANSITION":
+        return {
+            "ok":False,"reason":"MARKET_REGIME_TRANSITION","direction":"WAIT",
+            "market_regime":regime,"buy_weight":d.get("buy_weight"),"sell_weight":d.get("sell_weight"),
+        }
+
+    if regime_name=="FLAT":
+        if normalized_source not in MTF_FLAT_ALLOWED_SOURCES:
+            return {
+                "ok":False,"reason":"FLAT_TREND_AUTOTRADE_BLOCKED","direction":"WAIT",
+                "market_regime":regime,"source":normalized_source,
+                "allowed_flat_sources":sorted(MTF_FLAT_ALLOWED_SOURCES),
+                "buy_weight":d.get("buy_weight"),"sell_weight":d.get("sell_weight"),
+            }
+        # ICT Signals already has mandatory liquidity sweep, MSS/displacement,
+        # FVG/OB retest, AI, RR and confidence gates. In FLAT it is treated as
+        # a range/liquidity setup and does not need directional weighted-MTF alignment.
+        return {
+            "ok":True,"reason":"FLAT_LIQUIDITY_MODE_PASSED","direction":wanted,
+            "market_regime":regime,"source":normalized_source,
+            "buy_weight":d.get("buy_weight"),"sell_weight":d.get("sell_weight"),
+            "context":"FLAT_RANGE_LIQUIDITY",
+            "age_seconds":round(age,1),
+        }
+
     if allowed!=wanted:
         return {
             "ok":False,
@@ -2401,7 +2546,8 @@ def _mtf_autotrade_gate(symbol: str, direction: str) -> dict[str, Any]:
         "ok":True,"reason":"WEIGHTED_MTF_PASSED","direction":allowed,
         "buy_weight":d.get("buy_weight"),"sell_weight":d.get("sell_weight"),
         "signed_score":d.get("signed_score"),"classification":d.get("classification"),
-        "context":d.get("context"),"detail":d.get("detail"),"age_seconds":round(age,1),
+        "context":d.get("context"),"detail":d.get("detail"),"market_regime":regime,
+        "age_seconds":round(age,1),
     }
 
 
@@ -2412,17 +2558,22 @@ async def multi_timeframe(symbol: str) -> dict[str, Any]:
     if cached and now-cached[0] < MTF_CACHE_TTL:
         return cached[1]
     intervals=("1min","5min","15min","30min","1h","4h","1day")
-    out={}; errors={}
+    out={}; errors={}; candle_map={}
     # One shared TV cache per timeframe; process sequentially to avoid opening 7 TV sockets at once.
     for tf in intervals:
         try:
             candles_data,mode,warning=await get_candles(key,tf,80)
             if len(candles_data)<2: raise MarketDataError("Not enough TradingView candles")
+            candle_map[tf]=candles_data
             out[tf]={**timeframe_trend(candles_data),"mode":mode,"warning":warning}
         except Exception as exc:
             errors[tf]=f"{type(exc).__name__}: {exc}"
     dirs=[x["trend"] for x in out.values() if x.get("trend")]
-    weighted=_update_mtf_autotrade_state(key,out)
+    regime=_market_regime_filter(
+        candle_map.get("1h",[]),candle_map.get("30min",[]),
+        candle_map.get("15min",[]),candle_map.get("5min",[])
+    )
+    weighted=_update_mtf_autotrade_state(key,out,regime)
     result={
         "timeframes":out,
         "overall":weighted.get("classification") or "MIXED",
@@ -6425,7 +6576,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     # Global proportional Multi-Timeframe safety gate.
     # Every AutoTrade source must agree with weighted H1/M30/M15/M5 direction,
     # with H1 as primary direction and M5 as the final execution trigger.
-    mtf_gate=_mtf_autotrade_gate(symbol,direction)
+    mtf_gate=_mtf_autotrade_gate(symbol,direction,source)
     if not mtf_gate.get("ok"):
         print(f"[AUTO TRADE QUEUE] WEIGHTED MTF BLOCKED market={symbol} source={source} tf={interval} dir={direction} reason={mtf_gate.get('reason')} allowed={mtf_gate.get('direction')} BUY={mtf_gate.get('buy_weight')} SELL={mtf_gate.get('sell_weight')} context={mtf_gate.get('context')}")
         return None
@@ -6587,7 +6738,14 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 mtf_candles=live_by_tf.get(mtf_tf,([],"",None))[0]
                 if len(mtf_candles)>=2:
                     mtf_frames[mtf_tf]=timeframe_trend(mtf_candles)
-            mtf_decision=_update_mtf_autotrade_state(key,mtf_frames)
+            regime=_market_regime_filter(
+                live_by_tf.get("1h",([],"",None))[0],
+                live_by_tf.get("30min",([],"",None))[0],
+                live_by_tf.get("15min",([],"",None))[0],
+                live_by_tf.get("5min",([],"",None))[0],
+            )
+            mtf_decision=_update_mtf_autotrade_state(key,mtf_frames,regime)
+            print(f"[MARKET REGIME] market={key} regime={regime.get('regime')} conf={regime.get('confidence')} flat={regime.get('flat_score')}/5 trend={regime.get('trend_score')}/5 metrics={regime.get('metrics')}")
             print(f"[WEIGHTED MTF] market={key} BUY={mtf_decision.get('buy_weight')} SELL={mtf_decision.get('sell_weight')} score={mtf_decision.get('signed_score')} class={mtf_decision.get('classification')} autotrade={mtf_decision.get('autotrade_direction')} context={mtf_decision.get('context')} blocked={mtf_decision.get('blocked_reason')}")
         except Exception as exc:
             MTF_AUTOTRADE_STATE.pop(key,None)
