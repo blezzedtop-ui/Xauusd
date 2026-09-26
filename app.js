@@ -223,15 +223,29 @@ async function loadCalendar(){ mountTradingViewCalendar(); }
 async function loadMtf(){
   try{
     const d=await api(`/api/v1/multi-timeframe/${encodeURIComponent(symbol)}`);
+    const w=d.weighted||{};
     $('mtfOverall').textContent=d.overall||'—';
-    const order=['1min','5min','15min','30min','1h','4h','1day'];
+    const order=['1h','30min','15min','5min','1min','4h','1day'];
     const frames=d.timeframes||{};
-    $('mtfGrid').innerHTML=order.map(tf=>{
+    const summary=`<div class="card" style="grid-column:1/-1;margin:0">
+      <div class="section-head"><div><h3>Weighted MTF AutoTrade Filter</h3><div class="mini">H1 40% · M30 25% · M15 20% · M5 15% · M1 AUTOTRADE BLOCKED</div></div><span class="pill">${escapeHtml(w.autotrade_direction||'WAIT')}</span></div>
+      <div class="grid4" style="margin-top:10px">
+        <div class="metric"><small>BUY Weight</small><b class="buy">${w.buy_weight??0}%</b></div>
+        <div class="metric"><small>SELL Weight</small><b class="sell">${w.sell_weight??0}%</b></div>
+        <div class="metric"><small>Signed Score</small><b>${Number(w.signed_score||0)>=0?'+':''}${w.signed_score??0}</b></div>
+        <div class="metric"><small>Context</small><b>${escapeHtml(w.context||'—')}</b></div>
+      </div>
+      <div class="mini" style="margin-top:8px">AutoTrade: ${w.autotrade_ready?'READY':'WAIT'} · H1 match: ${w.h1_match?'YES':'NO'} · M5 trigger: ${w.m5_trigger_match?'YES':'NO'}${w.blocked_reason?' · '+escapeHtml(w.blocked_reason):''}</div>
+    </div>`;
+    const cards=order.map(tf=>{
       const x=frames[tf]||{};
       const tr=(x.trend||'UNAVAILABLE').toUpperCase();
       const cls=tr==='BULLISH'?'buy':tr==='BEARISH'?'sell':'wait';
-      return `<div class="metric"><small>${tfName(tf)}</small><b class="${cls}">${tr}</b><div class="mini">Price ${x.price!=null?fmt(x.price):'—'} · RSI ${x.rsi!=null?fmt(x.rsi):'—'}</div><div class="mini">${x.mode||''}</div></div>`;
+      const weight=w.detail?.[tf]?.weight;
+      const role=tf==='1h'?'PRIMARY DIRECTION':tf==='30min'?'CONTEXT':tf==='15min'?'SETUP / PULLBACK':tf==='5min'?'ENTRY TRIGGER':tf==='1min'?'ANALYSIS ONLY':'CONTEXT ONLY';
+      return `<div class="metric"><small>${tfName(tf)} · ${role}</small><b class="${cls}">${tr}</b><div class="mini">Price ${x.price!=null?fmt(x.price):'—'} · RSI ${x.rsi!=null?fmt(x.rsi):'—'}</div><div class="mini">${weight!=null?'Weight '+weight+'% · ':''}${x.mode||''}${tf==='1min'?' · M1 BLOCKED':''}</div></div>`;
     }).join('');
+    $('mtfGrid').innerHTML=summary+cards;
   }catch(e){$('mtfGrid').innerHTML=`<div class="card">MTF LIVE error: ${e.message}</div>`}
 }
 let historyPeriod = localStorage.getItem('history_period') || 'all';
