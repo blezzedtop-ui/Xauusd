@@ -492,7 +492,7 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
         if str(row.interval or "").strip().lower() in {"1m", "1min", "m1"}:
             continue
         source = _normalize_history_source(str(row.source or "Signals")[:40])
-        if source not in ({CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE} | set(PRO_INDIVIDUAL_ENGINE_SOURCES)):
+        if source not in ({CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE} | set(PRO_INDIVIDUAL_ENGINE_SOURCES) | set(CONSENSUS_AUTOTRADE_SOURCES)):
             continue
         if _autotrade_source_excluded(source):
             continue
@@ -502,6 +502,45 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
             payload = {}
         bridge_rr = None
         module_payload = payload.get("module_signal") if isinstance(payload.get("module_signal"), dict) else payload
+
+        # Recovery path for core History rows: if 3 of 4 core strategies agree on the
+        # same market/timeframe/candle/direction, forward ONE Consensus order.
+        # This preserves the 3-confirmation rule and avoids opening one order per module.
+        if source in CONSENSUS_AUTOTRADE_SOURCES:
+            if not row.candle_time:
+                continue
+            matching_core_rows = list(session.scalars(select(SignalHistory).where(
+                SignalHistory.user_id == user_id,
+                SignalHistory.symbol == row.symbol,
+                SignalHistory.interval == row.interval,
+                SignalHistory.candle_time == row.candle_time,
+                SignalHistory.direction == row.direction,
+                SignalHistory.source.in_(list(CONSENSUS_AUTOTRADE_SOURCES)),
+            )).all())
+            active_core_rows = [r for r in matching_core_rows if _history_status(r) == "ACTIVE"]
+            confirmed_sources = {
+                _normalize_history_source(str(r.source or ""))
+                for r in active_core_rows
+                if _normalize_history_source(str(r.source or "")) in CONSENSUS_AUTOTRADE_SOURCES
+            }
+            if len(confirmed_sources) < CONSENSUS_REQUIRED_CONFIRMATIONS:
+                continue
+            confidences = []
+            for r in active_core_rows:
+                try:
+                    confidences.append(float(r.signal_score or 0))
+                except Exception:
+                    pass
+            consensus_conf = sum(confidences) / len(confidences) if confidences else 0.0
+            try:
+                core_rr = float(row.risk_reward or module_payload.get("risk_reward") or (payload.get("execution_gate") or {}).get("risk_reward") or 0)
+            except Exception:
+                core_rr = 0.0
+            if consensus_conf < CONSENSUS_AUTOTRADE_THRESHOLD or core_rr < CONSENSUS_MIN_AUTOTRADE_RR:
+                continue
+            source = CONSENSUS_AUTOTRADE_SOURCE
+            bridge_rr = core_rr
+
         if source == ICT_AUTOTRADE_SOURCE:
             try:
                 ict_conf = float(row.signal_score or module_payload.get("confidence") or payload.get("confidence_at_entry") or 0)
@@ -1428,28 +1467,30 @@ BLOCKED_SIGNAL_SOURCES = frozenset()
 CONSENSUS_AUTOTRADE_SOURCES = frozenset({"Classic Trade", "SNR", "Auto Trend Line", "Technical Analysis"})
 CONSENSUS_REQUIRED_CONFIRMATIONS = 3
 CONSENSUS_AUTOTRADE_SOURCE = "Consensus"
+CONSENSUS_AUTOTRADE_THRESHOLD = 84
+CONSENSUS_MIN_AUTOTRADE_RR = 1.40
 ICT_AUTOTRADE_SOURCE = "ICT Signals"
 ICT_SIGNAL_THRESHOLD = 80
-ICT_AUTOTRADE_THRESHOLD = 85
+ICT_AUTOTRADE_THRESHOLD = 84
 ICT_MIN_AUTOTRADE_RR = 1.40
 GOLD_STRATEGY_SOURCE = "Signal Lab"
 GOLD_STRATEGY_SIGNAL_THRESHOLD = 80
-GOLD_STRATEGY_AUTOTRADE_THRESHOLD = 85
+GOLD_STRATEGY_AUTOTRADE_THRESHOLD = 84
 GOLD_STRATEGY_MIN_RR = 1.40
 GOLD_STRATEGY_REQUIRED_TOTAL_CONFIRMATIONS = 3
 SIGNALS_AUTOTRADE_SOURCE = "Signals"
 SIGNALS_SIGNAL_THRESHOLD = 80
-SIGNALS_AUTOTRADE_THRESHOLD = 85
+SIGNALS_AUTOTRADE_THRESHOLD = 84
 SIGNALS_MIN_RR = 1.40
 SIGNALS_REQUIRED_TOTAL_CONFIRMATIONS = 3
 ORDER_BLOCK_SOURCE = "Order Block"
 ORDER_BLOCK_SIGNAL_THRESHOLD = 80
-ORDER_BLOCK_AUTOTRADE_THRESHOLD = 85
+ORDER_BLOCK_AUTOTRADE_THRESHOLD = 84
 ORDER_BLOCK_MIN_RR = 1.40
 ORDER_BLOCK_REQUIRED_TOTAL_CONFIRMATIONS = 3
 PRO_ENGINE_SOURCE = "5 Engine Consensus"
 PRO_ENGINE_SIGNAL_THRESHOLD = 80
-PRO_ENGINE_AUTOTRADE_THRESHOLD = 85
+PRO_ENGINE_AUTOTRADE_THRESHOLD = 84
 PRO_ENGINE_MIN_RR = 1.40
 PRO_ENGINE_REQUIRED_CONFIRMATIONS = 3
 PRO_INDIVIDUAL_ENGINE_SOURCES = frozenset({
@@ -1457,11 +1498,11 @@ PRO_INDIVIDUAL_ENGINE_SOURCES = frozenset({
     "Order Block / FVG Engine","Technical Momentum Engine"
 })
 PRO_INDIVIDUAL_SIGNAL_THRESHOLD = 80
-PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD = 85
+PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD = 84
 PRO_INDIVIDUAL_MIN_RR = 1.40
 FIBONACCI_SOURCE = "Fibonacci"
 FIBONACCI_SIGNAL_THRESHOLD = 80
-FIBONACCI_AUTOTRADE_THRESHOLD = 85
+FIBONACCI_AUTOTRADE_THRESHOLD = 84
 FIBONACCI_MIN_RR = 1.40
 FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS = 3
 
@@ -6926,7 +6967,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
         return None
     normalized_source = _normalize_history_source(source)
-    if normalized_source not in ({CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE} | set(PRO_INDIVIDUAL_ENGINE_SOURCES)):
+    if normalized_source not in ({CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE} | set(PRO_INDIVIDUAL_ENGINE_SOURCES) | set(CONSENSUS_AUTOTRADE_SOURCES)):
         print(f"[AUTO TRADE QUEUE] AUTOTRADE SOURCE BLOCKED source={source} market={symbol} tf={interval} dir={direction}")
         return None
     source = normalized_source
