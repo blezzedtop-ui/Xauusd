@@ -457,6 +457,24 @@ MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server
 MT5_ORDER_QUEUE: list[dict[str, Any]] = []
 # Prevent re-queuing the same XAU/USD source/timeframe/candle/direction after a successful fill.
 MT5_EXECUTED_KEYS: set[tuple[str, str, str, str, str]] = set()
+# Cross-source duplicate protection. Unlike MT5_EXECUTED_KEYS this fingerprint
+# intentionally ignores source, so identical levels from different modules can
+# never open more than one MT5 order for the same candle.
+MT5_EXECUTED_SIGNAL_KEYS: set[tuple[Any, ...]] = set()
+
+def _autotrade_signal_fingerprint(market: str, interval: str, candle_time: str,
+                                  direction: str, entry: float, sl: float,
+                                  tp: list[float] | tuple[float, ...]) -> tuple[Any, ...]:
+    clean_tp = tuple(round(float(x), 4) for x in list(tp or [])[:2])
+    return (
+        _mt5_market_key(market),
+        str(interval or "").strip().lower(),
+        _normalize_history_candle_time(candle_time),
+        str(direction or "").strip().upper(),
+        round(float(entry), 4),
+        round(float(sl), 4),
+        clean_tp,
+    )
 
 # Signal History is the persisted source-of-truth for new AutoTrade forwarding.
 # Only records created after this process started are eligible for the bridge scan;
@@ -492,7 +510,7 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
         if str(row.interval or "").strip().lower() in {"1m", "1min", "m1"}:
             continue
         source = _normalize_history_source(str(row.source or "Signals")[:40])
-        if source not in ({CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE} | set(PRO_INDIVIDUAL_ENGINE_SOURCES) | set(CONSENSUS_AUTOTRADE_SOURCES)):
+        if source not in ({CONSENSUS_AUTOTRADE_SOURCE, AI_SMART_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE} | set(PRO_INDIVIDUAL_ENGINE_SOURCES) | set(CONSENSUS_AUTOTRADE_SOURCES)):
             continue
         if _autotrade_source_excluded(source):
             continue
@@ -540,6 +558,15 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
                 continue
             source = CONSENSUS_AUTOTRADE_SOURCE
             bridge_rr = core_rr
+
+        if source == AI_SMART_AUTOTRADE_SOURCE:
+            try:
+                ai_smart_conf = float(row.signal_score or module_payload.get("confidence") or payload.get("confidence_at_entry") or 0)
+            except Exception:
+                ai_smart_conf = 0.0
+            if ai_smart_conf < AI_SMART_AUTOTRADE_THRESHOLD:
+                continue
+            bridge_rr = float(row.risk_reward or module_payload.get("risk_reward") or 0) if (row.risk_reward is not None or module_payload.get("risk_reward") is not None) else None
 
         if source == ICT_AUTOTRADE_SOURCE:
             try:
@@ -1469,6 +1496,9 @@ CONSENSUS_REQUIRED_CONFIRMATIONS = 3
 CONSENSUS_AUTOTRADE_SOURCE = "Consensus"
 CONSENSUS_AUTOTRADE_THRESHOLD = 84
 CONSENSUS_MIN_AUTOTRADE_RR = 0.00
+AI_SMART_AUTOTRADE_SOURCE = "AI Smart Analysis"
+AI_SMART_AUTOTRADE_THRESHOLD = 84
+AI_SMART_MIN_RR = 0.00
 ICT_AUTOTRADE_SOURCE = "ICT Signals"
 ICT_SIGNAL_THRESHOLD = 80
 ICT_AUTOTRADE_THRESHOLD = 84
@@ -6976,7 +7006,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
         return None
     normalized_source = _normalize_history_source(source)
-    if normalized_source not in ({CONSENSUS_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE} | set(PRO_INDIVIDUAL_ENGINE_SOURCES) | set(CONSENSUS_AUTOTRADE_SOURCES)):
+    if normalized_source not in ({CONSENSUS_AUTOTRADE_SOURCE, AI_SMART_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE} | set(PRO_INDIVIDUAL_ENGINE_SOURCES) | set(CONSENSUS_AUTOTRADE_SOURCES)):
         print(f"[AUTO TRADE QUEUE] AUTOTRADE SOURCE BLOCKED source={source} market={symbol} tf={interval} dir={direction}")
         return None
     source = normalized_source
@@ -6992,6 +7022,14 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     if not mtf_gate.get("ok"):
         print(f"[AUTO TRADE QUEUE] WEIGHTED MTF BLOCKED market={symbol} source={source} tf={interval} dir={direction} reason={mtf_gate.get('reason')} allowed={mtf_gate.get('direction')} BUY={mtf_gate.get('buy_weight')} SELL={mtf_gate.get('sell_weight')} context={mtf_gate.get('context')}")
         return None
+    if source == AI_SMART_AUTOTRADE_SOURCE:
+        try:
+            ai_smart_conf = float(confidence or 0)
+        except Exception:
+            ai_smart_conf = 0.0
+        if ai_smart_conf < AI_SMART_AUTOTRADE_THRESHOLD:
+            print(f"[AUTO TRADE QUEUE] AI SMART CONFIDENCE BLOCKED tf={interval} conf={ai_smart_conf:.1f} required={AI_SMART_AUTOTRADE_THRESHOLD}")
+            return None
     if source == ICT_AUTOTRADE_SOURCE:
         try:
             ict_conf = float(confidence or 0)
@@ -7079,6 +7117,23 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     market = _mt5_market_key(symbol)
     if market != "XAU/USD":
         return None
+    signal_key = _autotrade_signal_fingerprint(market, interval, str(candle_time), direction, entry, sl, tp)
+    if signal_key in MT5_EXECUTED_SIGNAL_KEYS:
+        print(f"[AUTO TRADE QUEUE] GLOBAL DUPLICATE EXECUTED BLOCKED market={market} source={source} tf={interval} candle={candle_time} dir={direction} entry={entry} sl={sl} tp={tp}")
+        return None
+    for q in MT5_ORDER_QUEUE:
+        try:
+            q_signal_key = _autotrade_signal_fingerprint(
+                q.get("symbol") or q.get("market"), q.get("interval") or "",
+                q.get("candle_time") or "", q.get("direction") or "",
+                float(q.get("entry")), float(q.get("sl")), list(q.get("tp") or [])
+            )
+        except Exception:
+            q_signal_key = None
+        if q_signal_key == signal_key:
+            print(f"[AUTO TRADE QUEUE] GLOBAL DUPLICATE QUEUED BLOCKED market={market} source={source} existing_source={q.get('source')} tf={interval} candle={candle_time} dir={direction}")
+            return q
+
     key = (market, source.strip(), interval, str(candle_time), direction.upper())
     # Once an order for this exact market/source/timeframe/candle/direction is reported
     # successful, do not open the same signal again during the same process lifetime.
@@ -7117,6 +7172,7 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
         "claimed": False,
         "status": "QUEUED",
         "queue_key": [market, source.strip(), interval, str(candle_time), direction.upper()],
+        "signal_fingerprint": list(signal_key),
         "weighted_mtf": mtf_gate,
     }
     MT5_ORDER_ATTEMPTS[order_id] = 0
@@ -7248,7 +7304,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 mtf=await multi_timeframe(key)
                 smart={"signal":technical.get("signal","WAIT"),"confidence":technical.get("confidence",0),"entry":technical.get("entry"),"stop_loss":technical.get("stop_loss"),"take_profit":technical.get("take_profit",[]),"reason":f"Technical V2 + MTF {mtf.get('overall','MIXED')}","strategy_engine":"Multi-scenario AI Decision V2","strategy_version":"V2","strategy_chain":_strategy_chain(tf),"interval":tf}
                 if smart["signal"] in {"BUY","SELL"}:
-                    candidates.append({"source":"AI Smart Analysis","interval":tf,"item":smart,"response":{"mode":"confirmation-only","multi_timeframe":mtf,"candle_time":ct}})
+                    candidates.append({"source":AI_SMART_AUTOTRADE_SOURCE,"interval":tf,"item":smart,"response":{"mode":"direct-autotrade","multi_timeframe":mtf,"candle_time":ct}})
             except Exception:
                 pass
         # ICT Smart Money is one execution model, not six duplicated timeframe orders.
@@ -7726,7 +7782,30 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 recent.payload = json.dumps(payload, ensure_ascii=False, default=str)
                 _history_sync_row(recent, payload)
 
-            # ICT Signals is the one intentional direct AutoTrade exception.
+            # AI Smart Analysis may AutoTrade directly at >=84% confidence.
+            # Cross-source signal fingerprinting below guarantees that if Technical
+            # Analysis or any other module has identical Entry/SL/TP, only one order wins.
+            if source == AI_SMART_AUTOTRADE_SOURCE and direction in {"BUY","SELL"} and tp and conf >= AI_SMART_AUTOTRADE_THRESHOLD:
+                existing_queue_ids = {str(q.get("id")) for q in MT5_ORDER_QUEUE}
+                order = _queue_autotrade_order(
+                    symbol=key, source=AI_SMART_AUTOTRADE_SOURCE, interval=tf, direction=direction,
+                    entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
+                    confidence=conf, candle_time=candle_time, risk_reward=float(gate.get("r_multiple") or 0),
+                )
+                is_new_ai_smart = order is not None and str(order.get("id")) not in existing_queue_ids
+                if order is not None:
+                    payload["auto_trade"]["queued"] = True
+                    payload["auto_trade"]["mode"] = "AI_SMART_DIRECT"
+                    payload["auto_trade"]["order_id"] = order.get("id")
+                    target_row = recent if recent is not None else history_row
+                    if target_row is not None:
+                        target_row.payload = json.dumps(payload, ensure_ascii=False, default=str)
+                        _history_sync_row(target_row, payload)
+                if is_new_ai_smart:
+                    queued.append(order)
+                    print(f"[AI SMART AUTOTRADE] QUEUED market={key} tf={tf} dir={direction} conf={conf:.1f}")
+
+            # ICT Signals is a direct AutoTrade exception.
             # It must pass its 85% + RR informational gate and the common AI/market/risk gates.
             if source == ICT_AUTOTRADE_SOURCE and bool(item.get("ict_autotrade_eligible")) and direction in {"BUY","SELL"} and tp:
                 existing_queue_ids = {str(q.get("id")) for q in MT5_ORDER_QUEUE}
@@ -9348,6 +9427,15 @@ async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, 
                 qk = item.get("queue_key")
                 if isinstance(qk, list) and len(qk) == 5:
                     MT5_EXECUTED_KEYS.add(tuple(str(x) for x in qk))
+                try:
+                    sk = _autotrade_signal_fingerprint(
+                        item.get("symbol") or item.get("market"), item.get("interval") or "",
+                        item.get("candle_time") or "", item.get("direction") or "",
+                        float(item.get("entry")), float(item.get("sl")), list(item.get("tp") or [])
+                    )
+                    MT5_EXECUTED_SIGNAL_KEYS.add(sk)
+                except Exception:
+                    pass
                 MT5_ORDER_QUEUE.pop(idx)
                 MT5_ORDER_ATTEMPTS.pop(str(body.ticket), None)
             elif status in {"error", "failed", "order_failed"}:
