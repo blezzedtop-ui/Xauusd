@@ -8957,6 +8957,14 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
         await _maybe_refresh_history_v2(session, user.id)
     except Exception as exc:
         print(f"[HISTORY V2] outcome refresh skipped: {type(exc).__name__}: {exc}")
+    # Remove exact cross-source duplicates before History is counted/rendered.
+    try:
+        removed = _dedupe_signal_history_rows(session, user.id)
+        if removed:
+            session.commit()
+    except Exception as exc:
+        session.rollback()
+        print(f"[SIGNAL HISTORY] dedupe warning={type(exc).__name__}: {exc}")
     visible_user_ids = _history_visible_user_ids(user, session)
     q = select(SignalHistory).where(SignalHistory.user_id.in_(visible_user_ids))
     if symbol:
@@ -9032,20 +9040,6 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
         print(f"[HISTORY V2 STATS] outcome refresh skipped: {type(exc).__name__}: {exc}")
     visible_user_ids=_history_visible_user_ids(user,session)
     # Remove exact cross-source duplicates before History is counted/rendered.
-    try:
-        removed = _dedupe_signal_history_rows(session, user.id)
-        if removed:
-            session.commit()
-    except Exception as exc:
-        session.rollback()
-        print(f"[SIGNAL HISTORY] dedupe warning={type(exc).__name__}: {exc}")
-    try:
-        removed = _dedupe_signal_history_rows(session, user.id)
-        if removed:
-            session.commit()
-    except Exception as exc:
-        session.rollback()
-        print(f"[SIGNAL HISTORY STATS] dedupe warning={type(exc).__name__}: {exc}")
     q=select(SignalHistory).where(SignalHistory.user_id.in_(visible_user_ids))
     if symbol: q=q.where(SignalHistory.symbol==clean_symbol(symbol))
     if direction.upper() in {"BUY","SELL"}: q=q.where(SignalHistory.direction==direction.upper())
