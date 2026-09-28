@@ -223,37 +223,15 @@ async function loadCalendar(){ mountTradingViewCalendar(); }
 async function loadMtf(){
   try{
     const d=await api(`/api/v1/multi-timeframe/${encodeURIComponent(symbol)}`);
-    const w=d.weighted||{};
     $('mtfOverall').textContent=d.overall||'—';
-    const order=['1h','30min','15min','5min','1min','4h','1day'];
+    const order=['1min','5min','15min','30min','1h','4h','1day'];
     const frames=d.timeframes||{};
-    const r=w.market_regime||{}, rm=r.metrics||{};
-    const summary=`<div class="card" style="grid-column:1/-1;margin:0">
-      <div class="section-head"><div><h3>Market Regime + Weighted MTF</h3><div class="mini">Regime first → TRENDING / FLAT / TRANSITION · then H1 40% · M30 25% · M15 20% · M5 15% · M1 BLOCKED</div></div><span class="pill">${escapeHtml(r.regime||'TRANSITION')} · ${escapeHtml(w.autotrade_direction||'WAIT')}</span></div>
-      <div class="grid4" style="margin-top:10px">
-        <div class="metric"><small>Market Regime</small><b>${escapeHtml(r.regime||'—')}</b><div class="mini">${r.confidence??0}% confidence · flat ${r.flat_score??0}/5 · trend ${r.trend_score??0}/5</div></div>
-        <div class="metric"><small>BUY Weight</small><b class="buy">${w.buy_weight??0}%</b></div>
-        <div class="metric"><small>SELL Weight</small><b class="sell">${w.sell_weight??0}%</b></div>
-        <div class="metric"><small>Signed Score</small><b>${Number(w.signed_score||0)>=0?'+':''}${w.signed_score??0}</b></div>
-      </div>
-      <div class="grid4" style="margin-top:8px">
-        <div class="metric"><small>ADX H1</small><b>${rm.adx!=null?fmt(rm.adx):'—'}</b></div>
-        <div class="metric"><small>EMA50/200 sep.</small><b>${rm.ema_separation_atr!=null?fmt(rm.ema_separation_atr)+' ATR':'—'}</b></div>
-        <div class="metric"><small>ATR Regime</small><b>${rm.atr_ratio!=null?fmt(rm.atr_ratio):'—'}</b></div>
-        <div class="metric"><small>Context</small><b>${escapeHtml(w.context||'—')}</b></div>
-      </div>
-      <div class="mini" style="margin-top:8px">AutoTrade: ${w.autotrade_ready?'READY':'WAIT'} · H1 match: ${w.h1_match?'YES':'NO'} · M5 trigger: ${w.m5_trigger_match?'YES':'NO'}${w.blocked_reason?' · '+escapeHtml(w.blocked_reason):''}</div>
-      <div class="mini" style="margin-top:5px">FLAT mode: trend-based AutoTrade blocked; only validated ICT liquidity/range path may pass. TRANSITION: all AutoTrade WAIT.</div>
-    </div>`;
-    const cards=order.map(tf=>{
+    $('mtfGrid').innerHTML=order.map(tf=>{
       const x=frames[tf]||{};
       const tr=(x.trend||'UNAVAILABLE').toUpperCase();
       const cls=tr==='BULLISH'?'buy':tr==='BEARISH'?'sell':'wait';
-      const weight=w.detail?.[tf]?.weight;
-      const role=tf==='1h'?'PRIMARY DIRECTION':tf==='30min'?'CONTEXT':tf==='15min'?'SETUP / PULLBACK':tf==='5min'?'ENTRY TRIGGER':tf==='1min'?'ANALYSIS ONLY':'CONTEXT ONLY';
-      return `<div class="metric"><small>${tfName(tf)} · ${role}</small><b class="${cls}">${tr}</b><div class="mini">Price ${x.price!=null?fmt(x.price):'—'} · RSI ${x.rsi!=null?fmt(x.rsi):'—'}</div><div class="mini">${weight!=null?'Weight '+weight+'% · ':''}${x.mode||''}${tf==='1min'?' · M1 BLOCKED':''}</div></div>`;
+      return `<div class="metric"><small>${tfName(tf)}</small><b class="${cls}">${tr}</b><div class="mini">Price ${x.price!=null?fmt(x.price):'—'} · RSI ${x.rsi!=null?fmt(x.rsi):'—'}</div><div class="mini">${x.mode||''}</div></div>`;
     }).join('');
-    $('mtfGrid').innerHTML=summary+cards;
   }catch(e){$('mtfGrid').innerHTML=`<div class="card">MTF LIVE error: ${e.message}</div>`}
 }
 let historyPeriod = localStorage.getItem('history_period') || 'all';
@@ -277,9 +255,8 @@ async function loadStats(){
   }catch(e){if($('historySummary'))$('historySummary').innerHTML=`<div class="card">Analytics error: ${e?.message||'server xatosi'}</div>`;}
 }
 const SIGNAL_RECORD_SEEN=new Map();
-const BLOCKED_SIGNAL_SOURCES=new Set();
 function recordModuleSignal(source, response, item, intervalName, candleTime){
-  if(!token || BLOCKED_SIGNAL_SOURCES.has(String(source||'').trim())) return;
+  if(!token) return;
   const x=item||{}; const direction=String(x.signal||response?.direction||'WAIT').toUpperCase();
   if(!['BUY','SELL'].includes(direction)) return;
   const tf=intervalName||response?.interval||interval;
@@ -293,172 +270,80 @@ function recordModuleSignal(source, response, item, intervalName, candleTime){
   api('/api/v1/signals/record-module',{method:'POST',body:JSON.stringify({symbol,interval:tf,source,direction,confidence:x.confidence??response?.ai?.confidence??null,entry:x.entry??response?.setup?.entry??null,stop_loss:x.stop_loss??response?.setup?.stop_loss??null,take_profit:x.take_profit??response?.setup?.take_profit??[],headline:`${source} · ${direction}`,candle_time:ct,payload:{response:item||response}})}).catch(e=>console.warn('Signal history record',source,e));
 }
 let historyV2Offset=0;
-const HISTORY_V2_PAGE_SIZE=500;
 const HISTORY_DETAIL_CACHE=new Map();
-async function loadHistory(append=false){const list=document.getElementById('historyV2List');if(!append)historyV2Offset=0;if(!list)return;if(!token){list.innerHTML='<div class="sx-empty">Kirish kerak.</div>';return;}const p=new URLSearchParams(),s=document.getElementById('historyV2Start')?.value||'',e=document.getElementById('historyV2End')?.value||'',sym=document.getElementById('historyV2Symbol')?.value||'',dir=document.getElementById('historyV2Direction')?.value||'',res=document.getElementById('historyV2Result')?.value||'',mod=document.getElementById('historyV2Module')?.value||'';if(s)p.set('start_date',s);if(e)p.set('end_date',e);if(sym)p.set('symbol',sym);if(dir)p.set('direction',dir);if(res)p.set('result',res);if(mod)p.set('module',mod);try{p.set('offset',String(historyV2Offset));const [rows,stats]=await Promise.all([api('/api/v2/signal-history?limit='+HISTORY_V2_PAGE_SIZE+'&'+p.toString()),api('/api/v2/signal-history/stats?'+p.toString())]),o=stats.overall||{};const K=(l,v,c='')=>`<div class="sx-kpi"><small>${l}</small><b class="${c}">${v}</b></div>`;document.getElementById('historyV2Kpis').innerHTML=[K('TOTAL SIGNALS',o.signals??0),K('WIN RATE',`${Number(o.winrate||0).toFixed(2)}%`),K('WINS',o.wins??0,'buy'),K('LOSSES',o.losses??0,'sell'),K('ACTIVE',o.active??0,'wait'),K('AVG RR',o.avg_rr?`1:${Number(o.avg_rr).toFixed(2)}`:'—'),K('TOTAL R',`${Number(o.total_r||0)>=0?'+':''}${Number(o.total_r||0).toFixed(2)}R`),K('TOTAL PROFIT',`${Number(o.total_profit||0)>=0?'+':''}${Number(o.total_profit||0).toFixed(2)}`)].join('');const days=Object.entries(stats.by_day||{});document.getElementById('historyV2Daily').innerHTML=days.length?days.slice(0,8).map(([d,x])=>`<div class="sx-kpi"><small>${d}</small><b>${Number(x.winrate||0).toFixed(2)}%</b><div class="mini">${x.signals} signals · ${x.wins} wins · ${x.losses} losses · ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)}R</div></div>`).join(''):'<div class="sx-empty">Tanlangan period uchun kunlik statistika yo‘q.</div>';const modules=Object.entries(stats.by_module||{});document.getElementById('historyV2Modules').innerHTML=modules.length?modules.map(([m,x])=>`<div class="sx-module"><small>${escapeHtml(m)}</small><b>${Number(x.winrate||0).toFixed(2)}%</b><div class="line">${x.signals} signals · ${x.wins} wins · ${x.losses} losses</div><div class="line">R: ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)} · Avg RR: ${x.avg_rr?`1:${Number(x.avg_rr).toFixed(2)}`:'—'}</div></div>`).join(''):'<div class="sx-empty">Module statistikasi yo‘q.</div>';document.getElementById('historyV2Count').textContent=`${rows.total_count??rows.count??0} ta signal`;const items=(rows.items||[]); items.forEach(x=>{if(x&&x.signal_id)HISTORY_DETAIL_CACHE.set(String(x.signal_id),x);}); const rendered=items.map(signalCardV2).join('');list.innerHTML=append?(list.innerHTML.replace(/<div class="sx-history-more">[\s\S]*?<\/div>$/,'')+rendered):rendered;list.innerHTML=list.innerHTML||'<div class="sx-empty">Signal topilmadi.</div>';if((historyV2Offset+HISTORY_V2_PAGE_SIZE)<Number(rows.total_count||0)){list.insertAdjacentHTML('beforeend',`<div class="sx-history-more"><button class="btn" type="button" id="historyV2LoadMore">Yana ${HISTORY_V2_PAGE_SIZE} ta yuklash</button></div>`);}}catch(err){list.innerHTML=`<div class="sx-empty">History yuklanmadi: ${escapeHtml(err?.message||'server xatosi')}</div>`;}}
+async function loadHistory(append=false){const list=document.getElementById('historyV2List');if(!list)return;if(!token){list.innerHTML='<div class="sx-empty">Kirish kerak.</div>';return;}const p=new URLSearchParams(),s=document.getElementById('historyV2Start')?.value||'',e=document.getElementById('historyV2End')?.value||'',sym=document.getElementById('historyV2Symbol')?.value||'',dir=document.getElementById('historyV2Direction')?.value||'',res=document.getElementById('historyV2Result')?.value||'',mod=document.getElementById('historyV2Module')?.value||'';if(s)p.set('start_date',s);if(e)p.set('end_date',e);if(sym)p.set('symbol',sym);if(dir)p.set('direction',dir);if(res)p.set('result',res);if(mod)p.set('module',mod);try{p.set('offset',String(historyV2Offset));const [rows,stats]=await Promise.all([api('/api/v2/signal-history?limit=20&'+p.toString()),api('/api/v2/signal-history/stats?'+p.toString())]),o=stats.overall||{};const K=(l,v,c='')=>`<div class="sx-kpi"><small>${l}</small><b class="${c}">${v}</b></div>`;document.getElementById('historyV2Kpis').innerHTML=[K('TOTAL SIGNALS',o.signals??0),K('WIN RATE',`${Number(o.winrate||0).toFixed(2)}%`),K('WINS',o.wins??0,'buy'),K('LOSSES',o.losses??0,'sell'),K('ACTIVE',o.active??0,'wait'),K('AVG RR',o.avg_rr?`1:${Number(o.avg_rr).toFixed(2)}`:'—'),K('TOTAL R',`${Number(o.total_r||0)>=0?'+':''}${Number(o.total_r||0).toFixed(2)}R`),K('TOTAL PROFIT',`${Number(o.total_profit||0)>=0?'+':''}${Number(o.total_profit||0).toFixed(2)}`)].join('');const days=Object.entries(stats.by_day||{});document.getElementById('historyV2Daily').innerHTML=days.length?days.slice(0,8).map(([d,x])=>`<div class="sx-kpi"><small>${d}</small><b>${Number(x.winrate||0).toFixed(2)}%</b><div class="mini">${x.signals} signals · ${x.wins} wins · ${x.losses} losses · ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)}R</div></div>`).join(''):'<div class="sx-empty">Tanlangan period uchun kunlik statistika yo‘q.</div>';const modules=Object.entries(stats.by_module||{});document.getElementById('historyV2Modules').innerHTML=modules.length?modules.map(([m,x])=>`<div class="sx-module"><small>${escapeHtml(m)}</small><b>${Number(x.winrate||0).toFixed(2)}%</b><div class="line">${x.signals} signals · ${x.wins} wins · ${x.losses} losses</div><div class="line">R: ${Number(x.total_r||0)>=0?'+':''}${Number(x.total_r||0).toFixed(2)} · Avg RR: ${x.avg_rr?`1:${Number(x.avg_rr).toFixed(2)}`:'—'}</div></div>`).join(''):'<div class="sx-empty">Module statistikasi yo‘q.</div>';document.getElementById('historyV2Count').textContent=`${rows.count||0} ta signal`;const items=(rows.items||[]); items.forEach(x=>{if(x&&x.signal_id)HISTORY_DETAIL_CACHE.set(String(x.signal_id),x);}); const rendered=items.map(signalCardV2).join('');list.innerHTML=append?(list.innerHTML.replace(/<div class="sx-history-more">[\s\S]*?<\/div>$/,'')+rendered):rendered;list.innerHTML=list.innerHTML||'<div class="sx-empty">Signal topilmadi.</div>';if((historyV2Offset+20)<Number(rows.total_count||0)){list.insertAdjacentHTML('beforeend',`<div class="sx-history-more"><button class="btn" type="button" id="historyV2LoadMore">Yana 20 ta yuklash</button></div>`);}}catch(err){list.innerHTML=`<div class="sx-empty">History yuklanmadi: ${escapeHtml(err?.message||'server xatosi')}</div>`;}}
 function escapeHtml(v){return String(v??'').replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
 function histFmt(v){if(v===null||v===undefined||v==='')return '—';const n=Number(v);return Number.isFinite(n)&&n!==0?n.toFixed(Math.abs(n)>=100?2:4):'—';}
 function histTime(v){try{return new Date(v).toLocaleString('uz-UZ',{timeZone:'Asia/Tashkent'})}catch(_){return v||'—';}}
-function signalCardV2(x){const cls=x.direction==='BUY'?'buy':x.direction==='SELL'?'sell':'',status=(x.status==='CANCELLED'&&(x.cancel_message||x.cancel_reason))?('CANCELLED · '+(x.cancel_message||x.cancel_reason)):(x.status||'ACTIVE'),rr=x.rr?`1:${Number(x.rr).toFixed(2)}`:'—',dur=x.duration_minutes!=null?`${Number(x.duration_minutes).toFixed(0)} min`:'ACTIVE';return `<article class="sx-signal-card ${cls}"><div class="sx-signal-top"><div><div class="sx-signal-badge">${x.direction==='BUY'?'🟢':'🔴'} ${escapeHtml(x.direction||'—')}</div><div class="sx-signal-meta">${escapeHtml(x.symbol)} · ${tfName(x.interval)} · ${escapeHtml(x.source||'Signals')} · ${histTime(x.created_at)}</div></div><div class="sx-status">${escapeHtml(status)} ${x.score!=null?`· ${histFmt(x.score)}%`:''}</div></div><div class="sx-signal-levels"><div class="sx-level"><span>ENTRY</span><b>${histFmt(x.entry)}</b></div><div class="sx-level"><span>SL</span><b>${histFmt(x.sl)}</b></div><div class="sx-level"><span>TP1</span><b>${histFmt(x.tp1)}</b></div><div class="sx-level"><span>TP2</span><b>${histFmt(x.tp2)}</b></div><div class="sx-level"><span>RR</span><b>${rr}</b></div><div class="sx-level"><span>R-MULTIPLE</span><b>${x.r_multiple!=null?(Number(x.r_multiple)>=0?'+':'')+Number(x.r_multiple).toFixed(2)+'R':'—'}</b></div></div><div class="sx-signal-bottom"><div class="sx-signal-meta">ID: <b>${escapeHtml(x.signal_id)}</b> · Duration: ${dur}${x.closed_at?` · Closed: ${histTime(x.closed_at)}`:''}</div><button class="btn" data-history-detail="${escapeHtml(x.signal_id)}" type="button">View Details</button></div></article>`}
-function renderHistoryDetail(x){const snap=x.snapshot||{},time=snap.timeline||{},setup=snap.setup||{},entries=[];function walk(obj,p=''){if(!obj||typeof obj!=='object')return;Object.entries(obj).forEach(([k,v])=>{if(k==='history_snapshot'||k==='payload')return;const key=p?p+'.'+k:k;if(v&&typeof v==='object'&&Object.keys(v).length<12)walk(v,key);else entries.push([key,typeof v==='object'?JSON.stringify(v):v]);});}walk(snap);return `<div class="sx-detail-grid"><div class="metric"><small>SYMBOL</small><b>${escapeHtml(x.symbol)}</b></div><div class="metric"><small>DIRECTION</small><b>${escapeHtml(x.direction)}</b></div><div class="metric"><small>SCORE</small><b>${histFmt(x.score)}%</b></div><div class="metric"><small>STRENGTH</small><b>${escapeHtml(x.strength||'—')}</b></div><div class="metric"><small>ENTRY</small><b>${histFmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${histFmt(x.sl)}</b></div><div class="metric"><small>TP1 / TP2</small><b>${histFmt(x.tp1)} / ${histFmt(x.tp2)}</b></div><div class="metric"><small>RR</small><b>${x.rr?`1:${Number(x.rr).toFixed(2)}`:'—'}</b></div></div><div class="sx-detail-section"><h4>Signal Evidence</h4><div class="sx-evidence-grid">${entries.slice(0,30).map(([k,v])=>`<div class="sx-evidence"><small>${escapeHtml(k)}</small><div>${escapeHtml(String(v).slice(0,600))}</div></div>`).join('')||'<div class="sx-empty">Snapshot evidence mavjud emas.</div>'}</div></div><div class="sx-detail-section"><h4>Timeline</h4><div class="sx-timeline">${[['Signal Created',x.created_at],['Entry Activated',setup.entry?x.created_at:null],['TP1 Hit',time.tp1_hit],['Signal Closed',x.closed_at]].filter(a=>a[1]).map(a=>`<div class="sx-timeline-item"><b>${escapeHtml(a[0])}</b><div class="mini">${histTime(a[1])}</div></div>`).join('')||'<div class="sx-empty">Timeline hali bo‘sh.</div>'}</div></div><div class="sx-detail-section"><h4>Performance</h4><div class="sx-detail-grid"><div class="metric"><small>STATUS</small><b>${escapeHtml(x.status)}${x.status==='CANCELLED'&&(x.cancel_message||x.cancel_reason)?' · '+escapeHtml(x.cancel_message||x.cancel_reason):''}</b></div><div class="metric"><small>PROFIT / LOSS</small><b>${x.profit_loss!=null?histFmt(x.profit_loss):'—'}</b></div><div class="metric"><small>R-MULTIPLE</small><b>${x.r_multiple!=null?(Number(x.r_multiple)>=0?'+':'')+Number(x.r_multiple).toFixed(2)+'R':'—'}</b></div><div class="metric"><small>DURATION</small><b>${x.duration_minutes!=null?Number(x.duration_minutes).toFixed(0)+' min':'ACTIVE'}</b></div></div></div>`}
+function signalCardV2(x){const cls=x.direction==='BUY'?'buy':x.direction==='SELL'?'sell':'',status=x.status||'ACTIVE',rr=x.rr?`1:${Number(x.rr).toFixed(2)}`:'—',dur=x.duration_minutes!=null?`${Number(x.duration_minutes).toFixed(0)} min`:'ACTIVE';return `<article class="sx-signal-card ${cls}"><div class="sx-signal-top"><div><div class="sx-signal-badge">${x.direction==='BUY'?'🟢':'🔴'} ${escapeHtml(x.direction||'—')}</div><div class="sx-signal-meta">${escapeHtml(x.symbol)} · ${tfName(x.interval)} · ${escapeHtml(x.source||'Signals')} · ${histTime(x.created_at)}</div></div><div class="sx-status">${escapeHtml(status)} ${x.score!=null?`· ${histFmt(x.score)}%`:''}</div></div><div class="sx-signal-levels"><div class="sx-level"><span>ENTRY</span><b>${histFmt(x.entry)}</b></div><div class="sx-level"><span>SL</span><b>${histFmt(x.sl)}</b></div><div class="sx-level"><span>TP1</span><b>${histFmt(x.tp1)}</b></div><div class="sx-level"><span>TP2</span><b>${histFmt(x.tp2)}</b></div><div class="sx-level"><span>RR</span><b>${rr}</b></div><div class="sx-level"><span>R-MULTIPLE</span><b>${x.r_multiple!=null?(Number(x.r_multiple)>=0?'+':'')+Number(x.r_multiple).toFixed(2)+'R':'—'}</b></div></div><div class="sx-signal-bottom"><div class="sx-signal-meta">ID: <b>${escapeHtml(x.signal_id)}</b> · Duration: ${dur}${x.closed_at?` · Closed: ${histTime(x.closed_at)}`:''}</div><button class="btn" data-history-detail="${escapeHtml(x.signal_id)}" type="button">View Details</button></div></article>`}
+function renderHistoryDetail(x){const snap=x.snapshot||{},time=snap.timeline||{},setup=snap.setup||{},entries=[];function walk(obj,p=''){if(!obj||typeof obj!=='object')return;Object.entries(obj).forEach(([k,v])=>{if(k==='history_snapshot'||k==='payload')return;const key=p?p+'.'+k:k;if(v&&typeof v==='object'&&Object.keys(v).length<12)walk(v,key);else entries.push([key,typeof v==='object'?JSON.stringify(v):v]);});}walk(snap);return `<div class="sx-detail-grid"><div class="metric"><small>SYMBOL</small><b>${escapeHtml(x.symbol)}</b></div><div class="metric"><small>DIRECTION</small><b>${escapeHtml(x.direction)}</b></div><div class="metric"><small>SCORE</small><b>${histFmt(x.score)}%</b></div><div class="metric"><small>STRENGTH</small><b>${escapeHtml(x.strength||'—')}</b></div><div class="metric"><small>ENTRY</small><b>${histFmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${histFmt(x.sl)}</b></div><div class="metric"><small>TP1 / TP2</small><b>${histFmt(x.tp1)} / ${histFmt(x.tp2)}</b></div><div class="metric"><small>RR</small><b>${x.rr?`1:${Number(x.rr).toFixed(2)}`:'—'}</b></div></div><div class="sx-detail-section"><h4>Signal Evidence</h4><div class="sx-evidence-grid">${entries.slice(0,30).map(([k,v])=>`<div class="sx-evidence"><small>${escapeHtml(k)}</small><div>${escapeHtml(String(v).slice(0,600))}</div></div>`).join('')||'<div class="sx-empty">Snapshot evidence mavjud emas.</div>'}</div></div><div class="sx-detail-section"><h4>Timeline</h4><div class="sx-timeline">${[['Signal Created',x.created_at],['Entry Activated',setup.entry?x.created_at:null],['TP1 Hit',time.tp1_hit],['Signal Closed',x.closed_at]].filter(a=>a[1]).map(a=>`<div class="sx-timeline-item"><b>${escapeHtml(a[0])}</b><div class="mini">${histTime(a[1])}</div></div>`).join('')||'<div class="sx-empty">Timeline hali bo‘sh.</div>'}</div></div><div class="sx-detail-section"><h4>Performance</h4><div class="sx-detail-grid"><div class="metric"><small>STATUS</small><b>${escapeHtml(x.status)}</b></div><div class="metric"><small>PROFIT / LOSS</small><b>${x.profit_loss!=null?histFmt(x.profit_loss):'—'}</b></div><div class="metric"><small>R-MULTIPLE</small><b>${x.r_multiple!=null?(Number(x.r_multiple)>=0?'+':'')+Number(x.r_multiple).toFixed(2)+'R':'—'}</b></div><div class="metric"><small>DURATION</small><b>${x.duration_minutes!=null?Number(x.duration_minutes).toFixed(0)+' min':'ACTIVE'}</b></div></div></div>`}
 
 function componentText(v){if(v==null)return '—';if(typeof v==='object'){if(v.type)return v.type+(v.low!=null?' · '+fmt(v.low)+'–'+fmt(v.high):'');if(v.support!=null)return 'S '+fmt(v.support)+' · R '+fmt(v.resistance);return JSON.stringify(v)}return String(v)}
 function tfName(tf){return ({'1min':'1 MIN','5min':'5 MIN','15min':'15 MIN','30min':'30 MIN','1h':'1 HOUR','4h':'4 HOUR','1day':'1 DAY'})[tf]||tf;}
-function advCard(tf,x){
-  const sig=x.signal||'WAIT', cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait', badge=sig==='BUY'?'badge-buy':sig==='SELL'?'badge-sell':'badge-wait';
-  const htf=x.htf||{}, lower=x.lower_tf||{}, checks=x.checks||[], news=x.news_filter||{}, regime=x.market_regime||{};
-  const at=tf==='1min'?'M1 BLOCKED':(x.signal_lab_autotrade_eligible?'BASE READY':'WAIT');
-  const conf=x.confidence??0;
-  return `<div class="advanced-card ${cls}">
-    <div class="advanced-head"><div><div class="mini">${tfName(tf)} · GOLD STRATEGY 2026</div><div class="advanced-signal ${badge}">${sig}</div></div><span class="pill">${conf}% · ${at}</span></div>
-    <div class="mini" style="margin-top:4px">${x.setup||'WAIT'} · ${x.reason||'—'}</div>
-    <div class="grid4" style="margin-top:9px">
-      <div class="metric"><small>Entry</small><b>${fmt(x.entry)}</b></div>
-      <div class="metric"><small>SL</small><b>${fmt(x.stop_loss)}</b></div>
-      <div class="metric"><small>TP1</small><b>${fmt((x.take_profit||[])[0])}</b></div>
-      <div class="metric"><small>RR</small><b>${x.risk_reward?`1 : ${x.risk_reward}`:'—'}</b></div>
-    </div>
-    <div class="component-grid">
-      <div class="component"><small>H4 / H1 Trend</small><b>${htf.h4?.bias||'—'} / ${htf.h1?.bias||'—'}</b></div>
-      <div class="component"><small>SNR Setup</small><b>${x.setup||'WAIT'}</b></div>
-      <div class="component"><small>M15 / M5</small><b>${lower.m15?.bias||'—'} / ${lower.m5?.bias||'—'}</b></div>
-      <div class="component"><small>RSI / MACD</small><b>${fmt(x.rsi)} / ${fmt(x.macd)}</b></div>
-      <div class="component"><small>Price Action</small><b>${x.price_action||'—'}</b></div>
-      <div class="component"><small>Volatility</small><b>${regime.volatility||'—'} · ${regime.volatility_ratio??'—'}</b></div>
-      <div class="component"><small>News Filter</small><b>${news.blocked?'BLACKOUT':news.known?'CLEAR':'UNKNOWN'}</b></div>
-      <div class="component"><small>AutoTrade</small><b>${tf==='1min'?'M1 BLOCKED':conf>=85 && Number(x.risk_reward||0)>=1.4?'WAIT 3-CONFIRM':'WAIT'}</b></div>
-    </div>
-    <div class="advanced-actions">
-      <div class="mini">${checks.map(q=>`${q.name}:${q.status}`).join(' · ')}</div>
-      ${sig==='BUY'||sig==='SELL'?`<button class="btn" data-save-advanced="${tf}">History saqlash</button>`:''}
-    </div>
-  </div>`;
-}
+function advCard(tf,x){const sig=x.signal||'WAIT', cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait', badge=sig==='BUY'?'badge-buy':sig==='SELL'?'badge-sell':'badge-wait';const c=x.components||{};return `<div class="advanced-card ${cls}"><div class="advanced-head"><div><div class="mini">${tfName(tf)}</div><div class="advanced-signal ${badge}">${sig}</div></div><span class="pill">${x.confidence||0}%</span></div><div class="mini" style="margin-top:4px">Score ${x.score??0} · ${x.setup||'—'}</div><div class="grid4" style="margin-top:9px"><div class="metric"><small>Entry</small><b>${fmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${fmt(x.stop_loss)}</b></div><div class="metric"><small>TP1</small><b>${fmt((x.take_profit||[])[0])}</b></div><div class="metric"><small>TP2</small><b>${fmt((x.take_profit||[])[1])}</b></div></div><div class="component-grid"><div class="component"><small>ICT</small><b>${componentText(c['ICT'])}</b></div><div class="component"><small>SNR</small><b>${componentText(c['SNR'])}</b></div><div class="component"><small>SNR Malaysia</small><b>${componentText(c['SNR Malaysia'])}</b></div><div class="component"><small>Order Block</small><b>${componentText(c['Order Block'])}</b></div><div class="component"><small>FVG</small><b>${componentText(c['FVG'])}</b></div><div class="component"><small>Liquidity</small><b>${componentText(c['Liquidity'])}</b></div><div class="component"><small>Trend Line</small><b>${componentText(c['Trend Line'])}</b></div><div class="component"><small>Global Trend</small><b>${componentText(c['Global Trend Line'])}</b></div><div class="component"><small>BOS</small><b>${componentText(c['BOS'])}</b></div><div class="component"><small>CHOCH</small><b>${componentText(c['CHOCH'])}</b></div><div class="component"><small>Internal</small><b>${componentText(c['Internal Structure'])}</b></div><div class="component"><small>RSI / ATR</small><b>${fmt(x.rsi)} / ${fmt(x.atr)}</b></div></div><div class="advanced-actions"><div class="mini">${x.reason||'—'}</div>${sig==='BUY'||sig==='SELL'?`<button class="btn" data-save-advanced="${tf}">Saqlash</button>`:''}</div></div>`}
 
 function ictRange(x){return x&&x.low!=null&&x.high!=null?`${fmt(x.low)} – ${fmt(x.high)}`:'—'}
 function ictState(v){return v?'PASS':'MISS'}
 async function loadICTSignals(){
-  const status=$('ictStatus'); if(status) status.textContent='H4/H1 → M15/M5 ICT Smart Money hisoblanmoqda…';
+  const status=$('ictStatus'); if(status) status.textContent='M30 → M5 ICT hisoblanmoqda…';
   try{
     const d=await api(`/api/v1/ict-signals/${encodeURIComponent(symbol)}`);
     if(!d.ok) throw Error(d.error||'ICT unavailable');
-    const x=d.ict||{}, htf=x.htf||{}, h4=htf.h4||{}, h1=htf.h1||{}, m15=x.m15||{}, m5=x.m5||{}, liq=x.liquidity||{}, kz=x.killzone||{};
-    const fvg=x.fvg||{}, ob=x.order_block||{};
+    const x=d.ict||{}, m30=x.m30||{}, m5=x.m5||{}, liq=x.liquidity||{}, pd=x.premium_discount||{};
     const sig=x.signal||'WAIT', cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
-    $('ictSymbol').textContent=`${symbol} · H4/H1 → M15/M5 · M1 BLOCKED`;
+    $('ictSymbol').textContent=`${symbol} · M30 → M5`;
     $('ictSignal').textContent=sig; $('ictSignal').className='signal-main '+cls;
     $('ictConfidence').textContent=`${x.confidence??0}%`;
     $('ictScore').textContent=`${x.score??0} / 100`;
-    const at=x.ict_autotrade_eligible?'AUTOTRADE READY':'AUTOTRADE WAIT';
-    $('ictReason').textContent=(x.reason||'—')+` | ${at} · ${x.auto_trade_reason||'—'}`+(x.ai_validation?` | AI ${x.ai_validation.signal||'—'} · ${x.ai_validation.confidence??0}%`:'');
+    $('ictReason').textContent=(x.reason||'—') + (x.ai_validation ? ` | AI ${x.ai_consensus||'—'} · ${x.ai_validation.confidence??0}%` : '');
     $('ictEntry').textContent=fmt(x.entry); $('ictSL').textContent=fmt(x.stop_loss);
     $('ictTP1').textContent=fmt((x.take_profit||[])[0]); $('ictTP2').textContent=fmt((x.take_profit||[])[1]);
-    $('ictBias').textContent=`${h4.bias||'—'} / ${h1.bias||'—'}`;
-    $('ictLiquidity').textContent=`Liquidity ${liq.type||'NONE'}`;
-    $('ictPD').textContent=kz.active?`${kz.name} ACTIVE`:'OUTSIDE KILLZONE';
-    $('ictEquilibrium').textContent=`HTF ${htf.aligned?'ALIGNED':'CONFLICT'}`;
-    $('ictMSS').textContent=(m5.mss||m15.mss)?'CONFIRMED':'WAIT';
-    $('ictMSSLevel').textContent=`M5 ${fmt(m5.mss_level)} · M15 ${fmt(m15.mss_level)}`;
+    $('ictBias').textContent=x.bias||'—'; $('ictLiquidity').textContent=`Liquidity ${liq.type||'—'}`;
+    $('ictPD').textContent=pd.zone||'—'; $('ictEquilibrium').textContent=`EQ ${fmt(pd.equilibrium)}`;
+    $('ictMSS').textContent=m5.mss?'CONFIRMED':'WAIT'; $('ictMSSLevel').textContent=`Level ${fmt(m5.mss_level)}`;
     $('ictRR').textContent=x.risk_reward?`1 : ${x.risk_reward}`:'—';
-    $('ictM30FVG').textContent=fvg.type||'NONE'; $('ictM30FVG').className='advanced-signal '+(fvg.type==='BULLISH'?'buy':fvg.type==='BEARISH'?'sell':'wait');
-    $('ictM30FVGRange').textContent=ictRange(fvg);
-    $('ictM30OB').textContent=`OB ${ob.type||'NONE'}`; $('ictM30OBRange').textContent=ictRange(ob);
-    $('ictM30EMA').textContent=`H4 ${h4.bias||'—'} · H1 ${h1.bias||'—'}`;
-    $('ictDraw').textContent=`TP liquidity · ${fmt((x.take_profit||[])[0])}`;
+    $('ictM30FVG').textContent=m30.fvg?.type||'NONE'; $('ictM30FVG').className='advanced-signal '+(m30.fvg?.type==='BULLISH'?'buy':m30.fvg?.type==='BEARISH'?'sell':'wait');
+    $('ictM30FVGRange').textContent=ictRange(m30.fvg); $('ictM30OB').textContent=`OB ${m30.order_block?.type||'NONE'}`; $('ictM30OBRange').textContent=ictRange(m30.order_block);
+    $('ictM30EMA').textContent=`${fmt(m30.ema20)} / ${fmt(m30.ema50)}`; $('ictDraw').textContent=x.draw_on_liquidity||'—';
     $('ictM5FVG').textContent=m5.fvg?.type||'NONE'; $('ictM5FVG').className='advanced-signal '+(m5.fvg?.type==='BULLISH'?'buy':m5.fvg?.type==='BEARISH'?'sell':'wait');
-    $('ictM5FVGRange').textContent=ictRange(m5.fvg);
-    $('ictM5MSS').textContent=m5.mss?'CONFIRMED':'WAIT';
-    $('ictDisp').textContent=`Displacement ${m5.displacement?'✓':'—'}`;
-    $('ictDispRatio').textContent=`${m5.displacement_atr??0} ATR`;
-    $('ictLiqLevel').textContent=fmt(liq.level);
-    $('ictChecks').innerHTML=(x.checks||[]).map(c=>`<div class="component"><small>${c.name}</small><b>${ictState(c.status==='PASS')} · +${c.points||0}/${c.max_points||0}</b><div class="mini">${c.detail||''}</div></div>`).join('');
-    $('ictStatus').textContent=`Live · H4 ${d.h4_candles} · H1 ${d.h1_candles} · M15 ${d.m15_candles} · M5 ${d.m5_candles} · Signal ≥80 · AutoTrade ≥85 + RR≥1.40 · M1 BLOCKED`;
-    recordModuleSignal('ICT Signals',d,x,'5min',x.candle_time||liveCandle?.time);
+    $('ictM5FVGRange').textContent=ictRange(m5.fvg); $('ictM5MSS').textContent=m5.mss?'CONFIRMED':'WAIT';
+    $('ictDisp').textContent=`Displacement ${m5.displacement?'✓':'—'}`; $('ictDispRatio').textContent=`${m5.displacement_atr??0} ATR`; $('ictLiqLevel').textContent=fmt(liq.level);
+    $('ictChecks').innerHTML=(x.checks||[]).map(c=>`<div class="component"><small>${c.name}</small><b>${ictState(c.status==='PASS')} · +${c.points||0}</b></div>`).join('');
+    $('ictStatus').textContent=`Live · M30 ${d.m30_candles} candles · M5 ${d.m5_candles} candles · ${new Date(d.generated_at).toLocaleString()}`;; recordModuleSignal('ICT Signals',d,x,'30min',d.m30_candle_time||liveCandle?.time)
   }catch(e){
     $('ictStatus').textContent='ICT error: '+(e.message||'server error');
     $('ictReason').textContent='Signal unavailable — market data/API ni tekshiring.';
   }
 }
 
-async function loadAdvancedSignals(){
-  if(!IS_ADMIN)return;
-  $('advancedStatus').textContent='Gold Strategy 2026 · H4/H1 → SNR → M15/M5 → RSI/MACD → Price Action → Volatility/News hisoblanmoqda…';
-  $('advancedGrid').innerHTML='<div class="card">Gold Strategy 2026 hisoblanmoqda...</div>';
-  try{
-    const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);
-    const order=['1min','5min','15min','30min','1h','4h','1day'];
-    $('advancedGrid').innerHTML=order.map(tf=>advCard(tf,d.timeframes?.[tf]||{})).join('');
-    if(token){
-      order.forEach(tf=>{
-        const x=d.timeframes?.[tf]||{};
-        recordModuleSignal('Signal Lab',d,x,tf,x.candle_time||liveCandle?.time);
-      });
-    }
-    const news=d.news_filter||{};
-    $('advancedStatus').textContent=`GOLD STRATEGY 2026 · Signal ≥80% · AutoTrade ≥85% + RR≥1.40 + jami 3 ta tasdiq · M1 BLOCKED · News: ${news.blocked?'BLACKOUT':news.known?'CLEAR':'UNKNOWN'}`;
-  }catch(e){
-    $('advancedStatus').textContent='Gold Strategy 2026 error: '+e.message;
-    $('advancedGrid').innerHTML='<div class="card">Signal Lab yuklanmadi.</div>';
-  }
-}
+async function loadAdvancedSignals(){if(!IS_ADMIN)return;$('advancedStatus').textContent='7 timeframe hisoblanmoqda…';$('advancedGrid').innerHTML='<div class="card">Signal hisoblanmoqda...</div>';try{const d=await api(`/api/v1/signals/advanced/${encodeURIComponent(symbol)}`);const order=['1min','5min','15min','30min','1h','4h','1day'];$('advancedGrid').innerHTML=order.map(tf=>advCard(tf,d.timeframes?.[tf]||{})).join('');if(token) order.forEach(tf=>recordModuleSignal('Signal Lab',d,d.timeframes?.[tf]||{},tf,d.timeframes?.[tf]?.candle_time||liveCandle?.time));$('advancedStatus').textContent=`${symbol} · ${new Date(d.generated_at).toLocaleString()} · har bir timeframe alohida`; }catch(e){$('advancedStatus').textContent=e.message;$('advancedGrid').innerHTML='<div class="card">Signal yuklanmadi.</div>'}}
 document.addEventListener('click',e=>{ const b=e.target.closest('.history-period'); if(!b)return; historyPeriod=b.dataset.historyPeriod||'all'; localStorage.setItem('history_period',historyPeriod); syncHistoryPeriodButtons(); loadStats().catch(()=>{}); loadHistory().catch(()=>{});  });
 document.addEventListener('change',e=>{ const el=e.target.closest('#historyDate'); if(!el)return; historyDate=el.value||''; localStorage.setItem('history_date',historyDate); if(historyDate){historyPeriod='all'; localStorage.setItem('history_period','all'); syncHistoryPeriodButtons();} loadStats().catch(()=>{}); loadHistory().catch(()=>{}); });
 document.addEventListener('click',e=>{ const b=e.target.closest('#clearHistoryDate'); if(!b)return; historyDate=''; localStorage.removeItem('history_date'); syncHistoryDate(); loadStats().catch(()=>{}); loadHistory().catch(()=>{}); });
 
 document.addEventListener('click',async e=>{const b=e.target.closest('[data-save-advanced]');if(!b)return;const tf=b.dataset.saveAdvanced;b.disabled=true;try{await api(`/api/v1/signals/save-advanced?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}`,{method:'POST'});showToast(tfName(tf)+' signal saqlandi');loadStats();if($('historySection').classList.contains('active'))loadHistory()}catch(err){showToast(err.message)}finally{b.disabled=false}});
-function adaptiveSignalsCard(tf,x){
-  const sig=String(x.signal||'WAIT').toUpperCase();
-  const cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
-  const pd=x.premium_discount||{}, liq=x.liquidity||{}, htf=x.htf||{}, low=x.lower_tf||{}, kz=x.killzone||{}, news=x.news_filter||{};
-  const conf=Number(x.confidence||0), rr=Number(x.risk_reward||0);
-  const at=tf==='1min'?'M1 BLOCKED':(conf>=85&&rr>=1.4?'WAIT 3-CONFIRM':'WAIT');
-  return `<div class="signal-box auto-signal">
-    <div class="section-head"><div><b>${tfName(tf)} · ADAPTIVE ICT TREND</b><div class="signal-main ${cls}">${sig}</div></div><span class="pill">${conf}% · ${at}</span></div>
-    <div class="grid4" style="margin-top:8px"><div class="metric"><small>Entry</small><b>${fmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${fmt(x.stop_loss)}</b></div><div class="metric"><small>TP1</small><b>${fmt((x.take_profit||[])[0])}</b></div><div class="metric"><small>RR</small><b>${rr?`1 : ${rr.toFixed(2)}`:'—'}</b></div></div>
-    <div class="component-grid">
-      <div class="component"><small>H4/H1</small><b>${htf.h4?.bias||'—'} / ${htf.h1?.bias||'—'}</b></div>
-      <div class="component"><small>Premium/Discount</small><b>${pd.zone||'—'}</b></div>
-      <div class="component"><small>Liquidity</small><b>${liq.type||'NONE'}</b></div>
-      <div class="component"><small>M15/M5</small><b>${low.m15?.bias||'—'} / ${low.m5?.bias||'—'}</b></div>
-      <div class="component"><small>Session</small><b>${kz.active?kz.name:'OFF'}</b></div>
-      <div class="component"><small>News</small><b>${news.blocked?'BLACKOUT':news.known?'CLEAR':'UNKNOWN'}</b></div>
-      <div class="component"><small>OB / FVG</small><b>${x.order_block?.type||'NONE'} / ${x.fvg?.type||'NONE'}</b></div>
-      <div class="component"><small>AutoTrade</small><b>${at}</b></div>
-    </div>
-    <div class="mini">${x.reason||'—'}</div>
-    <div class="mini">${(x.checks||[]).map(q=>`${q.name}:${q.status} ${q.points||0}/${q.max_points||0}`).join(' · ')}</div>
-  </div>`;
-}
-
 async function loadAutoSignals(){
   try{
     const d=await api(`/api/v1/signals/live/${encodeURIComponent(symbol)}`);
     const order=['1min','5min','15min','30min','1h','4h','1day'];
-    $('autoSignalsGrid').innerHTML=order.map(tf=>adaptiveSignalsCard(tf,d.timeframes?.[tf]||{})).join('');
-    if(token){
-      order.forEach(tf=>{
-        const x=d.timeframes?.[tf]||{};
-        recordModuleSignal('Signals',d,x,tf,x.candle_time||liveCandle?.time);
-      });
-    }
-    const news=d.news_filter||{};
-    $('autoSignalUpdated').textContent=`ADAPTIVE ICT TREND · Signal ≥80 · AutoTrade ≥85 + RR≥1.40 + 3 confirmations · M1 BLOCKED · News ${news.blocked?'BLACKOUT':news.known?'CLEAR':'UNKNOWN'}`;
-  }catch(e){
-    $('autoSignalsGrid').innerHTML=`<div class="card">Signals error: ${escapeHtml(e.message||'server error')}</div>`;
-    $('autoSignalUpdated').textContent='SIGNALS ERROR';
-  }
+    $('autoSignalsGrid').innerHTML=order.map(tf=>{
+      const x=d.timeframes?.[tf]||{};
+      const sig=x.signal||'WAIT';
+      const cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
+      return `<div class="signal-box auto-signal"><div class="section-head"><b>${tfName(tf)}</b><span class="pill">${x.confidence||0}% · ${x.mode||'LIVE'}</span></div><div class="signal-main ${cls}">${sig}</div><div class="mini">Live price: ${fmt(x.current_price)} · Entry: ${fmt(x.entry)} · SL: ${fmt(x.stop_loss)} · TP: ${(x.take_profit||[]).map(fmt).join(' / ')||'—'}</div><div class="mini">${x.reason||'Live engine'}</div><div class="mini">${x.evaluated_at?new Date(x.evaluated_at).toLocaleTimeString():''}</div></div>`;
+    }).join('');
+    $('autoSignalUpdated').textContent='AUTO ENTRY · LIVE CHART · NO QUALITY FILTER · '+new Date(d.generated_at).toLocaleTimeString();if(token) order.forEach(tf=>recordModuleSignal('Signals',d,d.timeframes?.[tf]||{},tf,d.timeframes?.[tf]?.candle_time||liveCandle?.time));
+  }catch(e){$('autoSignalsGrid').innerHTML=`<div class="card">Live Signals error: ${e.message}</div>`}
 }
 async function autoEntryTick(){
   if(!token)return;
   try{
     const d=await api(`/api/v1/signals/live/${encodeURIComponent(symbol)}`);
     const x=d?.timeframes?.[interval]||{};
-    const sig=String(x.signal||'WAIT').toUpperCase();
-    if(interval!=='1min' && ['BUY','SELL'].includes(sig)) markSignal(sig,x.candle_time||d.generated_at||Math.floor(Date.now()/1000));
-    setText('autoSignalUpdated',`ADAPTIVE ICT TREND · ${tfName(interval)} · ${sig} · ${x.confidence||0}% · M1 BLOCKED`);
-  }catch(e){console.warn('Adaptive Signals tick',e)}
+    if(x.signal) markSignal(String(x.signal).toUpperCase(),x.candle_time||d.generated_at||Math.floor(Date.now()/1000));
+    setText('autoSignalUpdated','AUTO ENTRY · LIVE CHART · '+new Date(d.generated_at||Date.now()).toLocaleTimeString());
+  }catch(e){console.warn('AUTO ENTRY LIVE',e)}
 }
-
 async function loadClassicTrade(tf=interval){try{const d=await api(`/api/v1/classic-trade/${encodeURIComponent(symbol)}?interval=${encodeURIComponent(tf)}`);const x=d.classic||{};const sig=x.signal||'WAIT';const cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';$('classicSymbol').textContent=`${symbol} · ${tfName(tf)}`;$('classicSignal').textContent=sig;$('classicSignal').className='signal-main '+cls;$('classicConfidence').textContent=(x.confidence??0)+'% · Score '+(x.score??0);$('classicReason').textContent=x.reason||'—';$('classicEntry').textContent=fmt(x.entry);$('classicSL').textContent=fmt(x.stop_loss);$('classicTP1').textContent=fmt((x.take_profit||[])[0]);$('classicTP2').textContent=fmt((x.take_profit||[])[1]);$('classicTrend').textContent=x.trend||'—';$('classicEma').textContent=`EMA20 ${fmt(x.ema20)} · EMA50 ${fmt(x.ema50)}`;$('classicSNR').textContent=`S ${fmt((x.support||[])[0])} · R ${fmt((x.resistance||[])[0])}`;$('classicPivot').textContent=`Pivot ${fmt(x.pivot)}`;$('classicRSI').textContent=fmt(x.rsi);$('classicRSIState').textContent=x.rsi_state||'—';$('classicMACD').textContent=`${fmt(x.macd)} · ${x.macd_state||'—'}`;$('classicPattern').textContent=x.pattern||'—'; await recordModuleSignal('Classic Trade',d,x,tf,x.candle_time); }catch(e){$('classicReason').textContent='Classic Trade error: '+(e.message||'server error')}}
 let snrInterval='5min';
 function snrFmt(v){return v==null||!Number.isFinite(Number(v))?'—':fmt(Number(v));}
@@ -638,219 +523,43 @@ function bindAiQa(){
 }
 bindAiQa();
 
-async function loadOrderBlock(){
+async function loadAlgoTrade(){
+
   if(!IS_ADMIN)return;
   const status=$('algoStatus');
-  if(status)status.textContent='ORDER BLOCK PRO hisoblanmoqda…';
+  if(status)status.textContent='CALCULATING…';
   try{
-    const d=await api(`/api/v1/order-block/${encodeURIComponent(symbol)}`);
-    if(!d.ok) throw Error(d.reason||'Order Block unavailable');
-    const x=d.item||d;
-    const sig=String(x.signal||'WAIT').toUpperCase();
+    const d=await api(`/api/v1/algotrade/${encodeURIComponent(symbol)}`);
+    const sig=String(d.signal||'WAIT').toUpperCase();
     const cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
     $('algoSignal').textContent=sig;
     $('algoSignal').className='signal-main '+cls;
-    $('algoScore').textContent=`${x.score??0} / 100`;
-    $('algoEntry').textContent=fmt(x.entry); $('algoSL').textContent=fmt(x.stop_loss);
-    $('algoTP1').textContent=fmt((x.take_profit||[])[0]); $('algoTP2').textContent=fmt((x.take_profit||[])[1]);
-    $('algoRR').textContent=x.risk_reward?`1 : ${x.risk_reward}`:'—';
-    $('algoMtf').textContent=x.htf?.aligned?'H4/H1 MATCH':'HTF WAIT';
-    $('algoM15').textContent=x.lower_tf?.m15?.bias||'WAIT';
-    $('algoM5').textContent=x.lower_tf?.m5?.bias||'WAIT';
-    const fresh=x.freshness||{}, overlap=x.overlap||{}, kz=x.killzone||{};
-    const at=x.order_block_autotrade_eligible?'BASE READY · WAIT 3-CONFIRM':'AUTOTRADE WAIT';
-    $('algoReason').textContent=`${x.reason||'—'} | Fresh=${fresh.fresh?'YES':'NO'} · First retest=${fresh.first_retest?'YES':'NO'} · FVG overlap=${overlap.overlap?'YES':'NO'} · Session=${kz.name||'OFF'} · ${at}`;
+    $('algoScore').textContent=`${d.score??0} / 100`;
+    $('algoEntry').textContent=fmt(d.entry); $('algoSL').textContent=fmt(d.stop_loss);
+    $('algoTP1').textContent=fmt((d.take_profit||[])[0]); $('algoTP2').textContent=fmt((d.take_profit||[])[1]);
+    $('algoRR').textContent=d.risk_reward?`1 : ${d.risk_reward}`:'—';
+    $('algoMtf').textContent=d.checks?.mtf_match?'MATCH':'WAIT';
+    $('algoM15').textContent=d.checks?.m15_confirmation?'OK':'WAIT';
+    $('algoM5').textContent=d.checks?.m5_confirmation?'OK':'WAIT';
+    $('algoReason').textContent=d.reason||'—';
     const order=[['4h','H4'],['1h','H1'],['15min','M15'],['5min','M5']];
     $('algoTimeframes').innerHTML=order.map(([tf,label])=>{
-      const t=d.timeframes?.[tf]||{}; const bias=t.bias||{}; const ob=t.order_block||{}; const st=t.structure||{};
-      const b=bias.bias||'NEUTRAL'; const c=b==='BULLISH'?'buy':b==='BEARISH'?'sell':'wait';
-      return `<div class="advanced-card"><div class="advanced-head"><div><div class="mini">${label}</div><div class="advanced-signal ${c}">${b}</div></div><span class="pill">${ob.type||'NO OB'}</span></div><div class="component-grid"><div class="component"><small>Order Block</small><b>${ob.type||'NONE'}</b><div class="mini">${ob.low!=null?fmt(ob.low)+' – '+fmt(ob.high):'—'}</div></div><div class="component"><small>Structure</small><b>${st.choch||st.bos||'—'}</b></div><div class="component"><small>MSS</small><b>${t.mss?'YES':'—'}</b></div><div class="component"><small>Bias</small><b>${b}</b></div></div></div>`;
+      const x=d.timeframes?.[tf]||{}; const s=String(x.signal||'WAIT').toUpperCase(); const c=s==='BUY'?'buy':s==='SELL'?'sell':'wait';
+      const ch=x.checks||{};
+      return `<div class="advanced-card"><div class="advanced-head"><div><div class="mini">${label}</div><div class="advanced-signal ${c}">${s}</div></div><span class="pill">${x.confidence??0}%</span></div><div class="component-grid"><div class="component"><small>Trend</small><b>${x.trend||'—'}</b></div><div class="component"><small>Structure</small><b>${x.structure?.bos||x.structure?.choch||'—'}</b></div><div class="component"><small>Liquidity</small><b>${x.liquidity?.type||'NONE'}</b></div><div class="component"><small>OB / FVG</small><b>${x.order_block?.type||'NONE'} / ${x.fvg?.type||'NONE'}</b></div></div></div>`;
     }).join('');
-    if(status)status.textContent=`LIVE · Signal ≥80 · AutoTrade ≥85 + RR≥1.40 + 3 confirmations · M1 BLOCKED · ${new Date(d.generated_at).toLocaleTimeString()}`;
+    if(token) await recordModuleSignal('AlgoTrade',d,{...d,signal:sig},'5min',d.timeframes?.['5min']?.candle_time||liveCandle?.time);
+    if(status)status.textContent=`LIVE · ${new Date(d.generated_at).toLocaleTimeString()}`;
   }catch(e){
     if(status)status.textContent='ERROR';
     $('algoSignal').textContent='WAIT'; $('algoSignal').className='signal-main wait';
-    $('algoReason').textContent='Order Block error: '+(e.message||'server error');
+    $('algoReason').textContent='AlgoTrade error: '+(e.message||'server error');
   }
 }
-let PRO_ENGINE_CACHE={ts:0,data:null};
-function proCheckGrid(checks){
-  return (checks||[]).map(q=>`<div class="component"><small>${escapeHtml(q.name||'Check')}</small><b>${q.status==='PASS'?'PASS':'MISS'} · ${q.points||0}/${q.max_points||0}</b><div class="mini">${escapeHtml(q.detail||'')}</div></div>`).join('');
-}
-function proFinalBar(final){
-  const f=final||{}, sig=String(f.signal||'WAIT').toUpperCase(), cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
-  const ready=!!f.pro_engine_autotrade_eligible;
-  return `<div class="signal-box" style="margin-top:12px">
-    <div class="section-head"><div><div class="mini">5 ENGINE CONSENSUS · MT5 PIPELINE</div><div class="signal-main ${cls}">${sig}</div></div><span class="pill">${Number(f.confidence||0).toFixed(1)}% · ${f.confirmation_count||0}/5</span></div>
-    <div class="grid4" style="margin-top:10px">
-      <div class="metric"><small>Entry</small><b>${fmt(f.entry)}</b></div>
-      <div class="metric"><small>SL</small><b>${fmt(f.stop_loss)}</b></div>
-      <div class="metric"><small>TP1</small><b>${fmt((f.take_profit||[])[0])}</b></div>
-      <div class="metric"><small>RR</small><b>${f.risk_reward?`1 : ${Number(f.risk_reward).toFixed(2)}`:'—'}</b></div>
-    </div>
-    <div class="mini" style="margin-top:8px">Votes: ${escapeHtml(JSON.stringify(f.votes||{}))}</div>
-    <div class="mini" style="margin-top:5px"><b>${ready?'BASE AUTOTRADE READY':'AUTOTRADE WAIT'}</b> · Worker AI ≥85% + RR ≥1.40 + 3/5 · M1 BLOCKED${f.blockedReason?' · '+escapeHtml(f.blockedReason):''}</div>
-  </div>`;
-}
-function proEngineHtml(title,role,x,final,details=''){
-  const sig=String(x?.signal||'WAIT').toUpperCase(), cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
-  return `<div class="card">
-    <div class="section-head"><div><h2>${escapeHtml(title)}</h2><div class="mini">${escapeHtml(role)}</div></div><button class="btn primary" type="button" data-refresh-pro-engines>↻ Yangilash</button></div>
-    <div class="signal-box" style="margin-top:12px"><div class="section-head"><div><div class="mini">ENGINE SIGNAL</div><div class="signal-main ${cls}">${sig}</div></div><span class="pill">${Number(x?.confidence||0).toFixed(0)} / 100</span></div>
-      <div class="mini">${escapeHtml(x?.blockedReason||'All engine conditions passed')}</div>
-      ${details||''}
-    </div>
-    <div class="component-grid" style="margin-top:12px">${proCheckGrid(x?.checks)}</div>
-    ${proFinalBar(final)}
-  </div>`;
-}
-function renderProEngines(d){
-  const e=d?.engines||{}, f=d?.final||{};
-  if($('proTrendContent')){
-    const x=e.trend||{}, h4=x.h4||{}, h1=x.h1||{};
-    const details=`<div class="grid4" style="margin-top:10px"><div class="metric"><small>H4 Structure</small><b>${h4.structure||'—'}</b></div><div class="metric"><small>H1 Structure</small><b>${h1.structure||'—'}</b></div><div class="metric"><small>H4 EMA50/200</small><b>${fmt(h4.ema50)} / ${fmt(h4.ema200)}</b></div><div class="metric"><small>H1 EMA50/200</small><b>${fmt(h1.ema50)} / ${fmt(h1.ema200)}</b></div></div>`;
-    $('proTrendContent').innerHTML=proEngineHtml('Trend Engine','H4/H1 Structure → EMA50/EMA200 → M15 Pullback → Continuation BOS',x,f,details);
-  }
-  if($('proSnrContent')){
-    const x=e.snr_breakout||{}, z=x.zones||{};
-    const details=`<div class="grid4" style="margin-top:10px"><div class="metric"><small>Support</small><b>${fmt(z.support?.low)}–${fmt(z.support?.high)}</b></div><div class="metric"><small>Resistance</small><b>${fmt(z.resistance?.low)}–${fmt(z.resistance?.high)}</b></div><div class="metric"><small>Breakout</small><b>${x.breakout?.direction||'NONE'}</b></div><div class="metric"><small>Retest</small><b>${x.retest?'CONFIRMED':'WAIT'}</b></div></div>`;
-    $('proSnrContent').innerHTML=proEngineHtml('SNR / Breakout Engine','HTF SNR → Strong Breakout Close → Displacement → Retest → M5 Confirmation',x,f,details);
-  }
-  if($('proIctContent')){
-    const x=e.ict_liquidity||{}, pd=x.premium_discount||{}, pool=x.liquidity_pool||{}, sw=x.sweep||{};
-    const details=`<div class="grid4" style="margin-top:10px"><div class="metric"><small>Premium/Discount</small><b>${pd.zone||'—'}</b></div><div class="metric"><small>Liquidity Pool</small><b>${pool.strong?'STRONG':'WAIT'} · ${pool.matches||0}</b></div><div class="metric"><small>Sweep</small><b>${sw.type||'NONE'}</b></div><div class="metric"><small>Session</small><b>${x.killzone?.name||'OFF'}</b></div></div>`;
-    $('proIctContent').innerHTML=proEngineHtml('ICT Liquidity Engine','HTF Bias + Premium/Discount + Liquidity Pool + Sweep + MSS/Displacement',x,f,details);
-  }
-  if($('proObFvgContent')){
-    const x=e.ob_fvg||{}, ob=x.order_block||{}, ov=x.overlap||{};
-    const details=`<div class="grid4" style="margin-top:10px"><div class="metric"><small>Order Block</small><b>${ob.type||'NONE'} · ${fmt(ob.low)}–${fmt(ob.high)}</b></div><div class="metric"><small>Fresh</small><b>${x.freshness?.fresh?'YES':'NO'}</b></div><div class="metric"><small>FVG Overlap</small><b>${ov.overlap?'YES':'NO'} · ${fmt(ov.low)}–${fmt(ov.high)}</b></div><div class="metric"><small>First Retest</small><b>${x.retest?.retested?'YES':'WAIT'}</b></div></div><div class="grid4" style="margin-top:8px"><div class="metric"><small>Entry</small><b>${fmt(x.entry)}</b></div><div class="metric"><small>SL</small><b>${fmt(x.stop_loss)}</b></div><div class="metric"><small>TP1</small><b>${fmt((x.take_profit||[])[0])}</b></div><div class="metric"><small>RR</small><b>${x.risk_reward?`1 : ${x.risk_reward}`:'—'}</b></div></div>`;
-    $('proObFvgContent').innerHTML=proEngineHtml('Order Block / FVG Engine','Structure Break → Displacement → Fresh OB → FVG Overlap → First Retest Reaction',x,f,details);
-  }
-  if($('proMomentumContent')){
-    const x=e.momentum||{}, m=x.macd||{}, a=x.adx_dmi||{};
-    const details=`<div class="grid4" style="margin-top:10px"><div class="metric"><small>RSI</small><b>${fmt(x.rsi)}</b></div><div class="metric"><small>MACD / Signal</small><b>${fmt(m.line)} / ${fmt(m.signal)}</b></div><div class="metric"><small>ADX · +DI / -DI</small><b>${fmt(a.adx)} · ${fmt(a.plus_di)} / ${fmt(a.minus_di)}</b></div><div class="metric"><small>ATR Ratio</small><b>${fmt(x.atr_ratio)}</b></div></div>`;
-    $('proMomentumContent').innerHTML=proEngineHtml('Technical Momentum Engine','RSI Regime + MACD Expansion + ADX/DMI + ATR + Candle Momentum',x,f,details);
-  }
-}
-async function loadProEngines(force=false){
-  const now=Date.now();
-  if(!force && PRO_ENGINE_CACHE.data && now-PRO_ENGINE_CACHE.ts<5000){
-    renderProEngines(PRO_ENGINE_CACHE.data); return PRO_ENGINE_CACHE.data;
-  }
-  const d=await api(`/api/v1/pro-engines/${encodeURIComponent(symbol)}`);
-  PRO_ENGINE_CACHE={ts:now,data:d};
-  renderProEngines(d);
-  return d;
-}
-async function loadFibonacciEngine(){
-  if(!IS_ADMIN)return;
-  const status=$('fibEngineStatus');
-  if(status)status.textContent='FIBONACCI ENGINE hisoblanmoqda…';
-  try{
-    const d=await api(`/api/v1/fibonacci-engine/${encodeURIComponent(symbol)}`);
-    if(!d.ok) throw Error(d.reason||'Fibonacci Engine unavailable');
-    const x=d.item||{};
-    const sig=String(x.signal||'WAIT').toUpperCase();
-    const cls=sig==='BUY'?'buy':sig==='SELL'?'sell':'wait';
-    setText('fibEngineSignal',sig);
-    if($('fibEngineSignal')) $('fibEngineSignal').className='signal-main '+cls;
-    setText('fibEngineScore',`${x.score??0} / 100`);
-    setText('fibEngineReason',x.reason||x.blockedReason||'—');
-    setText('fibEngineEntry',fmt(x.entry)); setText('fibEngineSL',fmt(x.stop_loss));
-    setText('fibEngineTP1',fmt((x.take_profit||[])[0])); setText('fibEngineTP2',fmt((x.take_profit||[])[1]));
-    setText('fibEngineRR',x.risk_reward?`1 : ${Number(x.risk_reward).toFixed(2)}`:'—');
-    setText('fibEngineRegime',x.market_regime?.regime||'—');
-    setText('fibEngineHtf',`${x.htf?.h4?.bias||'—'} / ${x.htf?.h1?.bias||'—'}`);
-    setText('fibEngineImpulse',x.impulse?.atr_multiple!=null?`${Number(x.impulse.atr_multiple).toFixed(2)} ATR`:'—');
-    const lv=x.fibonacci?.levels||{};
-    setText('fibEngine382',fmt(lv['0.382'])); setText('fibEngine500',fmt(lv['0.5']));
-    setText('fibEngine618',fmt(lv['0.618'])); setText('fibEngine786',fmt(lv['0.786']));
-    const z=x.fibonacci?.preferred_zone||{};
-    setText('fibEngineZone',z.low!=null?`${fmt(z.low)} – ${fmt(z.high)}`:'—');
-    setText('fibEngineSnr',x.snr?.overlap?.overlap?'OVERLAP':'WAIT');
-    setText('fibEngineOb',x.institutional_overlap?.order_block?.overlap?'OVERLAP':'WAIT');
-    setText('fibEngineFvg',x.institutional_overlap?.fvg?.overlap?'OVERLAP':'WAIT');
-    setText('fibEngineSweep',x.liquidity?.type||'NONE');
-    setText('fibEngineMss',`M15 ${x.mss?.m15?'YES':'NO'} · M5 ${x.mss?.m5?'YES':'NO'}`);
-    setText('fibEngineMomentum',`${x.momentum?.signal||'WAIT'} · ${x.momentum?.score??0}/100`);
-    setText('fibEngineAI',`${x.ai_validation?.signal||'WAIT'} · ${x.ai_validation?.confidence??0}%`);
-    const ext=x.fibonacci?.extension_targets||{};
-    setText('fibEngine1272',fmt(ext['1.272'])); setText('fibEngine1618',fmt(ext['1.618']));
-    if($('fibEngineChecks')) $('fibEngineChecks').innerHTML=(x.checks||[]).map(q=>`<div class="component"><small>${escapeHtml(q.name||'Check')}</small><b>${q.status||'MISS'} · ${q.points||0}/${q.max_points||0}</b><div class="mini">${escapeHtml(q.detail||'')}</div></div>`).join('');
-    const base=!!x.fibonacci_autotrade_eligible;
-    if(status)status.textContent=`LIVE · ${base?'BASE READY · WAIT 3-CONFIRM':'AUTOTRADE WAIT'} · AI ≥85 · RR ≥1.40 · M1 BLOCKED · FLAT/TRANSITION BLOCKED`;
-  }catch(e){
-    if(status)status.textContent='ERROR';
-    setText('fibEngineSignal','WAIT');
-    if($('fibEngineSignal')) $('fibEngineSignal').className='signal-main wait';
-    setText('fibEngineReason','Fibonacci Engine error: '+(e.message||'server error'));
-  }
-}
-async function loadStrategyPerformance(){
-  if(!IS_ADMIN)return;
-  const root=$('strategyPerformanceGrid');
-  const kpis=$('strategyPerformanceKpis');
-  const analysis=$('strategyAnalysisPerformance');
-  const status=$('strategyPerformanceStatus');
-  if(status)status.textContent='HISTORY ANALYTICS yuklanmoqda…';
-  if(root)root.innerHTML='<div class="sx-empty">Strategiya statistikasi hisoblanmoqda…</div>';
-  try{
-    const d=await api('/api/v1/strategy-performance?symbol='+encodeURIComponent(symbol));
-    const o=d.overall||{};
-    const K=(l,v,c='')=>`<div class="sx-kpi"><small>${l}</small><b class="${c}">${v}</b></div>`;
-    if(kpis)kpis.innerHTML=[
-      K('TOTAL SIGNALS',o.signals??0),
-      K('COMPLETED',o.completed??0),
-      K('WIN RATE',`${Number(o.winrate||0).toFixed(2)}%`),
-      K('WINS',o.wins??0,'buy'),
-      K('LOSSES',o.losses??0,'sell'),
-      K('ACTIVE',o.active??0,'wait'),
-      K('BLOCKED',o.blocked??0,'sell'),
-      K('TOTAL R',`${Number(o.total_r||0)>=0?'+':''}${Number(o.total_r||0).toFixed(2)}R`)
-    ].join('');
+function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'AlgoTrade'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section'){loadMT5Status().catch(()=>{});loadMT5GatewayAccounts().catch(()=>{});}if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
+if(id==='algotradeSection')loadAlgoTrade().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
 
-    const card=x=>{
-      const best=x.best_timeframe||{};
-      const tf=best.timeframe?tfName(best.timeframe):'—';
-      const wr=Number(x.winrate||0);
-      const rr=Number(x.avg_rr||0);
-      const avgR=Number(x.avg_r||0);
-      const totalR=Number(x.total_r||0);
-      return `<div class="sx-module">
-        <div class="section-head" style="margin-bottom:8px"><div><small>${escapeHtml(x.source||'—')}</small><b style="display:block;margin-top:3px">${wr.toFixed(2)}% WIN RATE</b></div><span class="pill">${x.completed||0} completed</span></div>
-        <div class="grid4">
-          <div class="metric"><small>Signals</small><b>${x.signals||0}</b></div>
-          <div class="metric"><small>W / L</small><b>${x.wins||0} / ${x.losses||0}</b></div>
-          <div class="metric"><small>Blocked</small><b>${x.blocked||0}</b></div>
-          <div class="metric"><small>Active</small><b>${x.active||0}</b></div>
-        </div>
-        <div class="grid4" style="margin-top:8px">
-          <div class="metric"><small>Avg RR</small><b>${rr>0?`1:${rr.toFixed(2)}`:'—'}</b></div>
-          <div class="metric"><small>Avg R</small><b>${Number.isFinite(avgR)?(avgR>=0?'+':'')+avgR.toFixed(2)+'R':'—'}</b></div>
-          <div class="metric"><small>Total R</small><b>${totalR>=0?'+':''}${totalR.toFixed(2)}R</b></div>
-          <div class="metric"><small>Best TF</small><b>${tf}</b><div class="mini">${best.completed?`${Number(best.winrate||0).toFixed(2)}% · ${best.completed} completed`:'No completed trades'}</div></div>
-        </div>
-      </div>`;
-    };
-
-    const ats=d.autotrade_sources||[];
-    if(root)root.innerHTML=ats.length?ats.map(card).join(''):'<div class="sx-empty">AutoTrade source’lar uchun hali History statistikasi yetarli emas.</div>';
-    const ans=d.analysis_sources||[];
-    if(analysis)analysis.innerHTML=ans.length?ans.map(card).join(''):'<div class="sx-empty">Analysis-only source statistikasi yo‘q.</div>';
-    if(status)status.textContent=`${symbol} · Signal History source-of-truth · ${d.timezone||'Asia/Tashkent'} · ${new Date(d.generated_at).toLocaleString()}`;
-  }catch(e){
-    if(root)root.innerHTML=`<div class="sx-empty">Performance yuklanmadi: ${escapeHtml(e.message||'server error')}</div>`;
-    if(status)status.textContent='ERROR';
-  }
-}
-
-function openSection(id){const target=$(id);if(!target)return;if(target.classList.contains('admin-only')&&!IS_ADMIN){showToast('Bu bo‘lim faqat administrator uchun');return;}document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));target.classList.add('active');document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.section===id));const titles={overview:'Market Overview',chartSection:'Live Chart',signalEngineSection:'Signal Engine',analysisSection:'Technical Analysis',smartAnalysisSection:'AI Smart Analysis',classicSection:'Classic Trade',snrSection:'SNR',mtfSection:'Multi-Timeframe Analysis',signalSection:'Signal Lab',signalsSection:'Signals',ictSection:'ICT Signals',mt5Section:'MetaTrader 5',calendarSection:'Economic Calendar',sessionsSection:'Market Sessions',activeSessionsSection:'Aktiv seanslar',historySection:'Signal History',trendLineSection:'Auto Trend Line',aiQaSection:'AI Q&A',algotradeSection:'Order Block',trendEngineSection:'Trend Engine',snrBreakoutSection:'SNR Breakout',ictLiquiditySection:'ICT Liquidity',obFvgSection:'OB / FVG Engine',momentumEngineSection:'Technical Momentum',strategyPerformanceSection:'Strategy Performance',fibonacciEngineSection:'Fibonacci Engine'};$('pageTitle').textContent=titles[id]||'Trading SaaS';if(id==='chartSection'){setTimeout(()=>{mountTradingView('chart2',interval);loadChartHistory().catch(()=>{})},50);}if(id==='overview'){setTimeout(()=>{mountTradingView('chart',interval);loadChartHistory().catch(()=>{});loadPivots(pivotInterval).catch(()=>{});if(IS_ADMIN){loadAISignals().catch(()=>{});loadAIProviders().then(()=>bindAIControls()).catch(()=>{})}},50);}if(id==='signalEngineSection')loadSignalEngine().catch(()=>{});if(id==='analysisSection')loadAnalysisOnly().catch(()=>{});if(id==='smartAnalysisSection')loadSmartAnalysis().catch(()=>{});if(id==='classicSection')loadClassicTrade(classicInterval).catch(()=>{});if(id==='snrSection')loadSNR(snrInterval).catch(()=>{});if(id==='signalSection')loadSelectedSignal(signalInterval);if(id==='classicSection')loadClassicTrade(classicInterval);if(id==='calendarSection')loadCalendar();if(id==='sessionsSection')loadSessions();if(id==='activeSessionsSection')loadActiveSessions();if(id==='mtfSection')loadMtf();if(id==='historySection')loadHistory();if(id==='signalsSection')loadAutoSignals();if(id==='ictSection')loadICTSignals();if(id==='mt5Section'){loadMT5Status().catch(()=>{});loadMT5GatewayAccounts().catch(()=>{});}if(id==='aiQaSection'){bindAiQa();renderAiQaMessages();}
-if(id==='strategyPerformanceSection')loadStrategyPerformance().catch(()=>{});if(id==='algotradeSection')loadOrderBlock().catch(()=>{});if(id==='fibonacciEngineSection')loadFibonacciEngine().catch(()=>{});if(['trendEngineSection','snrBreakoutSection','ictLiquiditySection','obFvgSection','momentumEngineSection'].includes(id))loadProEngines().catch(()=>{});if(id==='trendLineSection'){loadTrendLines(trendLineInterval).catch(()=>{}); if(trendLiveRefreshTimer)clearInterval(trendLiveRefreshTimer); trendLiveRefreshTimer=setInterval(()=>{if($('trendLineSection')?.classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{})},12000)} else if(trendLiveRefreshTimer){clearInterval(trendLiveRefreshTimer);trendLiveRefreshTimer=null}}
-
-document.addEventListener('click',e=>{const b=e.target.closest('#refreshAlgoTrade');if(b)loadOrderBlock().catch(()=>{})});
-document.addEventListener('click',e=>{const b=e.target.closest('#refreshFibonacciEngine');if(b)loadFibonacciEngine().catch(err=>showToast(err.message||'Fibonacci error'))});
-document.addEventListener('click',e=>{const b=e.target.closest('#refreshStrategyPerformance');if(b)loadStrategyPerformance().catch(err=>showToast(err.message||'Performance error'))});
-document.addEventListener('click',e=>{const b=e.target.closest('[data-refresh-pro-engines]');if(b)loadProEngines(true).catch(err=>showToast(err.message||'Engine error'))});
+document.addEventListener('click',e=>{const b=e.target.closest('#refreshAlgoTrade');if(b)loadAlgoTrade().catch(()=>{})});
 document.addEventListener('click',e=>{const b=e.target.closest('[data-classic-interval]');if(b){document.querySelectorAll('[data-classic-interval]').forEach(x=>x.classList.toggle('active',x===b));classicInterval=b.dataset.classicInterval;loadClassicTrade(classicInterval)}});
 document.addEventListener('click',e=>{
   const b=e.target.closest('[data-pivot-interval]');
@@ -1212,7 +921,7 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
       if($('calendarSection').classList.contains('active')) loadCalendar().catch(()=>{});
       if($('sessionsSection').classList.contains('active')) loadSessions().catch(()=>{});
       if($('trendLineSection').classList.contains('active')) loadTrendLines(trendLineInterval).catch(()=>{});
-      if(IS_ADMIN && $('algotradeSection').classList.contains('active')) loadOrderBlock().catch(()=>{});
+      if(IS_ADMIN && $('algotradeSection').classList.contains('active')) loadAlgoTrade().catch(()=>{});
       if(!phone || $('mt5Section').classList.contains('active')) loadMT5Status().catch(()=>{});
       if(!phone && IS_ADMIN && $('overview').classList.contains('active')) loadAIProviders().then(()=>bindAIControls()).catch(()=>{});
       if(token && $('historySection').classList.contains('active')) loadHistory().catch(()=>{});
@@ -1230,7 +939,7 @@ async function logoutUser(){await api('/api/auth/logout',{method:'POST'}).catch(
 (function bindHistoryV2(){
   function dateKeyLocal(d){return d.toLocaleDateString('en-CA',{timeZone:'Asia/Tashkent'});}
   function applyRange(range){const s=document.getElementById('historyV2Start'),e=document.getElementById('historyV2End');const now=new Date();if(range==='all'){s.value='';e.value='';}else if(range==='today'){const k=dateKeyLocal(now);s.value=k;e.value=k;}else if(range==='yesterday'){const d=new Date(now.getTime()-86400000);const k=dateKeyLocal(d);s.value=k;e.value=k;}else{const k=dateKeyLocal(now);const d=new Date(now.getTime()-Number(range)*86400000);s.value=dateKeyLocal(d);e.value=k;}document.querySelectorAll('.h2-date').forEach(b=>b.classList.toggle('active',b.dataset.range===range));loadHistory();}
-  document.addEventListener('click',async e=>{if(e.target.closest('#historyV2LoadMore')){historyV2Offset+=HISTORY_V2_PAGE_SIZE;loadHistory(true);return;}const b=e.target.closest('.h2-date');if(b){historyV2Offset=0;applyRange(b.dataset.range);return;}if(e.target.closest('#historyV2Refresh')){historyV2Offset=0;loadHistory();loadStats?.();return;}const d=e.target.closest('[data-history-detail]');if(d){e.preventDefault();e.stopPropagation();const id=String(d.dataset.historyDetail||'');let x=HISTORY_DETAIL_CACHE.get(id);if(!x){try{const r=await api('/api/v2/signal-history?limit=500');x=(r.items||[]).find(i=>String(i.signal_id)===id);if(x)HISTORY_DETAIL_CACHE.set(id,x);}catch(err){showToast(err?.message||'Signal tafsilotlarini yuklab bo‘lmadi');return;}}if(!x){showToast('Signal tafsiloti topilmadi');return;}const modal=document.getElementById('historyDetailModal');if(!modal)return;document.getElementById('historyDetailTitle').textContent=`${x.direction} · ${x.symbol}`;document.getElementById('historyDetailMeta').textContent=`${x.signal_id} · ${x.source} · ${tfName(x.interval)}`;document.getElementById('historyDetailBody').innerHTML=renderHistoryDetail(x);modal.setAttribute('aria-hidden','false');modal.classList.add('show');}});
+  document.addEventListener('click',async e=>{if(e.target.closest('#historyV2LoadMore')){historyV2Offset+=20;loadHistory(true);return;}const b=e.target.closest('.h2-date');if(b){historyV2Offset=0;applyRange(b.dataset.range);return;}if(e.target.closest('#historyV2Refresh')){historyV2Offset=0;loadHistory();loadStats?.();return;}const d=e.target.closest('[data-history-detail]');if(d){e.preventDefault();e.stopPropagation();const id=String(d.dataset.historyDetail||'');let x=HISTORY_DETAIL_CACHE.get(id);if(!x){try{const r=await api('/api/v2/signal-history?limit=500');x=(r.items||[]).find(i=>String(i.signal_id)===id);if(x)HISTORY_DETAIL_CACHE.set(id,x);}catch(err){showToast(err?.message||'Signal tafsilotlarini yuklab bo‘lmadi');return;}}if(!x){showToast('Signal tafsiloti topilmadi');return;}const modal=document.getElementById('historyDetailModal');if(!modal)return;document.getElementById('historyDetailTitle').textContent=`${x.direction} · ${x.symbol}`;document.getElementById('historyDetailMeta').textContent=`${x.signal_id} · ${x.source} · ${tfName(x.interval)}`;document.getElementById('historyDetailBody').innerHTML=renderHistoryDetail(x);modal.setAttribute('aria-hidden','false');modal.classList.add('show');}});
   document.addEventListener('change',e=>{if(e.target.id&&['historyV2Start','historyV2End','historyV2Symbol','historyV2Direction','historyV2Result','historyV2Module'].includes(e.target.id)){historyV2Offset=0;loadHistory();}});
   document.addEventListener('click',e=>{const modal=document.getElementById('historyDetailModal');if(!modal)return;if(e.target.closest('#historyDetailClose')||e.target===modal){modal.setAttribute('aria-hidden','true');modal.classList.remove('show');}});document.addEventListener('keydown',e=>{if(e.key==='Escape'){const modal=document.getElementById('historyDetailModal');if(modal){modal.setAttribute('aria-hidden','true');modal.classList.remove('show');}}});
 })();

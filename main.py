@@ -457,24 +457,6 @@ MT5_BRIDGE_STATE: dict[str, Any] = {"connected": False, "account": None, "server
 MT5_ORDER_QUEUE: list[dict[str, Any]] = []
 # Prevent re-queuing the same XAU/USD source/timeframe/candle/direction after a successful fill.
 MT5_EXECUTED_KEYS: set[tuple[str, str, str, str, str]] = set()
-# Cross-source duplicate protection. Unlike MT5_EXECUTED_KEYS this fingerprint
-# intentionally ignores source, so identical levels from different modules can
-# never open more than one MT5 order for the same candle.
-MT5_EXECUTED_SIGNAL_KEYS: set[tuple[Any, ...]] = set()
-
-def _autotrade_signal_fingerprint(market: str, interval: str, candle_time: str,
-                                  direction: str, entry: float, sl: float,
-                                  tp: list[float] | tuple[float, ...]) -> tuple[Any, ...]:
-    clean_tp = tuple(round(float(x), 4) for x in list(tp or [])[:2])
-    return (
-        _mt5_market_key(market),
-        str(interval or "").strip().lower(),
-        _normalize_history_candle_time(candle_time),
-        str(direction or "").strip().upper(),
-        round(float(entry), 4),
-        round(float(sl), 4),
-        clean_tp,
-    )
 
 # Signal History is the persisted source-of-truth for new AutoTrade forwarding.
 # Only records created after this process started are eligible for the bridge scan;
@@ -489,10 +471,10 @@ def _history_row_levels_for_autotrade(row: "SignalHistory", payload: dict[str, A
 def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[str, Any]]:
     """Forward newly-created eligible History records into the existing MT5 queue exactly once.
 
-    History creation remains independent from execution, but MT5 may only receive
-    server-created global Consensus rows. Individual module History rows are never
-    forwarded directly. M1, non-XAUUSD, WAIT/non-directional, and closed/cancelled
-    records are also excluded. Existing queue de-duplication prevents duplicate orders.
+    History creation remains independent from execution, but every eligible persisted
+    trade signal becomes AutoTrade-eligible through the same queue safety gates.
+    M1, non-XAUUSD, WAIT/non-directional, closed/cancelled, and Book+OpenAI records
+    are never forwarded. Existing queue de-duplication prevents duplicate orders.
     """
     if not MT5_AUTO_TRADING or not AUTO_ENTRY_ENABLED:
         return []
@@ -509,138 +491,13 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
             continue
         if str(row.interval or "").strip().lower() in {"1m", "1min", "m1"}:
             continue
-        source = _normalize_history_source(str(row.source or "Signals")[:40])
-        if source not in ({CONSENSUS_AUTOTRADE_SOURCE, AI_SMART_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE} | set(PRO_INDIVIDUAL_ENGINE_SOURCES) | set(CONSENSUS_AUTOTRADE_SOURCES)):
-            continue
+        source = str(row.source or "Signals")[:40]
         if _autotrade_source_excluded(source):
             continue
         try:
             payload = json.loads(row.payload or "{}")
         except Exception:
             payload = {}
-        bridge_rr = None
-        module_payload = payload.get("module_signal") if isinstance(payload.get("module_signal"), dict) else payload
-
-        # Recovery path for core History rows: if 3 of 4 core strategies agree on the
-        # same market/timeframe/candle/direction, forward ONE Consensus order.
-        # This preserves the 3-confirmation rule and avoids opening one order per module.
-        if source in CONSENSUS_AUTOTRADE_SOURCES:
-            if not row.candle_time:
-                continue
-            matching_core_rows = list(session.scalars(select(SignalHistory).where(
-                SignalHistory.user_id == user_id,
-                SignalHistory.symbol == row.symbol,
-                SignalHistory.interval == row.interval,
-                SignalHistory.candle_time == row.candle_time,
-                SignalHistory.direction == row.direction,
-                SignalHistory.source.in_(list(CONSENSUS_AUTOTRADE_SOURCES)),
-            )).all())
-            active_core_rows = [r for r in matching_core_rows if _history_status(r) == "ACTIVE"]
-            confirmed_sources = {
-                _normalize_history_source(str(r.source or ""))
-                for r in active_core_rows
-                if _normalize_history_source(str(r.source or "")) in CONSENSUS_AUTOTRADE_SOURCES
-            }
-            if len(confirmed_sources) < CONSENSUS_REQUIRED_CONFIRMATIONS:
-                continue
-            confidences = []
-            for r in active_core_rows:
-                try:
-                    confidences.append(float(r.signal_score or 0))
-                except Exception:
-                    pass
-            consensus_conf = sum(confidences) / len(confidences) if confidences else 0.0
-            try:
-                core_rr = float(row.risk_reward or module_payload.get("risk_reward") or (payload.get("execution_gate") or {}).get("risk_reward") or 0)
-            except Exception:
-                core_rr = 0.0
-            if consensus_conf < CONSENSUS_AUTOTRADE_THRESHOLD or core_rr < CONSENSUS_MIN_AUTOTRADE_RR:
-                continue
-            source = CONSENSUS_AUTOTRADE_SOURCE
-            bridge_rr = core_rr
-
-        if source == AI_SMART_AUTOTRADE_SOURCE:
-            try:
-                ai_smart_conf = float(row.signal_score or module_payload.get("confidence") or payload.get("confidence_at_entry") or 0)
-            except Exception:
-                ai_smart_conf = 0.0
-            if ai_smart_conf < AI_SMART_AUTOTRADE_THRESHOLD:
-                continue
-            bridge_rr = float(row.risk_reward or module_payload.get("risk_reward") or 0) if (row.risk_reward is not None or module_payload.get("risk_reward") is not None) else None
-
-        if source == ICT_AUTOTRADE_SOURCE:
-            try:
-                ict_conf = float(row.signal_score or module_payload.get("confidence") or payload.get("confidence_at_entry") or 0)
-            except Exception:
-                ict_conf = 0.0
-            try:
-                ict_rr = float(row.risk_reward or module_payload.get("risk_reward") or (payload.get("execution_gate") or {}).get("risk_reward") or 0)
-            except Exception:
-                ict_rr = 0.0
-            ict_allowed = bool(module_payload.get("ict_autotrade_eligible") or module_payload.get("auto_trade_eligible"))
-            if not ict_allowed or ict_conf < ICT_AUTOTRADE_THRESHOLD or ict_rr < ICT_MIN_AUTOTRADE_RR:
-                continue
-            bridge_rr = ict_rr
-        elif source == GOLD_STRATEGY_SOURCE:
-            try:
-                gold_conf = float(row.signal_score or module_payload.get("confidence") or 0)
-                gold_rr = float(row.risk_reward or module_payload.get("risk_reward") or (payload.get("execution_gate") or {}).get("risk_reward") or 0)
-            except Exception:
-                gold_conf, gold_rr = 0.0, 0.0
-            gold_allowed = bool(module_payload.get("signal_lab_autotrade_eligible") and module_payload.get("signal_lab_consensus_passed"))
-            if not gold_allowed or gold_conf < GOLD_STRATEGY_AUTOTRADE_THRESHOLD or gold_rr < GOLD_STRATEGY_MIN_RR:
-                continue
-            bridge_rr = gold_rr
-        elif source == SIGNALS_AUTOTRADE_SOURCE:
-            try:
-                signals_conf = float(row.signal_score or module_payload.get("confidence") or 0)
-                signals_rr = float(row.risk_reward or module_payload.get("risk_reward") or (payload.get("execution_gate") or {}).get("risk_reward") or 0)
-            except Exception:
-                signals_conf, signals_rr = 0.0, 0.0
-            signals_allowed = bool(module_payload.get("signals_autotrade_eligible") and module_payload.get("signals_consensus_passed"))
-            if not signals_allowed or signals_conf < SIGNALS_AUTOTRADE_THRESHOLD or signals_rr < SIGNALS_MIN_RR:
-                continue
-            bridge_rr = signals_rr
-        elif source == ORDER_BLOCK_SOURCE:
-            try:
-                ob_conf = float(row.signal_score or module_payload.get("confidence") or 0)
-                ob_rr = float(row.risk_reward or module_payload.get("risk_reward") or (payload.get("execution_gate") or {}).get("risk_reward") or 0)
-            except Exception:
-                ob_conf, ob_rr = 0.0, 0.0
-            ob_allowed = bool(module_payload.get("order_block_autotrade_eligible") and module_payload.get("order_block_consensus_passed"))
-            if not ob_allowed or ob_conf < ORDER_BLOCK_AUTOTRADE_THRESHOLD or ob_rr < ORDER_BLOCK_MIN_RR:
-                continue
-            bridge_rr = ob_rr
-        elif source == PRO_ENGINE_SOURCE:
-            try:
-                pro_conf = float(row.signal_score or module_payload.get("confidence") or 0)
-                pro_rr = float(row.risk_reward or module_payload.get("risk_reward") or (payload.get("execution_gate") or {}).get("risk_reward") or 0)
-            except Exception:
-                pro_conf, pro_rr = 0.0, 0.0
-            pro_allowed = bool(module_payload.get("pro_engine_autotrade_eligible"))
-            if not pro_allowed or pro_conf < PRO_ENGINE_AUTOTRADE_THRESHOLD or pro_rr < PRO_ENGINE_MIN_RR:
-                continue
-            bridge_rr = pro_rr
-        elif source in PRO_INDIVIDUAL_ENGINE_SOURCES:
-            try:
-                eng_conf = float(row.signal_score or module_payload.get("confidence") or 0)
-                eng_rr = float(row.risk_reward or module_payload.get("risk_reward") or (payload.get("execution_gate") or {}).get("risk_reward") or 0)
-            except Exception:
-                eng_conf, eng_rr = 0.0, 0.0
-            eng_allowed = bool(module_payload.get("pro_individual_autotrade_eligible"))
-            if not eng_allowed or eng_conf < PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD or eng_rr < PRO_INDIVIDUAL_MIN_RR:
-                continue
-            bridge_rr = eng_rr
-        elif source == FIBONACCI_SOURCE:
-            try:
-                fib_conf = float(row.signal_score or module_payload.get("confidence") or 0)
-                fib_rr = float(row.risk_reward or module_payload.get("risk_reward") or (payload.get("execution_gate") or {}).get("risk_reward") or 0)
-            except Exception:
-                fib_conf, fib_rr = 0.0, 0.0
-            fib_allowed = bool(module_payload.get("fibonacci_autotrade_eligible") and module_payload.get("fibonacci_consensus_passed"))
-            if not fib_allowed or fib_conf < FIBONACCI_AUTOTRADE_THRESHOLD or fib_rr < FIBONACCI_MIN_RR:
-                continue
-            bridge_rr = fib_rr
         entry, sl, tps = _history_row_levels_for_autotrade(row, payload)
         if entry is None or sl is None or not tps:
             continue
@@ -651,7 +508,6 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
                 symbol=row.symbol, source=source, interval=row.interval, direction=row.direction,
                 entry=float(entry), sl=float(sl), tp=tps, volume=MT5_LOT_SIZE,
                 confidence=confidence, candle_time=str(row.candle_time or row.created_at.isoformat()),
-                risk_reward=bridge_rr,
             )
         except Exception as exc:
             print(f"[HISTORY AUTOTRADE BRIDGE] error signal_id={row.signal_uid} source={source}: {type(exc).__name__}: {exc}")
@@ -893,43 +749,39 @@ def ensure_admin_user() -> None:
         s.commit()
 
 
-HISTORY_LIVE_VERSION = os.getenv("HISTORY_LIVE_VERSION", "history-preserve-2026-09-25-v1").strip() or "history-preserve-2026-09-25-v1"
+HISTORY_LIVE_VERSION = os.getenv("HISTORY_LIVE_VERSION", "live-only-2026-09-17-v3").strip() or "live-only-2026-09-17-v3"
 
 def _prepare_live_history_once() -> None:
-    """Prepare Signal History metadata without deleting existing journal rows.
+    """Start the new journal from live data only, once per persistent DB version.
 
-    History is user data and must survive application upgrades/redeploys.  Older builds
-    cleared the entire signal_history table when HISTORY_LIVE_VERSION changed; that made
-    valid historical records disappear from the UI.  The runtime-state marker is kept
-    only for migration/version tracking and is now strictly non-destructive.
+    Existing history is intentionally removed because the journal schema/semantics have
+    been changed and legacy rows were not reliable live-signal records. A DB marker makes
+    this destructive cleanup one-time across Railway restarts.
     """
     with engine.begin() as conn:
         conn.exec_driver_sql("CREATE TABLE IF NOT EXISTS signal_history_runtime_state (key VARCHAR(100) PRIMARY KEY, value VARCHAR(255))")
         row = conn.exec_driver_sql("SELECT value FROM signal_history_runtime_state WHERE key='history_live_version'").fetchone()
         if row and str(row[0]) == HISTORY_LIVE_VERSION:
             return
+        conn.exec_driver_sql("DELETE FROM signal_history")
         backend = engine.url.get_backend_name()
         if backend == "sqlite":
             conn.exec_driver_sql("INSERT OR REPLACE INTO signal_history_runtime_state (key,value) VALUES (?,?)", ("history_live_version", HISTORY_LIVE_VERSION))
         else:
             conn.exec_driver_sql("DELETE FROM signal_history_runtime_state WHERE key='history_live_version'")
             conn.exec_driver_sql("INSERT INTO signal_history_runtime_state (key,value) VALUES (%s,%s)", ("history_live_version", HISTORY_LIVE_VERSION))
-    print(f"[HISTORY PRESERVE] existing history kept; version={HISTORY_LIVE_VERSION}")
+    print(f"[HISTORY LIVE-ONLY] legacy history cleared; version={HISTORY_LIVE_VERSION}")
 
 def _ensure_live_history_unique_index() -> None:
-    """Keep History lookups fast without deleting legacy rows to satisfy uniqueness.
-
-    Application-level record checks already prevent normal duplicate inserts.  A unique
-    migration index can fail when an older database contains duplicate legacy candles,
-    so use a non-unique lookup index and preserve every existing journal row.
-    """
+    """Enforce one History row per user/symbol/timeframe/module/live-candle."""
+    # All legacy data has already been cleared by _prepare_live_history_once on the
+    # first boot of this version, so the unique index can be created safely.
     with engine.begin() as conn:
-        for idx in ("uq_signal_history_identity", "uq_signal_history_live_identity"):
-            try:
-                conn.exec_driver_sql(f"DROP INDEX IF EXISTS {idx}")
-            except Exception:
-                pass
-        conn.exec_driver_sql("CREATE INDEX IF NOT EXISTS ix_signal_history_live_identity ON signal_history (user_id, symbol, interval, source, candle_time)")
+        try:
+            conn.exec_driver_sql("DROP INDEX IF EXISTS uq_signal_history_identity")
+        except Exception:
+            pass
+        conn.exec_driver_sql("CREATE UNIQUE INDEX IF NOT EXISTS uq_signal_history_live_identity ON signal_history (user_id, symbol, interval, source, candle_time)")
 
 def initialize_database() -> None:
     ensure_schema()
@@ -947,7 +799,7 @@ ENABLE_API_DOCS = os.getenv("ENABLE_API_DOCS", "false").strip().lower() == "true
 RATE_LIMIT_WINDOW_SECONDS = max(10, int(os.getenv("RATE_LIMIT_WINDOW_SECONDS", "60")))
 RATE_LIMIT_MAX_REQUESTS = max(30, int(os.getenv("RATE_LIMIT_MAX_REQUESTS", "180")))
 MAX_REQUEST_BODY_BYTES = max(65536, int(os.getenv("MAX_REQUEST_BODY_BYTES", "1048576")))
-RATE_LIMIT_EXEMPT_PATHS = {"/", "/health", "/api/health", "/favicon.ico"}
+RATE_LIMIT_EXEMPT_PATHS = {"/", "/health", "/favicon.ico"}
 _RATE_BUCKETS: dict[str, tuple[float, int]] = {}
 _LOGIN_FAILS: dict[str, tuple[float, int]] = {}
 LOGIN_LOCK_SECONDS = max(30, int(os.getenv("LOGIN_LOCK_SECONDS", "300")))
@@ -1185,21 +1037,6 @@ def require_admin(authorization: str | None, session: Session) -> User:
     if not is_admin_user(user):
         raise HTTPException(status_code=403, detail="Bu bo‘lim faqat administrator uchun. Oddiy user AI tizimidan foydalana olmaydi.")
     return user
-
-def _history_visible_user_ids(user: User, session: Session) -> list[int]:
-    """Return the History ownership scope visible to the current user.
-
-    SignalX background workers write live strategy rows under the canonical/admin
-    account.  A browser session may belong to another administrator account.  Admins
-    therefore see the shared administrator trading journal, while normal users remain
-    strictly isolated to their own History rows.
-    """
-    if not is_admin_user(user):
-        return [int(user.id)]
-    ids = [int(x) for x in session.scalars(select(User.id).where(User.role == "admin")).all()]
-    if int(user.id) not in ids:
-        ids.append(int(user.id))
-    return sorted(set(ids))
 
 
 class AIChatBody(BaseModel):
@@ -1480,66 +1317,10 @@ def _normalize_history_source(value: str | None) -> str:
         "ai smart analysis":"AI Smart Analysis", "ai fallback network":"AI Fallback Network",
         "auto trend line":"Auto Trend Line", "trend line":"Trend Line", "ict signals":"ICT Signals",
         "multi timeframe":"Multi-Timeframe", "multi-timeframe":"Multi-Timeframe", "classic trade":"Classic Trade",
-        "algotrade":"Order Block", "order block":"Order Block", "orderblock":"Order Block", "consensus":"Consensus", "snr":"SNR",
-        "5 engine consensus":"5 Engine Consensus", "pro engine consensus":"5 Engine Consensus",
-        "trend engine":"Trend Engine", "snr breakout engine":"SNR / Breakout Engine", "snr / breakout engine":"SNR / Breakout Engine",
-        "ict liquidity engine":"ICT Liquidity Engine", "order block / fvg engine":"Order Block / FVG Engine",
-        "ob / fvg engine":"Order Block / FVG Engine", "technical momentum engine":"Technical Momentum Engine",
-        "fibonacci":"Fibonacci", "fibonacci engine":"Fibonacci", "fib":"Fibonacci",
+        "algotrade":"AlgoTrade", "consensus":"Consensus", "snr":"SNR",
         "economic calendar":"Economic Calendar", "market sessions":"Market Sessions"
     }
     return aliases.get(raw.lower(), raw)[:40]
-
-BLOCKED_SIGNAL_SOURCES = frozenset()
-CONSENSUS_AUTOTRADE_SOURCES = frozenset({"Classic Trade", "SNR", "Auto Trend Line", "Technical Analysis"})
-CONSENSUS_REQUIRED_CONFIRMATIONS = 3
-CONSENSUS_AUTOTRADE_SOURCE = "Consensus"
-CONSENSUS_AUTOTRADE_THRESHOLD = 84
-CONSENSUS_MIN_AUTOTRADE_RR = 0.00
-AI_SMART_AUTOTRADE_SOURCE = "AI Smart Analysis"
-AI_SMART_AUTOTRADE_THRESHOLD = 84
-AI_SMART_MIN_RR = 0.00
-ICT_AUTOTRADE_SOURCE = "ICT Signals"
-ICT_SIGNAL_THRESHOLD = 80
-ICT_AUTOTRADE_THRESHOLD = 84
-ICT_MIN_AUTOTRADE_RR = 0.00
-GOLD_STRATEGY_SOURCE = "Signal Lab"
-GOLD_STRATEGY_SIGNAL_THRESHOLD = 80
-GOLD_STRATEGY_AUTOTRADE_THRESHOLD = 84
-GOLD_STRATEGY_MIN_RR = 0.00
-GOLD_STRATEGY_REQUIRED_TOTAL_CONFIRMATIONS = 3
-SIGNALS_AUTOTRADE_SOURCE = "Signals"
-SIGNALS_SIGNAL_THRESHOLD = 80
-SIGNALS_AUTOTRADE_THRESHOLD = 84
-SIGNALS_MIN_RR = 0.00
-SIGNALS_REQUIRED_TOTAL_CONFIRMATIONS = 3
-ORDER_BLOCK_SOURCE = "Order Block"
-ORDER_BLOCK_SIGNAL_THRESHOLD = 80
-ORDER_BLOCK_AUTOTRADE_THRESHOLD = 84
-ORDER_BLOCK_MIN_RR = 0.00
-ORDER_BLOCK_REQUIRED_TOTAL_CONFIRMATIONS = 3
-PRO_ENGINE_SOURCE = "5 Engine Consensus"
-PRO_ENGINE_SIGNAL_THRESHOLD = 80
-PRO_ENGINE_AUTOTRADE_THRESHOLD = 84
-PRO_ENGINE_MIN_RR = 0.00
-PRO_ENGINE_REQUIRED_CONFIRMATIONS = 3
-PRO_INDIVIDUAL_ENGINE_SOURCES = frozenset({
-    "Trend Engine","SNR / Breakout Engine","ICT Liquidity Engine",
-    "Order Block / FVG Engine","Technical Momentum Engine"
-})
-PRO_INDIVIDUAL_SIGNAL_THRESHOLD = 80
-PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD = 84
-PRO_INDIVIDUAL_MIN_RR = 0.00
-FIBONACCI_SOURCE = "Fibonacci"
-FIBONACCI_SIGNAL_THRESHOLD = 80
-FIBONACCI_AUTOTRADE_THRESHOLD = 84
-FIBONACCI_MIN_RR = 0.00
-FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS = 3
-AUTOTRADE_MAX_LEVEL_DISTANCE_ATR = max(1.0, float(os.getenv("AUTOTRADE_MAX_LEVEL_DISTANCE_ATR", "8.0")))
-AUTOTRADE_MAX_LEVEL_DISTANCE_PCT = max(0.001, float(os.getenv("AUTOTRADE_MAX_LEVEL_DISTANCE_PCT", "0.02")))
-
-def _signal_source_blocked(value: str | None) -> bool:
-    return _normalize_history_source(value) in BLOCKED_SIGNAL_SOURCES
 
 def history_pip_size(symbol: str) -> float:
     """Return the user-facing pip size for history distance display.
@@ -1678,40 +1459,17 @@ def calculate_pivot_levels(high: float, low: float, close: float, current: float
 
 
 def build_key_level_signal(candles: list[dict[str, Any]], levels: dict[str, Any], news_blocked: bool = False) -> dict[str, Any]:
-    """High-confluence Pivot/Technical engine.
-
-    A Pivot retest/breakout is only tradable when momentum, EMA trend, candle
-    quality and SNR context agree.  The returned confirmations are consumed by
-    the common timeframe quality gate, so weak/noisy setups remain WAIT.
-    """
     current = candles[-1]
     prev = candles[-2] if len(candles) > 1 else current
-    pivot = float(levels["pivot"])
-    bias = str(levels["bias"])
-    average_range = max(atr(candles), abs(float(current["close"])) * 0.00025)
-    pivot_buffer = max(abs(pivot) * PIVOT_NO_TRADE_PCT, average_range * 0.18)
-    near_pivot = abs(float(current["close"]) - pivot) <= pivot_buffer
-
-    closes=[float(x["close"]) for x in candles]
-    ema20=_ema(closes[-100:],20)
-    ema50=_ema(closes[-150:],50)
-    ema20_prev=_ema(closes[-101:-1],20) if len(closes)>21 else ema20
-    macd=_ema(closes[-140:],12)-_ema(closes[-140:],26)
-    r=float(rsi(candles))
-    body=abs(float(current["close"])-float(current["open"]))
-    rng=max(float(current["high"])-float(current["low"]),1e-9)
-    body_ratio=body/rng
-    bull_candle=float(current["close"])>float(current["open"]) and body_ratio>=0.42
-    bear_candle=float(current["close"])<float(current["open"]) and body_ratio>=0.42
-    regime=_adaptive_regime(candles)
-    zone=_snr_zone_analysis(candles)
-
+    pivot = levels["pivot"]
+    bias = levels["bias"]
+    average_range = atr(candles)
+    pivot_buffer = max(abs(pivot) * PIVOT_NO_TRADE_PCT, average_range * 0.15)
+    near_pivot = abs(current["close"] - pivot) <= pivot_buffer
     result = {
-        "signal":"WAIT","setup":"NO_TRADE","entry":None,"stop_loss":None,
-        "take_profit":[],"reason":"No high-confluence Pivot/Technical setup.",
-        "pivot_filter":bias,"pivot_zone":round(pivot_buffer,2),
-        "confirmations":0,"confidence":0,
-        "technical_checks":{},"strategy_engine":"Technical Confluence Pro V3"
+        "signal": "WAIT", "setup": "NO_TRADE", "entry": None, "stop_loss": None,
+        "take_profit": [], "reason": "No confirmed Pivot retest/breakout setup.",
+        "pivot_filter": bias, "pivot_zone": round(pivot_buffer, 2),
     }
     if news_blocked:
         result.update(setup="NEWS_BLACKOUT", reason="High-impact news window is active; new entries are blocked.")
@@ -1720,66 +1478,37 @@ def build_key_level_signal(candles: list[dict[str, Any]], levels: dict[str, Any]
         result.update(setup="PIVOT_NO_TRADE", reason="Price is inside the Pivot no-trade zone.")
         return result
 
-    bearish_retest = prev["close"] < pivot and current["high"] >= pivot and current["close"] < pivot and bear_candle
-    bullish_retest = prev["close"] > pivot and current["low"] <= pivot and current["close"] > pivot and bull_candle
-    bearish_breakout = current["close"] < levels["s1"]-average_range*0.08 and prev["close"] >= levels["s1"] and bear_candle
-    bullish_breakout = current["close"] > levels["r1"]+average_range*0.08 and prev["close"] <= levels["r1"] and bull_candle
+    bearish_retest = prev["close"] < pivot and current["high"] >= pivot and current["close"] < pivot and current["close"] < current["open"]
+    bullish_retest = prev["close"] > pivot and current["low"] <= pivot and current["close"] > pivot and current["close"] > current["open"]
+    bearish_breakout = current["close"] < levels["s1"] and prev["close"] >= levels["s1"]
+    bullish_breakout = current["close"] > levels["r1"] and prev["close"] <= levels["r1"]
 
-    candidate = "SELL" if bias=="BEARISH" and (bearish_retest or bearish_breakout) else "BUY" if bias=="BULLISH" and (bullish_retest or bullish_breakout) else "WAIT"
-    if candidate=="WAIT":
-        if bias=="BEARISH" and current["close"] <= levels["s2"]:
-            result.update(setup="TARGET_REACHED", reason="S2/S3 target zone reached; fresh SELL entries are blocked.")
-        elif bias=="BULLISH" and current["close"] >= levels["r2"]:
-            result.update(setup="TARGET_REACHED", reason="R2/R3 target zone reached; fresh BUY entries are blocked.")
-        return result
-
-    buy=candidate=="BUY"
-    checks={
-        "pivot_bias": (bias=="BULLISH") if buy else (bias=="BEARISH"),
-        "ema_trend": (ema20>ema50 and ema20>=ema20_prev) if buy else (ema20<ema50 and ema20<=ema20_prev),
-        "rsi_momentum": (52<=r<=72) if buy else (28<=r<=48),
-        "macd_alignment": macd>=0 if buy else macd<=0,
-        "candle_confirmation": bull_candle if buy else bear_candle,
-        "pivot_trigger": (bullish_retest or bullish_breakout) if buy else (bearish_retest or bearish_breakout),
-        "snr_context": (zone["support"]["strength"]>=74) if buy else (zone["resistance"]["strength"]>=74),
-    }
-    confirms=sum(1 for v in checks.values() if v)
-    conflict=(buy and regime["regime"]=="TRENDING_DOWN") or ((not buy) and regime["regime"]=="TRENDING_UP")
-    confidence=int(max(0,min(97,46+confirms*7+(5 if body_ratio>=0.60 else 0)-(18 if conflict else 0))))
-    result.update(confirmations=confirms,confidence=confidence,technical_checks=checks,
-                  ema20=round(ema20,4),ema50=round(ema50,4),macd=round(macd,6),rsi=round(r,2),
-                  market_regime=regime)
-
-    # Require at least five independent confirmations here; the per-timeframe
-    # strategy profile may demand even more (e.g. six on M5).
-    if confirms < 5 or conflict:
-        result.update(setup="CONFLUENCE_WAIT",
-                      reason=f"Technical candidate {candidate} blocked: {confirms}/7 confirmations; regime conflict={conflict}.")
-        return result
-
-    entry=float(current["close"])
-    if candidate=="SELL":
-        sl=max(float(current["high"]),pivot)+average_range*0.12
-        targets=[float(levels["s1"]),float(levels["s2"]),float(levels["s3"])]
-        targets=[x for x in targets if x<entry]
-        if len(targets)<2:
-            result.update(setup="TARGET_REACHED",reason="No two fresh support targets remain below SELL entry.")
-            return result
-        setup="PIVOT_RETEST" if bearish_retest else "S1_BREAKOUT"
-        result.update(signal="SELL",setup=setup,entry=round(entry,2),stop_loss=round(sl,2),
-                      take_profit=[round(targets[0],2),round(targets[1],2)],
-                      reason=f"SELL confirmed by {confirms}/7 Technical confluences.")
-    else:
-        sl=min(float(current["low"]),pivot)-average_range*0.12
-        targets=[float(levels["r1"]),float(levels["r2"]),float(levels["r3"])]
-        targets=[x for x in targets if x>entry]
-        if len(targets)<2:
-            result.update(setup="TARGET_REACHED",reason="No two fresh resistance targets remain above BUY entry.")
-            return result
-        setup="PIVOT_RETEST" if bullish_retest else "R1_BREAKOUT"
-        result.update(signal="BUY",setup=setup,entry=round(entry,2),stop_loss=round(sl,2),
-                      take_profit=[round(targets[0],2),round(targets[1],2)],
-                      reason=f"BUY confirmed by {confirms}/7 Technical confluences.")
+    if bias == "BEARISH" and (bearish_retest or bearish_breakout):
+        entry = float(current["close"])
+        sl = max(float(current["high"]), float(pivot)) * (1 + SL_BUFFER_PCT)
+        # Never place a SELL target above/at entry. If S1 is already behind price,
+        # advance to the next valid support; if no valid support remains, WAIT.
+        sell_targets = [float(levels["s1"]), float(levels["s2"]), float(levels["s3"])]
+        sell_targets = [x for x in sell_targets if x < entry]
+        if len(sell_targets) >= 2:
+            result.update(signal="SELL", setup="PIVOT_RETEST" if bearish_retest else "S1_BREAKOUT", entry=round(entry, 2), stop_loss=round(sl, 2), take_profit=[round(sell_targets[0], 2), round(sell_targets[1], 2)], reason="Bearish Pivot filter confirmed with rejection/breakdown.")
+        else:
+            result.update(setup="TARGET_REACHED", reason="Bearish setup has no valid support target below entry; fresh SELL entry blocked.")
+    elif bias == "BULLISH" and (bullish_retest or bullish_breakout):
+        entry = float(current["close"])
+        sl = min(float(current["low"]), float(pivot)) * (1 - SL_BUFFER_PCT)
+        # Never place a BUY target below/at entry. If R1 is already behind price,
+        # advance to the next valid resistance; if no valid resistance remains, WAIT.
+        buy_targets = [float(levels["r1"]), float(levels["r2"]), float(levels["r3"])]
+        buy_targets = [x for x in buy_targets if x > entry]
+        if len(buy_targets) >= 2:
+            result.update(signal="BUY", setup="PIVOT_RETEST" if bullish_retest else "R1_BREAKOUT", entry=round(entry, 2), stop_loss=round(sl, 2), take_profit=[round(buy_targets[0], 2), round(buy_targets[1], 2)], reason="Bullish Pivot filter confirmed with rejection/breakout.")
+        else:
+            result.update(setup="TARGET_REACHED", reason="Bullish setup has no valid resistance target above entry; fresh BUY entry blocked.")
+    elif bias == "BEARISH" and current["close"] <= levels["s2"]:
+        result.update(setup="TARGET_REACHED", reason="S2/S3 target zone reached; fresh SELL entries are blocked.")
+    elif bias == "BULLISH" and current["close"] >= levels["r2"]:
+        result.update(setup="TARGET_REACHED", reason="R2/R3 target zone reached; fresh BUY entries are blocked.")
     return result
 
 
@@ -2374,292 +2103,6 @@ def timeframe_trend(candles: list[dict[str, Any]]) -> dict[str, Any]:
     return {"trend": direction, "price": round(current, 4), "rsi": round(r, 2), "ema_fast_proxy": round(fast, 4), "ema_slow_proxy": round(slow, 4)}
 
 
-MTF_AUTOTRADE_WEIGHTS = {"1h":40, "30min":25, "15min":20, "5min":15}
-MTF_AUTOTRADE_STATE: dict[str, dict[str, Any]] = {}
-MTF_AUTOTRADE_STATE_TTL_SECONDS = 180
-MTF_FLAT_ALLOWED_SOURCES = frozenset({"ICT Signals"})
-
-def _regime_tr(candles: list[dict[str, Any]]) -> list[float]:
-    out=[]
-    for i in range(1,len(candles)):
-        cur,prev=candles[i],candles[i-1]
-        out.append(max(
-            float(cur["high"])-float(cur["low"]),
-            abs(float(cur["high"])-float(prev["close"])),
-            abs(float(cur["low"])-float(prev["close"])),
-        ))
-    return out
-
-def _market_regime_filter(c1: list[dict[str, Any]], c30: list[dict[str, Any]],
-                          c15: list[dict[str, Any]], c5: list[dict[str, Any]]) -> dict[str, Any]:
-    """Classify XAUUSD as TRENDING / FLAT / TRANSITION before weighted MTF execution."""
-    if min(len(c1),len(c30),len(c15),len(c5)) < 55:
-        return {
-            "regime":"TRANSITION","confidence":0,"blocked_reason":"REGIME_INSUFFICIENT_CANDLES",
-            "flat_score":0,"trend_score":0,"checks":{},
-        }
-
-    c1c=c1[:-1] if len(c1)>2 else c1
-    closes=[float(x["close"]) for x in c1c]
-    e50=_ema(closes[-180:],50)
-    e200=_ema(closes[-260:],200)
-    a1=max(atr(c1c),float(c1c[-1]["close"])*0.0002)
-    ema_sep_atr=abs(e50-e200)/max(a1,1e-9)
-
-    try:
-        dmi=_pro_adx_dmi(c1c)
-        adx=float(dmi.get("adx") or 0)
-    except Exception:
-        adx=0.0
-        dmi={"adx":0.0,"plus_di":0.0,"minus_di":0.0}
-
-    tr=_regime_tr(c1c)
-    short_atr=sum(tr[-14:])/max(1,min(14,len(tr))) if tr else a1
-    long_atr=sum(tr[-50:])/max(1,min(50,len(tr))) if tr else short_atr
-    atr_ratio=short_atr/max(long_atr,1e-9)
-
-    recent=c1c[-24:]
-    range_height=(max(float(x["high"]) for x in recent)-min(float(x["low"]) for x in recent)) if recent else 0.0
-    range_atr=range_height/max(a1,1e-9)
-
-    h1=timeframe_trend(c1)
-    m30=timeframe_trend(c30)
-    h1_dir=str(h1.get("trend") or "NEUTRAL")
-    m30_dir=str(m30.get("trend") or "NEUTRAL")
-    aligned_directional=h1_dir==m30_dir and h1_dir in {"BULLISH","BEARISH"}
-    mixed_structure=(h1_dir=="NEUTRAL" or m30_dir=="NEUTRAL" or h1_dir!=m30_dir)
-
-    flat_checks={
-        "adx_low": adx < 20.0,
-        "ema_compressed": ema_sep_atr < 0.85,
-        "atr_contracted": atr_ratio < 0.88,
-        "structure_mixed": mixed_structure,
-        "range_compressed": range_atr < 6.0,
-    }
-    trend_checks={
-        "adx_trending": adx >= 24.0,
-        "ema_separated": ema_sep_atr >= 1.15,
-        "atr_healthy": atr_ratio >= 0.90,
-        "h1_m30_aligned": aligned_directional,
-        "range_expanded": range_atr >= 6.0,
-    }
-    flat_score=sum(1 for v in flat_checks.values() if v)
-    trend_score=sum(1 for v in trend_checks.values() if v)
-
-    if flat_score >= 4 and trend_score <= 2:
-        regime="FLAT"
-        confidence=min(95,55+flat_score*8)
-        reason=None
-    elif trend_score >= 4 and flat_score <= 2:
-        regime="TRENDING"
-        confidence=min(95,55+trend_score*8)
-        reason=None
-    else:
-        regime="TRANSITION"
-        confidence=min(90,50+max(flat_score,trend_score)*6)
-        reason="REGIME_NOT_CLEAN"
-
-    return {
-        "regime":regime,
-        "confidence":int(confidence),
-        "blocked_reason":reason,
-        "flat_score":flat_score,
-        "trend_score":trend_score,
-        "checks":{"flat":flat_checks,"trend":trend_checks},
-        "metrics":{
-            "adx":round(adx,2),
-            "plus_di":round(float(dmi.get("plus_di") or 0),2),
-            "minus_di":round(float(dmi.get("minus_di") or 0),2),
-            "ema50":round(e50,4),
-            "ema200":round(e200,4),
-            "ema_separation_atr":round(ema_sep_atr,2),
-            "atr_ratio":round(atr_ratio,2),
-            "range_atr":round(range_atr,2),
-            "h1_trend":h1_dir,
-            "m30_trend":m30_dir,
-        },
-        "flat_autotrade_sources":sorted(MTF_FLAT_ALLOWED_SOURCES),
-    }
-
-def _weighted_mtf_decision(timeframes: dict[str, dict[str, Any]], regime: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Hierarchical weighted MTF model used as the global AutoTrade direction filter.
-
-    H1 sets the primary direction, M30 provides context, M15 is setup/pullback,
-    and M5 is the final entry trigger. M1 never participates in AutoTrade.
-    """
-    detail={}
-    buy_weight=sell_weight=neutral_weight=0
-    for tf,weight in MTF_AUTOTRADE_WEIGHTS.items():
-        trend=str((timeframes.get(tf) or {}).get("trend") or "UNAVAILABLE").upper()
-        if trend=="BULLISH":
-            buy_weight += weight
-            signed=weight
-        elif trend=="BEARISH":
-            sell_weight += weight
-            signed=-weight
-        else:
-            neutral_weight += weight
-            signed=0
-        detail[tf]={"trend":trend,"weight":weight,"signed_points":signed}
-
-    signed_score=buy_weight-sell_weight
-    if signed_score>=60:
-        classification="STRONG BULLISH"
-    elif signed_score>=35:
-        classification="BULLISH"
-    elif signed_score>=20:
-        classification="BULLISH BIAS"
-    elif signed_score<=-60:
-        classification="STRONG BEARISH"
-    elif signed_score<=-35:
-        classification="BEARISH"
-    elif signed_score<=-20:
-        classification="BEARISH BIAS"
-    else:
-        classification="MIXED"
-
-    weighted_direction="BUY" if buy_weight>=60 and signed_score>=20 else "SELL" if sell_weight>=60 and signed_score<=-20 else "WAIT"
-    h1_trend=detail["1h"]["trend"]
-    m30_trend=detail["30min"]["trend"]
-    m15_trend=detail["15min"]["trend"]
-    m5_trend=detail["5min"]["trend"]
-    expected_h1="BULLISH" if weighted_direction=="BUY" else "BEARISH" if weighted_direction=="SELL" else None
-    h1_match=bool(expected_h1 and h1_trend==expected_h1)
-    m5_match=bool(expected_h1 and m5_trend==expected_h1)
-
-    if weighted_direction=="BUY":
-        if m15_trend=="BEARISH" and m5_trend=="BULLISH":
-            context="M15_PULLBACK_RECOVERY"
-        elif m15_trend=="BEARISH":
-            context="M15_PULLBACK_ACTIVE"
-        elif m30_trend=="BEARISH" and m5_trend=="BULLISH":
-            context="M30_PULLBACK_RECOVERY"
-        else:
-            context="BULLISH_ALIGNMENT"
-    elif weighted_direction=="SELL":
-        if m15_trend=="BULLISH" and m5_trend=="BEARISH":
-            context="M15_PULLBACK_RECOVERY"
-        elif m15_trend=="BULLISH":
-            context="M15_PULLBACK_ACTIVE"
-        elif m30_trend=="BULLISH" and m5_trend=="BEARISH":
-            context="M30_PULLBACK_RECOVERY"
-        else:
-            context="BEARISH_ALIGNMENT"
-    else:
-        context="MIXED_TIMEFRAMES"
-
-    if weighted_direction=="WAIT":
-        blocked_reason="WEIGHTED_SCORE_NOT_STRONG_ENOUGH"
-    elif not h1_match:
-        blocked_reason="H1_DIRECTION_CONFLICT"
-    elif not m5_match:
-        blocked_reason=f"WAIT_FOR_M5_{weighted_direction}_TRIGGER"
-    else:
-        blocked_reason=None
-
-    regime_info=regime or {"regime":"TRANSITION","confidence":0,"blocked_reason":"REGIME_UNAVAILABLE"}
-    regime_name=str(regime_info.get("regime") or "TRANSITION").upper()
-    if regime_name=="TRANSITION":
-        blocked_reason="MARKET_REGIME_TRANSITION"
-        autotrade_direction="WAIT"
-    elif regime_name=="FLAT":
-        # Directional weighted trend execution is disabled in flat markets.
-        # Source-specific flat-mode permission is handled by _mtf_autotrade_gate().
-        autotrade_direction="WAIT"
-        blocked_reason="MARKET_REGIME_FLAT"
-    else:
-        autotrade_direction=weighted_direction if blocked_reason is None else "WAIT"
-    return {
-        "weights":dict(MTF_AUTOTRADE_WEIGHTS),
-        "detail":detail,
-        "buy_weight":buy_weight,
-        "sell_weight":sell_weight,
-        "neutral_weight":neutral_weight,
-        "signed_score":signed_score,
-        "classification":classification,
-        "weighted_direction":weighted_direction,
-        "autotrade_direction":autotrade_direction,
-        "autotrade_ready":autotrade_direction in {"BUY","SELL"},
-        "h1_match":h1_match,
-        "m5_trigger_match":m5_match,
-        "context":context,
-        "blocked_reason":blocked_reason,
-        "market_regime":regime_info,
-        "m1_autotrade_blocked":True,
-    }
-
-def _update_mtf_autotrade_state(symbol: str, timeframes: dict[str, dict[str, Any]],
-                                regime: dict[str, Any] | None = None) -> dict[str, Any]:
-    key=clean_symbol(symbol)
-    decision=_weighted_mtf_decision(timeframes,regime)
-    MTF_AUTOTRADE_STATE[key]={
-        "updated_at_epoch":datetime.now(timezone.utc).timestamp(),
-        "updated_at":datetime.now(timezone.utc).isoformat(),
-        "decision":decision,
-    }
-    return decision
-
-def _mtf_autotrade_gate(symbol: str, direction: str, source: str | None = None) -> dict[str, Any]:
-    key=clean_symbol(symbol)
-    state=MTF_AUTOTRADE_STATE.get(key)
-    if not state:
-        return {"ok":False,"reason":"MTF_STATE_UNAVAILABLE","direction":"WAIT"}
-    age=max(0.0,datetime.now(timezone.utc).timestamp()-float(state.get("updated_at_epoch") or 0))
-    if age>MTF_AUTOTRADE_STATE_TTL_SECONDS:
-        return {"ok":False,"reason":"MTF_STATE_STALE","direction":"WAIT","age_seconds":round(age,1)}
-    d=state.get("decision") or {}
-    wanted=str(direction or "").upper()
-    normalized_source=_normalize_history_source(source or "")
-    regime=d.get("market_regime") or {}
-    regime_name=str(regime.get("regime") or "TRANSITION").upper()
-    allowed=str(d.get("autotrade_direction") or "WAIT").upper()
-    if wanted not in {"BUY","SELL"}:
-        return {"ok":False,"reason":"INVALID_DIRECTION","direction":allowed,"market_regime":regime}
-
-    if regime_name=="TRANSITION":
-        return {
-            "ok":False,"reason":"MARKET_REGIME_TRANSITION","direction":"WAIT",
-            "market_regime":regime,"buy_weight":d.get("buy_weight"),"sell_weight":d.get("sell_weight"),
-        }
-
-    if regime_name=="FLAT":
-        if normalized_source not in MTF_FLAT_ALLOWED_SOURCES:
-            return {
-                "ok":False,"reason":"FLAT_TREND_AUTOTRADE_BLOCKED","direction":"WAIT",
-                "market_regime":regime,"source":normalized_source,
-                "allowed_flat_sources":sorted(MTF_FLAT_ALLOWED_SOURCES),
-                "buy_weight":d.get("buy_weight"),"sell_weight":d.get("sell_weight"),
-            }
-        # ICT Signals already has mandatory liquidity sweep, MSS/displacement,
-        # FVG/OB retest, AI, RR and confidence gates. In FLAT it is treated as
-        # a range/liquidity setup and does not need directional weighted-MTF alignment.
-        return {
-            "ok":True,"reason":"FLAT_LIQUIDITY_MODE_PASSED","direction":wanted,
-            "market_regime":regime,"source":normalized_source,
-            "buy_weight":d.get("buy_weight"),"sell_weight":d.get("sell_weight"),
-            "context":"FLAT_RANGE_LIQUIDITY",
-            "age_seconds":round(age,1),
-        }
-
-    if allowed!=wanted:
-        return {
-            "ok":False,
-            "reason":d.get("blocked_reason") or f"MTF_DIRECTION_{allowed}_NOT_{wanted}",
-            "direction":allowed,
-            "weighted_direction":d.get("weighted_direction"),
-            "buy_weight":d.get("buy_weight"),
-            "sell_weight":d.get("sell_weight"),
-            "context":d.get("context"),
-        }
-    return {
-        "ok":True,"reason":"WEIGHTED_MTF_PASSED","direction":allowed,
-        "buy_weight":d.get("buy_weight"),"sell_weight":d.get("sell_weight"),
-        "signed_score":d.get("signed_score"),"classification":d.get("classification"),
-        "context":d.get("context"),"detail":d.get("detail"),"market_regime":regime,
-        "age_seconds":round(age,1),
-    }
-
-
 async def multi_timeframe(symbol: str) -> dict[str, Any]:
     key=clean_symbol(symbol)
     now=asyncio.get_running_loop().time()
@@ -2667,34 +2110,18 @@ async def multi_timeframe(symbol: str) -> dict[str, Any]:
     if cached and now-cached[0] < MTF_CACHE_TTL:
         return cached[1]
     intervals=("1min","5min","15min","30min","1h","4h","1day")
-    out={}; errors={}; candle_map={}
+    out={}; errors={}
     # One shared TV cache per timeframe; process sequentially to avoid opening 7 TV sockets at once.
     for tf in intervals:
         try:
             candles_data,mode,warning=await get_candles(key,tf,80)
             if len(candles_data)<2: raise MarketDataError("Not enough TradingView candles")
-            candle_map[tf]=candles_data
             out[tf]={**timeframe_trend(candles_data),"mode":mode,"warning":warning}
         except Exception as exc:
             errors[tf]=f"{type(exc).__name__}: {exc}"
     dirs=[x["trend"] for x in out.values() if x.get("trend")]
-    regime=_market_regime_filter(
-        candle_map.get("1h",[]),candle_map.get("30min",[]),
-        candle_map.get("15min",[]),candle_map.get("5min",[])
-    )
-    weighted=_update_mtf_autotrade_state(key,out,regime)
-    result={
-        "timeframes":out,
-        "overall":weighted.get("classification") or "MIXED",
-        "bullish_count":dirs.count("BULLISH"),
-        "bearish_count":dirs.count("BEARISH"),
-        "available_count":len(out),
-        "errors":errors,
-        "mode":"tradingview",
-        "weighted":weighted,
-        "autotrade_direction":weighted.get("autotrade_direction"),
-        "m1_autotrade_blocked":True,
-    }
+    score=dirs.count("BULLISH")-dirs.count("BEARISH")
+    result={"timeframes":out,"overall":"BULLISH" if score>=2 else "BEARISH" if score<=-2 else "MIXED","bullish_count":dirs.count("BULLISH"),"bearish_count":dirs.count("BEARISH"),"available_count":len(out),"errors":errors,"mode":"tradingview"}
     MTF_CACHE[key]=(now,result)
     return result
 
@@ -3004,100 +2431,68 @@ def _ema(values: list[float], period: int) -> float:
     return e
 
 def _classic_trade(candles: list[dict[str, Any]], levels: dict[str, Any]) -> dict[str, Any]:
-    """Classic strategy with closed-candle, momentum, regime and strong-zone confluence."""
-    closed = candles[:-1] if len(candles) >= 50 else candles
-    closes=[float(x["close"]) for x in closed]
-    cur=closed[-1]; prev=closed[-2]
-    live_price=float(candles[-1]["close"])
-    decision_price=float(cur["close"])
-    r=float(rsi(closed)); a=max(atr(closed),live_price*0.00025)
-    ema20=_ema(closes[-100:],20); ema50=_ema(closes[-150:],50)
-    ema20_prev=_ema(closes[-101:-1],20) if len(closes)>21 else ema20
-    macd_line=_ema(closes[-140:],12)-_ema(closes[-140:],26)
-    macd_prev=(_ema(closes[-141:-1],12)-_ema(closes[-141:-1],26)) if len(closes)>30 else macd_line
-    macd_state="BULLISH" if macd_line>macd_prev else "BEARISH"
-
-    body=abs(float(cur["close"])-float(cur["open"]))
-    rng=max(float(cur["high"])-float(cur["low"]),1e-9)
-    body_ratio=body/rng
-    bullish_candle=float(cur["close"])>float(cur["open"]) and body_ratio>=0.45
-    bearish_candle=float(cur["close"])<float(cur["open"]) and body_ratio>=0.45
-    bullish_engulf=bullish_candle and float(prev["close"])<float(prev["open"]) and float(cur["open"])<=float(prev["close"]) and float(cur["close"])>=float(prev["open"])
-    bearish_engulf=bearish_candle and float(prev["close"])>float(prev["open"]) and float(cur["open"])>=float(prev["close"]) and float(cur["close"])<=float(prev["open"])
-    pattern="BULLISH ENGULFING" if bullish_engulf else "BEARISH ENGULFING" if bearish_engulf else "BULLISH CANDLE" if bullish_candle else "BEARISH CANDLE" if bearish_candle else "NEUTRAL CANDLE"
-
+    closes = [float(c["close"]) for c in candles]
+    # Base the Classic decision on the last COMPLETED candle; the newest candle may still be forming.
+    cur = candles[-2]; prev = candles[-3]
+    price = closes[-1]
+    r = rsi(candles); a = atr(candles)
+    ema20 = _ema(closes[-80:], 20); ema50 = _ema(closes[-120:], 50)
+    macd_line = _ema(closes[-120:], 12) - _ema(closes[-120:], 26)
+    macd_prev = _ema(closes[-121:-1], 12) - _ema(closes[-121:-1], 26) if len(closes) > 121 else macd_line
+    macd_state = "BULLISH" if macd_line > macd_prev else "BEARISH"
+    body = abs(float(cur["close"])-float(cur["open"]))
+    rng = max(float(cur["high"])-float(cur["low"]), 1e-9)
+    bullish_candle = float(cur["close"]) > float(cur["open"]) and body/rng >= 0.45
+    bearish_candle = float(cur["close"]) < float(cur["open"]) and body/rng >= 0.45
+    prev_body = abs(float(prev["close"])-float(prev["open"]))
+    bullish_engulf = bullish_candle and float(prev["close"]) < float(prev["open"]) and float(cur["open"]) <= float(prev["close"]) and float(cur["close"]) >= float(prev["open"])
+    bearish_engulf = bearish_candle and float(prev["close"]) > float(prev["open"]) and float(cur["open"]) >= float(prev["close"]) and float(cur["close"]) <= float(prev["open"])
+    pattern = "BULLISH ENGULFING" if bullish_engulf else "BEARISH ENGULFING" if bearish_engulf else "BULLISH CANDLE" if bullish_candle else "BEARISH CANDLE" if bearish_candle else "NEUTRAL CANDLE"
+    score = 0; reasons=[]
+    trend = "BULLISH" if ema20 > ema50 and price > ema20 else "BEARISH" if ema20 < ema50 and price < ema20 else "MIXED"
+    if trend == "BULLISH": score += 2; reasons.append("EMA20 > EMA50 / price above EMA20")
+    elif trend == "BEARISH": score -= 2; reasons.append("EMA20 < EMA50 / price below EMA20")
+    if price >= levels["pivot"]: score += 1; reasons.append("price above Pivot")
+    else: score -= 1; reasons.append("price below Pivot")
+    if r >= 55 and r < 70: score += 1; reasons.append("RSI bullish zone")
+    elif r <= 45 and r > 30: score -= 1; reasons.append("RSI bearish zone")
+    if macd_state == "BULLISH": score += 1; reasons.append("MACD bullish")
+    else: score -= 1; reasons.append("MACD bearish")
+    if bullish_engulf: score += 2; reasons.append("bullish engulfing")
+    elif bearish_engulf: score -= 2; reasons.append("bearish engulfing")
+    # Classic S/R context: reward rejection near a level, but avoid chasing extended moves.
+    near_r1 = abs(price-levels["r1"]) <= max(a*0.35, 0.5)
+    near_s1 = abs(price-levels["s1"]) <= max(a*0.35, 0.5)
+    if near_s1 and bullish_candle: score += 2; reasons.append("support rejection")
+    if near_r1 and bearish_candle: score -= 2; reasons.append("resistance rejection")
     zone=_snr_zone_analysis(candles)
-    regime=_adaptive_regime(closed)
-    trend="BULLISH" if ema20>ema50 and ema20>=ema20_prev and decision_price>ema20 else "BEARISH" if ema20<ema50 and ema20<=ema20_prev and decision_price<ema20 else "MIXED"
-    strong_support=zone["support"]["strength"]>=85 and zone["support"]["distance_pct"]<=0.60 and zone["support"]["status"]!="BROKEN"
-    strong_resistance=zone["resistance"]["strength"]>=85 and zone["resistance"]["distance_pct"]<=0.60 and zone["resistance"]["status"]!="BROKEN"
-
-    score=0; reasons=[]
-    if trend=="BULLISH": score+=2; reasons.append("EMA trend bullish")
-    elif trend=="BEARISH": score-=2; reasons.append("EMA trend bearish")
-    if decision_price>=levels["pivot"]: score+=1; reasons.append("above Pivot")
-    else: score-=1; reasons.append("below Pivot")
-    if 52<=r<=70: score+=1; reasons.append("RSI bullish")
-    elif 30<=r<=48: score-=1; reasons.append("RSI bearish")
-    if macd_state=="BULLISH" and macd_line>=0: score+=1; reasons.append("MACD bullish")
-    elif macd_state=="BEARISH" and macd_line<=0: score-=1; reasons.append("MACD bearish")
-    if bullish_engulf: score+=2; reasons.append("bullish engulfing")
-    elif bearish_engulf: score-=2; reasons.append("bearish engulfing")
-    elif bullish_candle: score+=1
-    elif bearish_candle: score-=1
-    if strong_support and bullish_candle: score+=2; reasons.append("strong support rejection")
-    if strong_resistance and bearish_candle: score-=2; reasons.append("strong resistance rejection")
-
-    candidate="BUY" if score>=6 else "SELL" if score<=-6 else "WAIT"
-    if candidate=="BUY":
-        checks={
-            "trend":trend=="BULLISH","pivot":decision_price>=levels["pivot"],"rsi":52<=r<=70,
-            "macd":macd_state=="BULLISH" and macd_line>=0,"candle":bullish_candle,
-            "strong_zone":strong_support,"regime":regime["regime"]!="TRENDING_DOWN"
-        }
-    elif candidate=="SELL":
-        checks={
-            "trend":trend=="BEARISH","pivot":decision_price<levels["pivot"],"rsi":30<=r<=48,
-            "macd":macd_state=="BEARISH" and macd_line<=0,"candle":bearish_candle,
-            "strong_zone":strong_resistance,"regime":regime["regime"]!="TRENDING_UP"
-        }
-    else:
-        checks={}
-    confirms=sum(1 for v in checks.values() if v)
-    direction=candidate
-    if direction=="BUY" and (confirms<5 or not strong_support or not bullish_candle):
-        direction="WAIT"; reasons.append(f"BUY confluence insufficient {confirms}/7")
-    if direction=="SELL" and (confirms<5 or not strong_resistance or not bearish_candle):
-        direction="WAIT"; reasons.append(f"SELL confluence insufficient {confirms}/7")
-
-    confidence=int(max(0,min(97,45+confirms*7+min(10,abs(score)*2)+(4 if (bullish_engulf or bearish_engulf) else 0))))
-    strategy_quality=int(max(0,min(100,confidence+(5 if regime["trend_strength"]>=65 else 0))))
-    entry=round(live_price,2); sl=None; tp=[]
-    if direction=="BUY":
-        sl=round(min(float(cur["low"]),float(zone["support"]["low"]),float(levels["s1"]))-a*0.12,2)
-        targets=[float(zone["resistance"]["mid"]),float(levels["r1"]),float(levels["r2"]),float(levels["r3"])]
-        targets=sorted(set(round(x,2) for x in targets if x>entry))
-        if len(targets)<2:
-            direction="WAIT"; sl=None; reasons.append("no two fresh BUY targets")
-        else: tp=targets[:2]
-    elif direction=="SELL":
-        sl=round(max(float(cur["high"]),float(zone["resistance"]["high"]),float(levels["r1"]))+a*0.12,2)
-        targets=[float(zone["support"]["mid"]),float(levels["s1"]),float(levels["s2"]),float(levels["s3"])]
-        targets=sorted(set(round(x,2) for x in targets if x<entry),reverse=True)
-        if len(targets)<2:
-            direction="WAIT"; sl=None; reasons.append("no two fresh SELL targets")
-        else: tp=targets[:2]
-
-    return {"signal":direction,"confidence":confidence,"score":score,"confirmations":confirms,
-            "entry":entry,"stop_loss":sl,"take_profit":tp,"trend":trend,"rsi":round(r,2),
-            "rsi_state":"OVERBOUGHT" if r>=70 else "OVERSOLD" if r<=30 else "NEUTRAL",
+    near_strong_support=zone["support"]["strength"]>=82 and zone["support"]["distance_pct"]<=0.75
+    near_strong_resistance=zone["resistance"]["strength"]>=82 and zone["resistance"]["distance_pct"]<=0.75
+    if near_strong_support and bullish_candle: score += 2; reasons.append("strong support zone")
+    if near_strong_resistance and bearish_candle: score -= 2; reasons.append("strong resistance zone")
+    direction = "BUY" if score >= 4 else "SELL" if score <= -4 else "WAIT"
+    # Classic entries are only permitted from a strong zone, never in the middle of a range.
+    if direction=="BUY" and not near_strong_support: direction="WAIT"; reasons.append("no strong entry zone")
+    if direction=="SELL" and not near_strong_resistance: direction="WAIT"; reasons.append("no strong entry zone")
+    regime=_adaptive_regime(candles)
+    if direction=="BUY" and regime["regime"]=="TRENDING_DOWN": direction="WAIT"; reasons.append("adaptive regime conflict")
+    if direction=="SELL" and regime["regime"]=="TRENDING_UP": direction="WAIT"; reasons.append("adaptive regime conflict")
+    confidence = min(97, 50 + abs(score)*7 + (5 if (near_strong_support or near_strong_resistance) else 0))
+    strategy_quality=int(max(0,min(100,confidence + (8 if abs(score)>=6 else 0) + (5 if regime["trend_strength"]>=65 else 0))))
+    entry = round(price, 2)
+    if direction == "BUY":
+        sl = round(min(float(cur["low"]), levels["s1"]) - max(a*0.15, 0.1), 2)
+        tp = [round(levels["r1"],2), round(levels["r2"],2)]
+    elif direction == "SELL":
+        sl = round(max(float(cur["high"]), levels["r1"]) + max(a*0.15, 0.1), 2)
+        tp = [round(levels["s1"],2), round(levels["s2"],2)]
+    else: sl=None; tp=[]
+    return {"signal":direction,"confidence":confidence,"score":score,"entry":entry,"stop_loss":sl,"take_profit":tp,
+            "trend":trend,"rsi":round(r,2),"rsi_state":"OVERBOUGHT" if r>=70 else "OVERSOLD" if r<=30 else "NEUTRAL",
             "ema20":round(ema20,2),"ema50":round(ema50,2),"macd":round(macd_line,5),"macd_state":macd_state,
-            "pattern":pattern,"pivot":levels["pivot"],"support":[levels["s1"],levels["s2"],levels["s3"]],
-            "resistance":[levels["r1"],levels["r2"],levels["r3"]],"classic_checks":checks,
-            "reason":"; ".join(reasons),"method":"Classic Pro V3 · Closed Candle + EMA/Pivot/SNR/Momentum/Pattern/Regime",
-            "market_regime":regime,"strategy_engine":"Adaptive Classic Pro V3","strategy_quality":strategy_quality,
-            "decision_state":"CONFIRMED" if direction in {"BUY","SELL"} else "WAIT"}
-
+            "pattern":pattern,"pivot":levels["pivot"],"support":[levels["s1"],levels["s2"],levels["s3"]],"resistance":[levels["r1"],levels["r2"],levels["r3"]],
+            "reason":"; ".join(reasons),"method":"Classic · Adaptive Trend/Pivot/SNR/Momentum/Candlestick",
+            "market_regime":regime,"strategy_engine":"Adaptive Classic Strategy","strategy_quality":strategy_quality,"decision_state":"CONFIRMED" if direction in {"BUY","SELL"} else "WAIT"}
 
 async def calculate_pivot_for_interval(symbol: str, interval: str) -> tuple[dict[str, Any], str | None]:
     """Classic Pivot levels based on the previous completed candle of the selected timeframe.
@@ -3617,219 +3012,6 @@ def _fibonacci_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
                   f"{'CANDLE CONFIRMED' if confirmation != 'WAIT' else 'WAIT CONFIRMATION'}"
     }
 
-
-def _fib_zone_overlap(zone_a: dict[str, Any], zone_b: dict[str, Any]) -> dict[str, Any]:
-    try:
-        alo=float(zone_a.get("low")); ahi=float(zone_a.get("high"))
-        blo=float(zone_b.get("low")); bhi=float(zone_b.get("high"))
-    except Exception:
-        return {"overlap":False,"low":None,"high":None}
-    lo=max(min(alo,ahi),min(blo,bhi))
-    hi=min(max(alo,ahi),max(blo,bhi))
-    return {"overlap":hi>=lo,"low":round(lo,4) if hi>=lo else None,"high":round(hi,4) if hi>=lo else None}
-
-def _fibonacci_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]], c30:list[dict[str,Any]],
-                             c15:list[dict[str,Any]], c5:list[dict[str,Any]]) -> dict[str,Any]:
-    """XAUUSD Fibonacci Confluence Pro.
-
-    HTF trend -> strong impulse -> Fib 50-61.8 pullback -> SNR/OB/FVG confluence
-    -> liquidity sweep -> M15/M5 MSS -> momentum -> RR.
-    Fibonacci touch alone never creates a signal.
-    """
-    base={"signal":"WAIT","confidence":0,"score":0,"entry":None,"stop_loss":None,
-          "take_profit":[],"risk_reward":0.0,"fibonacci_autotrade_eligible":False,
-          "auto_trade_eligible":False,"m1_blocked":True,"execution_timeframe":"5min",
-          "strategy_engine":"XAUUSD Fibonacci Confluence Pro 2026","strategy_version":"FIB-2026-V1"}
-    if min(len(c4),len(c1),len(c30),len(c15),len(c5))<60:
-        return {**base,"blockedReason":"INSUFFICIENT_CLOSED_CANDLES","reason":"INSUFFICIENT_CLOSED_CANDLES"}
-
-    regime=_market_regime_filter(c1,c30,c15,c5)
-    if str(regime.get("regime") or "").upper()!="TRENDING":
-        return {**base,"market_regime":regime,"blockedReason":f"MARKET_REGIME_{regime.get('regime','TRANSITION')}",
-                "reason":f"Fibonacci trend setup blocked: market regime={regime.get('regime','TRANSITION')}"}
-
-    h4=_ict_tf_bias(c4); h1=_ict_tf_bias(c1)
-    htf_aligned=h4.get("bias")==h1.get("bias") and h4.get("bias") in {"BULLISH","BEARISH"}
-    direction="BUY" if htf_aligned and h4.get("bias")=="BULLISH" else "SELL" if htf_aligned and h4.get("bias")=="BEARISH" else "WAIT"
-    desired="BULLISH" if direction=="BUY" else "BEARISH" if direction=="SELL" else "NONE"
-
-    fib=_fibonacci_analysis(c1)
-    fib_dir_ok=bool(fib.get("available") and fib.get("direction")==desired)
-    a1=max(atr(c1),float(c1[-1]["close"])*0.0003)
-    impulse_range=float(fib.get("range") or 0)
-    impulse_atr=impulse_range/max(a1,1e-9)
-    strong_impulse=bool(fib_dir_ok and impulse_atr>=2.5)
-
-    fib_zone=fib.get("retracement_zone") or {}
-    current=float(c5[-1]["close"])
-    try:
-        fib_zone_ok=float(fib_zone.get("low"))<=current<=float(fib_zone.get("high"))
-    except Exception:
-        fib_zone_ok=False
-
-    snr=_snr_zone_analysis(c1)
-    snr_zone=snr.get("support") if direction=="BUY" else snr.get("resistance") if direction=="SELL" else {}
-    snr_overlap=_fib_zone_overlap(fib_zone,snr_zone or {})
-    snr_ok=bool(snr_overlap.get("overlap") and int((snr_zone or {}).get("strength") or 0)>=74)
-
-    a15=max(atr(c15),float(c15[-1]["close"])*0.00025)
-    a5=max(atr(c5),float(c5[-1]["close"])*0.0002)
-    ob5=_ict_order_block(c5,direction,a5) if direction!="WAIT" else {"type":"NONE"}
-    ob15=_ict_order_block(c15,direction,a15) if direction!="WAIT" else {"type":"NONE"}
-    ob=ob5 if ob5.get("type")==desired else ob15 if ob15.get("type")==desired else {"type":"NONE","low":None,"high":None}
-    fvg5=_ict_fvg(c5); fvg15=_ict_fvg(c15)
-    fvg=fvg5 if fvg5.get("type")==desired else fvg15 if fvg15.get("type")==desired else {"type":"NONE","low":None,"high":None}
-    ob_overlap=_fib_zone_overlap(fib_zone,ob)
-    fvg_overlap=_fib_zone_overlap(fib_zone,fvg)
-    institutional_ok=bool(ob_overlap.get("overlap") or fvg_overlap.get("overlap"))
-
-    expected="SSL_SWEEP" if direction=="BUY" else "BSL_SWEEP" if direction=="SELL" else "NONE"
-    sw5=_ict_recent_liquidity_sweep(c5,6)
-    sw15=_ict_recent_liquidity_sweep(c15,5)
-    sweep=sw5 if sw5.get("type")==expected else sw15 if sw15.get("type")==expected else {"type":"NONE","level":None,"extreme":None}
-    sweep_ok=bool(direction!="WAIT" and sweep.get("type")==expected)
-
-    mss5,mss5_level=_ict_mss(c5,direction) if direction!="WAIT" else (False,None)
-    mss15,mss15_level=_ict_mss(c15,direction) if direction!="WAIT" else (False,None)
-    st5=_structure_state(c5[:-1] if len(c5)>2 else c5)
-    st15=_structure_state(c15[:-1] if len(c15)>2 else c15)
-    mss_ok=bool(
-        mss5 or mss15 or st5.get("choch")==desired or st5.get("bos")==desired
-        or st15.get("choch")==desired or st15.get("bos")==desired
-    )
-
-    momentum=_pro_momentum_engine(c15,direction)
-    momentum_ok=bool(momentum.get("signal")==direction or int(momentum.get("score") or 0)>=60)
-
-    checks=[]; score=0
-    def add(name,pts,ok,detail):
-        nonlocal score
-        if ok: score+=pts
-        checks.append({"name":name,"points":pts if ok else 0,"max_points":pts,
-                       "status":"PASS" if ok else "MISS","detail":detail})
-
-    add("H4/H1 Trend",20,htf_aligned,f"H4={h4.get('bias')} H1={h1.get('bias')}")
-    add("Strong Impulse",10,strong_impulse,f"impulse={impulse_atr:.2f} ATR")
-    add("Fib 50-61.8 Zone",20,fib_zone_ok,f"{fib_zone.get('low')}–{fib_zone.get('high')} current={current:.2f}")
-    add("SNR Overlap",10,snr_ok,f"strength={(snr_zone or {}).get('strength',0)} overlap={snr_overlap.get('overlap')}")
-    add("OB/FVG Overlap",15,institutional_ok,f"OB={ob_overlap.get('overlap')} FVG={fvg_overlap.get('overlap')}")
-    add("Liquidity Sweep",10,sweep_ok,str(sweep.get("type")))
-    add("MSS / BOS",10,mss_ok,f"M5={mss5} M15={mss15}")
-    add("Momentum",5,momentum_ok,f"score={momentum.get('score',0)}")
-
-    mandatory=bool(htf_aligned and fib_dir_ok and strong_impulse and fib_zone_ok and sweep_ok and mss_ok)
-    blocked=None
-    if not htf_aligned: blocked="HTF_TREND_CONFLICT"
-    elif not fib_dir_ok: blocked="FIB_IMPULSE_DIRECTION_CONFLICT"
-    elif not strong_impulse: blocked="IMPULSE_TOO_WEAK"
-    elif not fib_zone_ok: blocked="WAIT_FIB_50_61_8_PULLBACK"
-    elif not sweep_ok: blocked="NO_LIQUIDITY_SWEEP"
-    elif not mss_ok: blocked="NO_M15_M5_MSS_BOS"
-    elif score<FIBONACCI_SIGNAL_THRESHOLD: blocked="CONFLUENCE_SCORE_BELOW_80"
-
-    signal=direction if mandatory and score>=FIBONACCI_SIGNAL_THRESHOLD else "WAIT"
-    entry=current if direction!="WAIT" else None
-    sl=None; targets=[]; rr=0.0
-    if direction in {"BUY","SELL"} and entry is not None:
-        fib_low=float((fib.get("anchor_low") or {}).get("price") or 0)
-        fib_high=float((fib.get("anchor_high") or {}).get("price") or 0)
-        rng=max(float(fib.get("range") or 0),1e-9)
-        if direction=="BUY":
-            candidates_sl=[x for x in [sweep.get("extreme"),ob.get("low"),fib_zone.get("low")] if x is not None]
-            sl=(min(float(x) for x in candidates_sl)-a5*0.12) if candidates_sl else entry-a5*1.2
-            raw_targets=[fib_high,fib_high+rng*0.272,fib_high+rng*0.618]
-        else:
-            candidates_sl=[x for x in [sweep.get("extreme"),ob.get("high"),fib_zone.get("high")] if x is not None]
-            sl=(max(float(x) for x in candidates_sl)+a5*0.12) if candidates_sl else entry+a5*1.2
-            raw_targets=[fib_low,fib_low-rng*0.272,fib_low-rng*0.618]
-        risk=abs(entry-sl)
-        if risk>0:
-            if direction=="BUY":
-                targets=[float(x) for x in raw_targets if float(x)>entry and (float(x)-entry)/risk>=FIBONACCI_MIN_RR]
-            else:
-                targets=[float(x) for x in raw_targets if float(x)<entry and (entry-float(x))/risk>=FIBONACCI_MIN_RR]
-            targets=targets[:3]
-            if targets:
-                rr=((targets[0]-entry)/risk) if direction=="BUY" else ((entry-targets[0])/risk)
-
-    if signal in {"BUY","SELL"} and (not targets or rr<FIBONACCI_MIN_RR):
-        signal="WAIT"; blocked="NO_VALID_TARGET"
-
-    base_ready=bool(signal in {"BUY","SELL"} and score>=FIBONACCI_AUTOTRADE_THRESHOLD and rr>=FIBONACCI_MIN_RR)
-    levels=fib.get("levels") or {}
-    ext={
-        "1.272": round((float((fib.get("anchor_high") or {}).get("price") or 0)+float(fib.get("range") or 0)*0.272),4)
-                 if direction=="BUY" else round((float((fib.get("anchor_low") or {}).get("price") or 0)-float(fib.get("range") or 0)*0.272),4) if direction=="SELL" else None,
-        "1.618": round((float((fib.get("anchor_high") or {}).get("price") or 0)+float(fib.get("range") or 0)*0.618),4)
-                 if direction=="BUY" else round((float((fib.get("anchor_low") or {}).get("price") or 0)-float(fib.get("range") or 0)*0.618),4) if direction=="SELL" else None,
-    }
-    return {
-        **base,
-        "signal":signal,"confidence":int(score),"score":int(score),
-        "entry":round(entry,4) if entry is not None and signal!="WAIT" else None,
-        "stop_loss":round(sl,4) if sl is not None and signal!="WAIT" else None,
-        "take_profit":[round(x,4) for x in targets] if signal!="WAIT" else [],
-        "risk_reward":round(rr,2),
-        "fibonacci_autotrade_eligible":base_ready,
-        "auto_trade_eligible":base_ready,
-        "blockedReason":blocked,
-        "reason":f"{signal} · Fib 50-61.8 confluence · score {score}/100 · RR {rr:.2f}" if signal!="WAIT" else str(blocked or "WAIT"),
-        "market_regime":regime,
-        "htf":{"h4":h4,"h1":h1,"aligned":htf_aligned},
-        "impulse":{"direction":fib.get("direction"),"range":fib.get("range"),"atr_multiple":round(impulse_atr,2),
-                   "anchor_low":fib.get("anchor_low"),"anchor_high":fib.get("anchor_high")},
-        "fibonacci":{
-            "levels":levels,"preferred_zone":fib_zone,"nearest_level":fib.get("nearest_level"),
-            "in_preferred_zone":fib_zone_ok,"extension_targets":ext,
-        },
-        "snr":{"zone":snr_zone,"overlap":snr_overlap},
-        "order_block":ob,"fvg":fvg,
-        "institutional_overlap":{"order_block":ob_overlap,"fvg":fvg_overlap},
-        "liquidity":sweep,
-        "mss":{"m5":mss5,"m15":mss15,"m5_level":mss5_level,"m15_level":mss15_level},
-        "momentum":momentum,
-        "checks":checks,
-        "signal_threshold":FIBONACCI_SIGNAL_THRESHOLD,
-        "autotrade_threshold":FIBONACCI_AUTOTRADE_THRESHOLD,
-        "min_autotrade_rr":FIBONACCI_MIN_RR,
-        "required_total_confirmations":FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS,
-        "strategy_chain":["H4/H1 Trend","Strong Impulse","Auto Swing","Fib 38.2/50/61.8/78.6",
-                          "50-61.8 Preferred Zone","SNR Overlap","OB/FVG Overlap","Liquidity Sweep",
-                          "M15/M5 MSS/BOS","Momentum","AI Validation","RR informational",
-                          "3-strategy Confirmation","MT5 AutoTrade"],
-        "evaluated_at":datetime.now(timezone.utc).isoformat(),
-    }
-
-async def build_fibonacci_engine(symbol:str="XAU/USD") -> dict[str,Any]:
-    key=clean_symbol(symbol)
-    try:
-        (c4,m4,w4),(c1,m1,w1),(c30,m30,w30),(c15,m15,w15),(c5,m5,w5)=await asyncio.gather(
-            get_candles(key,"4h",260),get_candles(key,"1h",260),get_candles(key,"30min",260),
-            get_candles(key,"15min",260),get_candles(key,"5min",260)
-        )
-        item=_fibonacci_strategy_2026(c4,c1,c30,c15,c5)
-        item["candle_time"]=c5[-1].get("time") if c5 else None
-        try:
-            item["ai_validation"]=await ai_validate_module_signal(FIBONACCI_SOURCE,key,"5min",item.get("candle_time"),item)
-        except Exception as exc:
-            item["ai_validation"]={"mode":"fallback","signal":item.get("signal","WAIT"),"confidence":0,
-                                   "agreement":0,"risk_flags":["AI validation exception"],"reasoning":str(exc)[:240]}
-        return {"ok":True,"symbol":key,"source":FIBONACCI_SOURCE,"item":item,
-                "generated_at":datetime.now(timezone.utc).isoformat(),
-                "warnings":[x for x in (w4,w1,w30,w15,w5) if x]}
-    except Exception as exc:
-        return {"ok":False,"symbol":key,"source":FIBONACCI_SOURCE,"reason":str(exc),
-                "item":{"signal":"WAIT","confidence":0,"score":0,
-                        "fibonacci_autotrade_eligible":False,"m1_blocked":True},
-                "generated_at":datetime.now(timezone.utc).isoformat()}
-
-@app.get("/api/v1/fibonacci-engine/{symbol:path}")
-async def fibonacci_engine_endpoint(symbol:str, authorization:str|None=Header(default=None),
-                                    session:Session=Depends(db)) -> dict[str,Any]:
-    require_admin(authorization,session)
-    return await build_fibonacci_engine(symbol)
-
-
 def _snr(candles: list[dict[str, Any]]) -> dict[str, Any]:
     """Strong-zone SNR levels. Prefer repeatedly tested swing clusters over one-off extremes."""
     z=_snr_zone_analysis(candles)
@@ -4027,32 +3209,12 @@ def _trendline_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
         confirmation="WAIT"
 
     power=int(max(0,min(99,round(
-        42 + min(32,touches*9) + min(12,max(0,(n-p2[0]))/5)
-        + (10 if breakout!="NO" else 0) + (10 if retest=="YES" else 0)
-        - min(24,violations*3)
+        45 + min(30,touches*9) + min(12,max(0,(n-p2[0]))/5)
+        + (10 if breakout!="NO" else 0) + (8 if retest=="YES" else 0)
+        - min(20,violations*2)
     ))))
     trend="BULLISH" if mode=="UP" else "BEARISH" if mode=="DOWN" else "NEUTRAL"
-
-    # Pro V3 gate: a normal trend-line hold is tradable only on a RECENT third
-    # touch with candle rejection. Breakout entries require breakout + retest.
-    # Two-touch lines remain analytical only.
-    cur_open=float(candles[current_i]["open"])
-    cur_high=float(candles[current_i]["high"])
-    cur_low=float(candles[current_i]["low"])
-    recent_third_touch=touches>=3 and any(i>=n-3 for i in touch_idxs)
-    bullish_rejection=cur_low<=line_cur+tol and cur_close>cur_open and cur_close>=line_cur-tol*0.05
-    bearish_rejection=cur_high>=line_cur-tol and cur_close<cur_open and cur_close<=line_cur+tol*0.05
-    clean_line=violations<=1 and power>=80
-    setup="WAIT"
-    sig="WAIT"
-    if direction=="BULLISH" and mode=="UP" and breakout=="NO" and recent_third_touch and bullish_rejection and clean_line:
-        sig="BUY"; setup="CONFIRMED_THIRD_TOUCH"; confirmation="THIRD_TOUCH_BUY"
-    elif direction=="BEARISH" and mode=="DOWN" and breakout=="NO" and recent_third_touch and bearish_rejection and clean_line:
-        sig="SELL"; setup="CONFIRMED_THIRD_TOUCH"; confirmation="THIRD_TOUCH_SELL"
-    elif direction=="BULLISH" and confirmation=="CONFIRMED_BUY" and breakout=="BULLISH_BREAK" and retest=="YES" and clean_line:
-        sig="BUY"; setup="BREAKOUT_RETEST"
-    elif direction=="BEARISH" and confirmation=="CONFIRMED_SELL" and breakout=="BEARISH_BREAK" and retest=="YES" and clean_line:
-        sig="SELL"; setup="BREAKOUT_RETEST"
+    sig="BUY" if confirmation in {"CONFIRMED_BUY","BULLISH_HOLD"} and direction=="BULLISH" else "SELL" if confirmation in {"CONFIRMED_SELL","BEARISH_HOLD"} and direction=="BEARISH" else "WAIT"
 
     swing_highs=[{"index":pt[0],"time":candles[pt[0]].get("time"),"price":round(pt[1],4)} for pt in highs[-20:]]
     swing_lows=[{"index":pt[0],"time":candles[pt[0]].get("time"),"price":round(pt[1],4)} for pt in lows[-20:]]
@@ -4063,124 +3225,57 @@ def _trendline_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
             "swing_highs":swing_highs,"swing_lows":swing_lows,
             "breakout_index":breakout_idx,"retest_index":retest_idx,
             "trend_power":power,"breakout":breakout,"retest":retest,"confirmation":confirmation,
-            "current_line":round(line_cur,4),"signal":sig,"setup":setup,
-            "confirmations":(3 if recent_third_touch else 2)+(1 if clean_line else 0)+(1 if retest=="YES" else 0),
-            "quality_gates":{"third_touch":recent_third_touch,"clean_line":clean_line,"bullish_rejection":bullish_rejection,"bearish_rejection":bearish_rejection},
+            "current_line":round(line_cur,4),"signal":sig,
             "timeframe_candles":n,
-            "reason":f"{('Support' if mode=='UP' else 'Resistance' if mode=='DOWN' else 'Neutral')} trend line · {touches} touch · power {power}% · structure {direction} · {breakout} · retest {retest} · setup {setup}."}
+            "reason":f"{('Support' if mode=='UP' else 'Resistance' if mode=='DOWN' else 'Neutral')} trend line · {touches} touch · power {power}% · structure {direction} · {breakout} · retest {retest}."}
 
 
 def _snr_zone_analysis(candles: list[dict[str, Any]]) -> dict[str, Any]:
-    """Institutional SNR V3: clustered zones + confirmed rejection/breakout + regime filter."""
-    closed=candles[:-1] if len(candles)>=50 else candles
-    current=float(candles[-1]["close"])
-    cur=closed[-1]; prev=closed[-2]
-    highs,lows=_swing_points(closed,2,2)
-    avtr=max(atr(closed),current*0.0004)
-    high_vals=[float(v) for _,v in highs[-30:]] or [float(cur["high"])]
-    low_vals=[float(v) for _,v in lows[-30:]] or [float(cur["low"])]
-    width=max(avtr*0.24,current*0.00040)
-
-    def best_cluster(vals,side):
+    current=float(candles[-1]["close"]); highs,lows=_swing_points(candles,2,2); avtr=max(atr(candles), current*0.0004)
+    high_vals=[float(v) for _,v in highs[-24:]] or [float(candles[-1]["high"])]
+    low_vals=[float(v) for _,v in lows[-24:]] or [float(candles[-1]["low"])]
+    width=max(avtr*0.28, current*0.00045)
+    def best_cluster(vals, side):
+        # Score each swing level by repeated touches, recency and separation from price.
         candidates=[]
         for level in vals:
             lo,hi=level-width,level+width
             touches=sum(1 for v in vals if lo<=v<=hi)
-            recency=sum(1 for x in closed[-80:] if lo<=float(x["low" if side=="support" else "high"])<=hi)
+            recency=sum(1 for c in candles[-60:] if lo<=float(c["low" if side=="support" else "high"])<=hi)
             distance=abs(current-level)/max(current,1e-9)
-            score=touches*14+min(recency,12)*3.2-min(distance*1200,20)
-            candidates.append((score,level,touches,recency))
-        return max(candidates,key=lambda x:x[0]) if candidates else (0,current,0,0)
-
+            candidates.append((touches*12+min(recency,10)*3-min(distance*1000,18),level,touches,recency))
+        return max(candidates,key=lambda x:x[0]) if candidates else (0,float(candles[-1]["close"]),0,0)
     _,support,sret,srec=best_cluster(low_vals,"support")
     _,resistance,rret,rrec=best_cluster(high_vals,"resistance")
-
     def zone(level,side,retests,recency):
         lo,hi=level-width,level+width
         in_zone=lo<=current<=hi
         dist=abs(current-level)/max(current,1e-9)*100
-        proximity=max(0,20-dist*180)
-        strength=min(99,round(42+retests*8+min(recency,12)*2.6+proximity+(10 if in_zone else 0)))
+        proximity=max(0,18-dist*160)
+        strength=min(99,round(48+retests*7+min(recency,10)*2.5+proximity+(10 if in_zone else 0)))
         if side=="support": status="IN ZONE" if in_zone else "BROKEN" if current<lo else "ACTIVE"
         else: status="IN ZONE" if in_zone else "BROKEN" if current>hi else "ACTIVE"
-        return {"mid":round(level,4),"low":round(lo,4),"high":round(hi,4),"retests":int(retests),
-                "recency_touches":int(recency),"strength":int(strength),"distance_pct":round(dist,3),
-                "status":status,"quality":"INSTITUTIONAL" if strength>=88 else "STRONG" if strength>=82 else "GOOD" if strength>=74 else "WEAK"}
-
+        return {"mid":round(level,4),"low":round(lo,4),"high":round(hi,4),"retests":int(retests),"strength":int(strength),"distance_pct":round(dist,3),"status":status,"quality":"STRONG" if strength>=82 else "GOOD" if strength>=72 else "WEAK"}
     sup,res=zone(support,"support",sret,srec),zone(resistance,"resistance",rret,rrec)
-    range_width=max(0.0,float(res["low"])-float(sup["high"]))
-    healthy_range=range_width>=avtr*1.20
-
-    body=abs(float(cur["close"])-float(cur["open"]))
-    rng=max(float(cur["high"])-float(cur["low"]),1e-9)
-    body_ratio=body/rng
-    lower_wick=min(float(cur["open"]),float(cur["close"]))-float(cur["low"])
-    upper_wick=float(cur["high"])-max(float(cur["open"]),float(cur["close"]))
-    bull_reject=float(cur["close"])>float(cur["open"]) and (lower_wick>=body*0.55 or body_ratio>=0.55)
-    bear_reject=float(cur["close"])<float(cur["open"]) and (upper_wick>=body*0.55 or body_ratio>=0.55)
-
-    strong_sup=sup["strength"]>=85 and sup["retests"]>=2
-    strong_res=res["strength"]>=85 and res["retests"]>=2
-    support_rejection=strong_sup and (sup["low"]<=float(cur["low"])<=sup["high"] or sup["low"]<=float(cur["close"])<=sup["high"]) and bull_reject
-    resistance_rejection=strong_res and (res["low"]<=float(cur["high"])<=res["high"] or res["low"]<=float(cur["close"])<=res["high"]) and bear_reject
-    breakout_up=strong_res and float(prev["close"])<=res["high"] and float(cur["close"])>res["high"]+avtr*0.10 and bull_reject
-    breakout_down=strong_sup and float(prev["close"])>=sup["low"] and float(cur["close"])<sup["low"]-avtr*0.10 and bear_reject
-
-    regime=_adaptive_regime(closed)
-    closes=[float(x["close"]) for x in closed]
-    ema20=_ema(closes[-100:],20); ema50=_ema(closes[-150:],50)
-    signal="WAIT"; setup="WAIT"; confirmations=0
-    if healthy_range and support_rejection:
-        signal="BUY"; setup="SUPPORT_REJECTION"
-        confirmations=4+int(ema20>=ema50)+int(regime["regime"]!="TRENDING_DOWN")
-    elif healthy_range and resistance_rejection:
-        signal="SELL"; setup="RESISTANCE_REJECTION"
-        confirmations=4+int(ema20<=ema50)+int(regime["regime"]!="TRENDING_UP")
-    elif breakout_up:
-        signal="BUY"; setup="RESISTANCE_BREAKOUT"
-        confirmations=4+int(ema20>=ema50)+int(regime["regime"]!="TRENDING_DOWN")
-    elif breakout_down:
-        signal="SELL"; setup="SUPPORT_BREAKDOWN"
-        confirmations=4+int(ema20<=ema50)+int(regime["regime"]!="TRENDING_UP")
-
-    if signal=="BUY" and regime["regime"]=="TRENDING_DOWN" and regime["trend_strength"]>=65:
-        signal="WAIT"; setup="REGIME_CONFLICT"
-    if signal=="SELL" and regime["regime"]=="TRENDING_UP" and regime["trend_strength"]>=65:
-        signal="WAIT"; setup="REGIME_CONFLICT"
-
-    zone_strength=sup["strength"] if setup in {"SUPPORT_REJECTION","SUPPORT_BREAKDOWN"} else res["strength"]
-    confidence=int(max(0,min(97,zone_strength+(4 if confirmations>=5 else 0)+(3 if body_ratio>=0.55 else 0))))
-    entry=current; stop_loss=None; take_profit=[]
-    if signal=="BUY":
-        if setup=="RESISTANCE_BREAKOUT":
-            risk=max(avtr*0.80,current-float(res["high"]))
-            stop_loss=current-risk
-            take_profit=[current+risk*1.5,current+risk*2.2]
-        else:
-            stop_loss=float(sup["low"])-avtr*0.12
-            targets=[float(res["mid"]),float(res["high"])]
-            take_profit=[x for x in targets if x>current][:2]
-    elif signal=="SELL":
-        if setup=="SUPPORT_BREAKDOWN":
-            risk=max(avtr*0.80,float(sup["low"])-current)
-            stop_loss=current+risk
-            take_profit=[current-risk*1.5,current-risk*2.2]
-        else:
-            stop_loss=float(res["high"])+avtr*0.12
-            targets=[float(sup["mid"]),float(sup["low"])]
-            take_profit=[x for x in targets if x<current][:2]
-    if signal in {"BUY","SELL"} and len(take_profit)<2:
-        signal="WAIT"; setup="NO_FRESH_TARGET"; stop_loss=None; take_profit=[]
-
+    # A signal is allowed only at a strong zone or a clean breakout of a strong zone.
+    bullish_zone=sup["strength"]>=82 and (sup["status"]=="IN ZONE" or current>sup["high"])
+    bearish_zone=res["strength"]>=82 and (res["status"]=="IN ZONE" or current<res["low"])
+    if sup["status"]=="IN ZONE" and sup["strength"]>=82: signal="BUY"
+    elif res["status"]=="IN ZONE" and res["strength"]>=82: signal="SELL"
+    elif current>res["high"] and res["strength"]>=82: signal="BUY"
+    elif current<sup["low"] and sup["strength"]>=82: signal="SELL"
+    else: signal="WAIT"
+    confidence=max(sup["strength"],res["strength"]) if signal!="WAIT" else round((sup["strength"]+res["strength"])/2)
     pos="ABOVE RESISTANCE" if current>res["high"] else "BELOW SUPPORT" if current<sup["low"] else "NEAR SUPPORT" if current<=sup["mid"] else "NEAR RESISTANCE" if current>=res["mid"] else "BETWEEN ZONES"
+    if signal=="BUY": entry=current; stop_loss=sup["low"]; take_profit=[res["mid"],res["high"]]
+    elif signal=="SELL": entry=current; stop_loss=res["high"]; take_profit=[sup["mid"],sup["low"]]
+    else: entry=current; stop_loss=None; take_profit=[]
     strongest=max(sup,res,key=lambda z:z["strength"])
-    reason=f"{setup}; {confirmations}/6 confirmations; strongest zone {strongest['strength']}%; range {range_width/max(avtr,1e-9):.2f} ATR; regime {regime['regime']}."
-    return {"support":sup,"resistance":res,"signal":signal,"setup":setup,"confidence":confidence,
-            "confirmations":confirmations,"position":pos,"entry":round(entry,4),
-            "stop_loss":round(stop_loss,4) if stop_loss is not None else None,
-            "take_profit":[round(v,4) for v in take_profit],"strongest_zone":strongest,
-            "healthy_range":healthy_range,"market_regime":regime,
-            "reason":reason,"method":"Institutional SNR V3 · cluster/retests/rejection/breakout/regime"}
+    reason=f"{pos.lower()}; strongest zone {strongest['strength']}% ({strongest['quality']}); Support {sup['strength']}% · Resistance {res['strength']}%."
+    return {"support":sup,"resistance":res,"signal":signal,"confidence":confidence,"position":pos,
+            "entry":round(entry,4),"stop_loss":round(stop_loss,4) if stop_loss is not None else None,
+            "take_profit":[round(v,4) for v in take_profit],
+            "strongest_zone":strongest,"reason":reason,"method":"Strong-zone SNR · clustered swings + retests + proximity + volatility"}
 
 
 def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blocked: bool=False) -> dict[str, Any]:
@@ -4299,1206 +3394,36 @@ def build_advanced_signal(candles: list[dict[str, Any]], interval: str, news_blo
     return _enhance_strategy_result(result, candles, interval)
 
 
-_GOLD_NEWS_GUARD_CACHE: dict[str, Any] = {"ts": 0.0, "blocked": False, "reason": None, "provider": None, "known": False, "events": 0}
-
-async def _gold_strategy_news_guard() -> dict[str, Any]:
-    """Best-effort USD high-impact news guard with a five-minute cache.
-
-    The strategy never invents a news event. If all live providers are unavailable,
-    the guard is marked unknown and the score loses the news-filter points, but the
-    rest of the deterministic market analysis still remains visible.
-    """
-    now_ts=datetime.now(timezone.utc).timestamp()
-    if now_ts-float(_GOLD_NEWS_GUARD_CACHE.get("ts") or 0) < 300:
-        return dict(_GOLD_NEWS_GUARD_CACHE)
-    data=None
-    try:
-        if TRADING_ECONOMICS_API_KEY:
-            data=await _calendar_tradingeconomics(2)
-        elif FINNHUB_API_KEY:
-            data=await _calendar_finnhub(2)
-        else:
-            data=await _calendar_forexfactory(2)
-    except Exception as exc:
-        data={"mode":"error","provider":None,"events":[],"warning":str(exc)}
-    events=(data or {}).get("events") or []
-    blocked,reason=news_blackout(events)
-    known=bool((data or {}).get("provider")) and str((data or {}).get("mode") or "").lower() not in {"error","unconfigured"}
-    out={
-        "ts":now_ts,"blocked":bool(blocked),"reason":reason,
-        "provider":(data or {}).get("provider"),"known":known,
-        "events":len(events),"warning":(data or {}).get("warning"),
-    }
-    _GOLD_NEWS_GUARD_CACHE.clear(); _GOLD_NEWS_GUARD_CACHE.update(out)
-    return dict(out)
-
-def _gold_tf_bias(candles: list[dict[str, Any]]) -> dict[str, Any]:
-    if len(candles)<55:
-        return {"bias":"NEUTRAL","ema20":None,"ema50":None,"structure":"NEUTRAL"}
-    data=candles[:-1] if len(candles)>2 else candles
-    closes=[float(x["close"]) for x in data]
-    price=closes[-1]
-    e20=_ema(closes[-100:],20); e50=_ema(closes[-160:],50)
-    highs,lows=_swing_points(data,2,2)
-    hh=len(highs)>=2 and highs[-1][1]>highs[-2][1]
-    hl=len(lows)>=2 and lows[-1][1]>lows[-2][1]
-    lh=len(highs)>=2 and highs[-1][1]<highs[-2][1]
-    ll=len(lows)>=2 and lows[-1][1]<lows[-2][1]
-    structure="BULLISH" if hh and hl else "BEARISH" if lh and ll else "MIXED"
-    if structure=="BULLISH" and e20>e50 and price>e20: bias="BULLISH"
-    elif structure=="BEARISH" and e20<e50 and price<e20: bias="BEARISH"
-    elif e20>e50 and price>e20: bias="BULLISH"
-    elif e20<e50 and price<e20: bias="BEARISH"
-    else: bias="NEUTRAL"
-    return {"bias":bias,"ema20":round(e20,4),"ema50":round(e50,4),"structure":structure,"price":round(price,4)}
-
-def _gold_strategy_2026(candles: list[dict[str, Any]], interval: str,
-                        c4: list[dict[str, Any]], c1: list[dict[str, Any]],
-                        c15: list[dict[str, Any]], c5: list[dict[str, Any]],
-                        news_state: dict[str, Any]) -> dict[str, Any]:
-    """Gold Strategy 2026: trend + pullback/breakout + confirmation + risk.
-
-    H4/H1 establish direction. SNR defines the trade location. M15/M5, RSI/MACD
-    and price action confirm the setup. Volatility and USD high-impact news are
-    filters. A market signal needs >=80; AutoTrade needs >=85, RR informational and later
-    also passes the common AI/market/execution gates plus the 3-confirmation rule.
-    """
-    interval=validate_interval(interval)
-    if min(len(candles),len(c4),len(c1),len(c15),len(c5)) < 55:
-        return {"interval":interval,"signal":"WAIT","confidence":0,"score":0,"setup":"INSUFFICIENT_DATA",
-                "entry":None,"stop_loss":None,"take_profit":[],"risk_reward":0,
-                "signal_lab_autotrade_eligible":False,"auto_trade_eligible":False,
-                "reason":"INSUFFICIENT_CLOSED_CANDLES","strategy_engine":"Gold Strategy 2026","strategy_version":"GOLD-2026-V1"}
-
-    closed=candles[:-1] if len(candles)>2 else candles
-    cur=closed[-1]; prev=closed[-2]
-    live_price=float(candles[-1]["close"])
-    close=float(cur["close"]); op=float(cur["open"]); hi=float(cur["high"]); lo=float(cur["low"])
-    prev_close=float(prev["close"])
-    a=max(atr(closed),live_price*0.00025)
-
-    h4=_gold_tf_bias(c4); h1=_gold_tf_bias(c1); b15=_gold_tf_bias(c15); b5=_gold_tf_bias(c5)
-    htf_aligned=h4["bias"]==h1["bias"] and h4["bias"] in {"BULLISH","BEARISH"}
-    direction="BUY" if htf_aligned and h4["bias"]=="BULLISH" else "SELL" if htf_aligned and h4["bias"]=="BEARISH" else "WAIT"
-
-    zones=_snr_zone_analysis(closed)
-    h1_zones=_snr_zone_analysis(c1[:-1] if len(c1)>2 else c1)
-    sup=zones["support"]; res=zones["resistance"]
-    body=abs(close-op); rng=max(hi-lo,1e-9); body_ratio=body/rng
-    bullish_candle=close>op and body_ratio>=0.42
-    bearish_candle=close<op and body_ratio>=0.42
-
-    support_touch=(lo<=float(sup["high"]) and hi>=float(sup["low"])) or float(sup["distance_pct"])<=0.55
-    resistance_touch=(hi>=float(res["low"]) and lo<=float(res["high"])) or float(res["distance_pct"])<=0.55
-    pullback_buy=direction=="BUY" and sup["strength"]>=78 and sup["status"]!="BROKEN" and support_touch and bullish_candle
-    pullback_sell=direction=="SELL" and res["strength"]>=78 and res["status"]!="BROKEN" and resistance_touch and bearish_candle
-    breakout_buy=direction=="BUY" and prev_close<=float(res["high"]) and close>float(res["high"])+a*0.08 and bullish_candle
-    breakout_sell=direction=="SELL" and prev_close>=float(sup["low"]) and close<float(sup["low"])-a*0.08 and bearish_candle
-    setup_ok=pullback_buy or pullback_sell or breakout_buy or breakout_sell
-    setup="PULLBACK_BUY" if pullback_buy else "PULLBACK_SELL" if pullback_sell else "BREAKOUT_BUY" if breakout_buy else "BREAKOUT_SELL" if breakout_sell else "WAIT"
-
-    mtf_align=(direction=="BUY" and b15["bias"]=="BULLISH" and b5["bias"]=="BULLISH") or (direction=="SELL" and b15["bias"]=="BEARISH" and b5["bias"]=="BEARISH")
-
-    closes=[float(x["close"]) for x in closed]
-    r=float(rsi(closed))
-    macd=_ema(closes[-140:],12)-_ema(closes[-140:],26)
-    prior=closes[:-1]
-    macd_prev=(_ema(prior[-140:],12)-_ema(prior[-140:],26)) if len(prior)>=30 else macd
-    momentum_ok=(direction=="BUY" and 52<=r<=72 and macd>=0 and macd>=macd_prev) or (direction=="SELL" and 28<=r<=48 and macd<=0 and macd<=macd_prev)
-    price_action_ok=(direction=="BUY" and bullish_candle) or (direction=="SELL" and bearish_candle)
-
-    regime=_adaptive_regime(closed)
-    vr=float(regime.get("volatility_ratio") or 1.0)
-    volatility_ok=0.68<=vr<=1.80
-    if setup.startswith("BREAKOUT") and 1.80<vr<=2.05 and int(regime.get("trend_strength") or 0)>=60:
-        volatility_ok=True
-
-    news_blocked=bool(news_state.get("blocked"))
-    news_known=bool(news_state.get("known"))
-
-    checks=[]; score=0
-    def add(name:str,pts:int,ok:bool,detail:str):
-        nonlocal score
-        if ok: score+=pts
-        checks.append({"name":name,"points":pts if ok else 0,"max_points":pts,"status":"PASS" if ok else "MISS","detail":detail})
-
-    add("H4/H1 Trend",25,htf_aligned,f"H4={h4['bias']} H1={h1['bias']}")
-    add("SNR Pullback/Breakout",20,setup_ok,f"{setup}; S={sup['strength']} R={res['strength']}")
-    add("M15/M5 Alignment",15,mtf_align,f"M15={b15['bias']} M5={b5['bias']}")
-    add("RSI/MACD",15,momentum_ok,f"RSI={r:.1f} MACD={macd:.5f}")
-    add("Price Action",10,price_action_ok,f"body={body_ratio:.2f}")
-    add("Volatility",10,volatility_ok,f"range ratio={vr:.2f} regime={regime.get('regime')}")
-    news_points_ok=not news_blocked and news_known
-    add("News Filter",5,news_points_ok,
-        str(news_state.get("reason") or (f"provider={news_state.get('provider')}" if news_known else "live news source unavailable")))
-
-    mandatory_ok=htf_aligned and setup_ok and mtf_align and price_action_ok and volatility_ok and not news_blocked
-    wait_code=None
-    if not htf_aligned: wait_code="HTF_TREND_CONFLICT"
-    elif not setup_ok: wait_code="NO_PULLBACK_OR_BREAKOUT_CONFIRMATION"
-    elif not mtf_align: wait_code="M15_M5_MISALIGN"
-    elif not momentum_ok: wait_code="MOMENTUM_NOT_CONFIRMED"
-    elif not price_action_ok: wait_code="NO_PRICE_ACTION_CONFIRMATION"
-    elif not volatility_ok: wait_code="VOLATILITY_FILTER"
-    elif news_blocked: wait_code="NEWS_BLACKOUT"
-    elif score<GOLD_STRATEGY_SIGNAL_THRESHOLD: wait_code="LOW_CONFIDENCE"
-
-    signal=direction if mandatory_ok and score>=GOLD_STRATEGY_SIGNAL_THRESHOLD and direction!="WAIT" else "WAIT"
-
-    highs,lows=_swing_points(closed,2,2)
-    recent_lows=[v for _,v in lows[-8:]]
-    recent_highs=[v for _,v in highs[-8:]]
-    if direction=="BUY":
-        base=float(sup["low"]) if setup.startswith("PULLBACK") else float(res["low"])
-        candidates=[base]+recent_lows
-        sl=min(candidates)-a*0.12 if candidates else live_price-a*1.2
-    elif direction=="SELL":
-        base=float(res["high"]) if setup.startswith("PULLBACK") else float(sup["high"])
-        candidates=[base]+recent_highs
-        sl=max(candidates)+a*0.12 if candidates else live_price+a*1.2
-    else:
-        sl=None
-
-    targets=[]
-    rr=0.0
-    if direction in {"BUY","SELL"} and sl is not None:
-        risk=abs(live_price-sl)
-        raw_targets=[]
-        for series in (closed,c15,c1,c4):
-            hs,ls=_swing_points(series[:-1] if len(series)>2 else series,2,2)
-            raw_targets.extend(v for _,v in (hs if direction=="BUY" else ls))
-        raw_targets.extend([
-            float(res["mid"]),float(res["high"]),float(h1_zones["resistance"]["mid"]),float(h1_zones["resistance"]["high"])
-        ] if direction=="BUY" else [
-            float(sup["mid"]),float(sup["low"]),float(h1_zones["support"]["mid"]),float(h1_zones["support"]["low"])
-        ])
-        if direction=="BUY":
-            valid=sorted({round(v,4) for v in raw_targets if v>live_price and (v-live_price)>=risk*GOLD_STRATEGY_MIN_RR})
-        else:
-            valid=sorted({round(v,4) for v in raw_targets if v<live_price and (live_price-v)>=risk*GOLD_STRATEGY_MIN_RR},reverse=True)
-        targets=valid[:2]
-        if targets:
-            rr=((targets[0]-live_price)/risk) if direction=="BUY" else ((live_price-targets[0])/risk)
-            rr=max(0.0,rr)
-
-    if signal in {"BUY","SELL"} and (not targets or rr<GOLD_STRATEGY_MIN_RR):
-        signal="WAIT"; wait_code="NO_VALID_STRUCTURAL_TARGET"
-
-    base_autotrade=bool(
-        signal in {"BUY","SELL"} and score>=GOLD_STRATEGY_AUTOTRADE_THRESHOLD
-        and rr>=GOLD_STRATEGY_MIN_RR and interval not in {"1min","1m","m1"} and not news_blocked
-    )
-
-    reason=(
-        f"{signal} · {setup} · score {score}/100 · H4/H1 {h4['bias']} · "
-        f"M15/M5 {b15['bias']}/{b5['bias']} · RSI {r:.1f} · RR {rr:.2f}"
-        if signal in {"BUY","SELL"}
-        else f"{wait_code or 'WAIT'} · score {score}/100 · H4/H1 {h4['bias']}/{h1['bias']}"
-    )
-    return {
-        "interval":interval,"signal":signal,"direction_candidate":direction,"confidence":int(score),"score":int(score),
-        "setup":setup,"entry":round(live_price,4) if direction!="WAIT" else None,
-        "stop_loss":round(sl,4) if sl is not None else None,"take_profit":[round(x,4) for x in targets],
-        "risk_reward":round(rr,2),"signal_threshold":GOLD_STRATEGY_SIGNAL_THRESHOLD,
-        "autotrade_threshold":GOLD_STRATEGY_AUTOTRADE_THRESHOLD,"min_autotrade_rr":GOLD_STRATEGY_MIN_RR,
-        "signal_lab_autotrade_eligible":base_autotrade,"auto_trade_eligible":base_autotrade,
-        "m1_blocked":interval in {"1min","1m","m1"},"wait_code":wait_code,
-        "htf":{"h4":h4,"h1":h1,"aligned":htf_aligned},"lower_tf":{"m15":b15,"m5":b5,"aligned":mtf_align},
-        "snr":zones,"h1_snr":h1_zones,"rsi":round(r,2),"macd":round(macd,6),
-        "price_action":"BULLISH" if bullish_candle else "BEARISH" if bearish_candle else "NEUTRAL",
-        "market_regime":regime,"news_filter":news_state,"checks":checks,
-        "components":{"HTF Trend":{"H4":h4["bias"],"H1":h1["bias"]},
-                      "SNR Setup":{"setup":setup,"support":sup,"resistance":res},
-                      "M15/M5":{"M15":b15["bias"],"M5":b5["bias"]},
-                      "RSI/MACD":{"rsi":round(r,2),"macd":round(macd,6)},
-                      "Price Action":{"state":"BULLISH" if bullish_candle else "BEARISH" if bearish_candle else "NEUTRAL"},
-                      "Volatility":regime,"News Filter":news_state},
-        "reason":reason,
-        "strategy_engine":"ThinkMarkets-style Gold Strategy 2026",
-        "strategy_version":"GOLD-2026-V1",
-        "strategy_chain":["H4/H1 Trend","SNR Pullback/Breakout","M15/M5 Confirmation","RSI/MACD","Price Action","Volatility/News","AI Validation","RR informational","3-confirmation AutoTrade"],
-        "evaluated_at":datetime.now(timezone.utc).isoformat(),
-    }
-
-def _adaptive_ict_trend_strategy(candles: list[dict[str, Any]], interval: str,
-                                 c4: list[dict[str, Any]], c1: list[dict[str, Any]],
-                                 c15: list[dict[str, Any]], c5: list[dict[str, Any]],
-                                 news_state: dict[str, Any]) -> dict[str, Any]:
-    """XAUUSD Adaptive ICT Trend Strategy.
-
-    Score: H4 15 + H1 15 + liquidity 15 + MSS/CHoCH 15 + OB 10 + FVG 10
-    + M15/M5 alignment 10 + session 5 + macro/news 5 = 100.
-    Signal >=80. AutoTrade candidate >=85 + RR informational. M1 is analysis-only.
-    """
-    interval=validate_interval(interval)
-    if min(len(candles),len(c4),len(c1),len(c15),len(c5)) < 60:
-        return {"interval":interval,"signal":"WAIT","confidence":0,"score":0,"setup":"INSUFFICIENT_DATA",
-                "entry":None,"stop_loss":None,"take_profit":[],"risk_reward":0,
-                "signals_autotrade_eligible":False,"auto_trade_eligible":False,
-                "reason":"INSUFFICIENT_CLOSED_CANDLES","strategy_engine":"XAUUSD Adaptive ICT Trend","strategy_version":"AIT-2026-V1"}
-
-    h4=_ict_tf_bias(c4); h1=_ict_tf_bias(c1); b15=_ict_tf_bias(c15); b5=_ict_tf_bias(c5)
-    h4_ok=h4.get("bias") in {"BULLISH","BEARISH"}
-    h1_ok=h1.get("bias")==h4.get("bias") and h4_ok
-    direction="BUY" if h1_ok and h4["bias"]=="BULLISH" else "SELL" if h1_ok and h4["bias"]=="BEARISH" else "WAIT"
-
-    pd=_ict_premium_discount(c1)
-    pd_ok=(direction=="BUY" and pd.get("zone")=="DISCOUNT") or (direction=="SELL" and pd.get("zone")=="PREMIUM")
-
-    expected_sweep="SSL_SWEEP" if direction=="BUY" else "BSL_SWEEP" if direction=="SELL" else "NONE"
-    sweep5=_ict_recent_liquidity_sweep(c5,5)
-    sweep15=_ict_recent_liquidity_sweep(c15,4)
-    sweep=sweep5 if sweep5.get("type")==expected_sweep else sweep15 if sweep15.get("type")==expected_sweep else {"type":"NONE","level":None,"extreme":None}
-    sweep_ok=direction!="WAIT" and sweep.get("type")==expected_sweep
-
-    st5=_structure_state(c5[:-1] if len(c5)>2 else c5)
-    st15=_structure_state(c15[:-1] if len(c15)>2 else c15)
-    desired="BULLISH" if direction=="BUY" else "BEARISH" if direction=="SELL" else "NEUTRAL"
-    mss5,mss5_level=_ict_mss(c5,direction) if direction!="WAIT" else (False,None)
-    mss15,mss15_level=_ict_mss(c15,direction) if direction!="WAIT" else (False,None)
-    structure_ok=bool(
-        mss5 or mss15 or
-        st5.get("choch")==desired or st5.get("bos")==desired or
-        st15.get("choch")==desired or st15.get("bos")==desired
-    )
-
-    price=float(c5[-1]["close"]); a5=max(atr(c5),price*0.0002); a15=max(atr(c15),price*0.0003)
-    desired_type="BULLISH" if direction=="BUY" else "BEARISH" if direction=="SELL" else "NONE"
-
-    ob5=_ict_order_block(c5,direction,a5) if direction!="WAIT" else {"type":"NONE","low":None,"high":None,"index":None}
-    ob15=_ict_order_block(c15,direction,a15) if direction!="WAIT" else {"type":"NONE","low":None,"high":None,"index":None}
-    ob=ob5 if ob5.get("type")==desired_type else ob15 if ob15.get("type")==desired_type else {"type":"NONE","low":None,"high":None,"index":None}
-    ob_series=c5 if ob is ob5 else c15
-    ob_retest=_ict_zone_retest(ob_series,ob,direction,5) if direction!="WAIT" else {"retested":False}
-    ob_ok=bool(ob.get("type")==desired_type and ob_retest.get("retested"))
-
-    fvg5=_ict_fvg(c5); fvg15=_ict_fvg(c15)
-    fvg=fvg5 if fvg5.get("type")==desired_type else fvg15 if fvg15.get("type")==desired_type else {"type":"NONE","low":None,"high":None,"index":None}
-    fvg_series=c5 if fvg is fvg5 else c15
-    fvg_retest=_ict_zone_retest(fvg_series,fvg,direction,5) if direction!="WAIT" else {"retested":False}
-    fvg_ok=bool(fvg.get("type")==desired_type and fvg_retest.get("retested"))
-
-    mtf_ok=(direction=="BUY" and b15.get("bias")=="BULLISH" and b5.get("bias")=="BULLISH") or \
-           (direction=="SELL" and b15.get("bias")=="BEARISH" and b5.get("bias")=="BEARISH")
-    kz=_ict_killzone(c5[-1].get("time"))
-    session_ok=bool(kz.get("active"))
-
-    regime=_adaptive_regime(c5[:-1] if len(c5)>2 else c5)
-    vr=float(regime.get("volatility_ratio") or 1.0)
-    volatility_ok=0.65<=vr<=2.05
-    news_blocked=bool(news_state.get("blocked"))
-    macro_ok=bool(news_state.get("known")) and not news_blocked
-
-    checks=[]; score=0
-    def add(name:str,points:int,ok:bool,detail:str):
-        nonlocal score
-        if ok: score+=points
-        checks.append({"name":name,"points":points if ok else 0,"max_points":points,
-                       "status":"PASS" if ok else "MISS","detail":detail})
-
-    add("H4 Trend",15,h4_ok,f"H4={h4.get('bias')}")
-    add("H1 Trend",15,h1_ok,f"H1={h1.get('bias')} vs H4={h4.get('bias')}")
-    add("Liquidity Sweep",15,sweep_ok,str(sweep.get("type") or "NONE"))
-    add("MSS / CHoCH / BOS",15,structure_ok,
-        f"M5 MSS={mss5} CHoCH={st5.get('choch')} BOS={st5.get('bos')} | M15 MSS={mss15} CHoCH={st15.get('choch')} BOS={st15.get('bos')}")
-    add("Order Block Retest",10,ob_ok,f"{ob.get('type')} retest={bool(ob_retest.get('retested'))}")
-    add("FVG Retest",10,fvg_ok,f"{fvg.get('type')} retest={bool(fvg_retest.get('retested'))}")
-    add("M15/M5 Alignment",10,mtf_ok,f"M15={b15.get('bias')} M5={b5.get('bias')}")
-    add("Session",5,session_ok,str(kz.get("name") or "OFF"))
-    add("Macro / News",5,macro_ok,
-        str(news_state.get("reason") or (f"provider={news_state.get('provider')}" if news_state.get("known") else "live source unavailable")))
-
-    mandatory_ok=bool(h4_ok and h1_ok and pd_ok and sweep_ok and structure_ok and ob_ok and fvg_ok and mtf_ok and volatility_ok and not news_blocked)
-    wait_code=None
-    if not h4_ok or not h1_ok: wait_code="HTF_TREND_CONFLICT"
-    elif not pd_ok: wait_code="PREMIUM_DISCOUNT_MISMATCH"
-    elif not sweep_ok: wait_code="NO_LIQUIDITY_SWEEP"
-    elif not structure_ok: wait_code="NO_MSS_CHOCH_BOS"
-    elif not ob_ok: wait_code="NO_ORDER_BLOCK_RETEST"
-    elif not fvg_ok: wait_code="NO_FVG_RETEST"
-    elif not mtf_ok: wait_code="M15_M5_MISALIGN"
-    elif not volatility_ok: wait_code="VOLATILITY_FILTER"
-    elif news_blocked: wait_code="NEWS_BLACKOUT"
-    elif score<SIGNALS_SIGNAL_THRESHOLD: wait_code="LOW_CONFIDENCE"
-
-    signal=direction if mandatory_ok and score>=SIGNALS_SIGNAL_THRESHOLD and direction!="WAIT" else "WAIT"
-
-    entry=price if direction!="WAIT" else None
-    sl=None; targets=[]; rr=0.0
-    if direction in {"BUY","SELL"}:
-        zone_lows=[x for x in [sweep.get("extreme"),ob.get("low"),fvg.get("low")] if x is not None]
-        zone_highs=[x for x in [sweep.get("extreme"),ob.get("high"),fvg.get("high")] if x is not None]
-        highs5,lows5=_ict_swings(c5[:-1],2)
-        if direction=="BUY":
-            zone_lows += [v for _,v in lows5[-6:]]
-            sl=(min(float(x) for x in zone_lows)-a5*0.10) if zone_lows else price-a5*1.2
-        else:
-            zone_highs += [v for _,v in highs5[-6:]]
-            sl=(max(float(x) for x in zone_highs)+a5*0.10) if zone_highs else price+a5*1.2
-        risk=abs(price-sl)
-        if risk>0:
-            raw_targets=_ict_liquidity_targets([c5,c15,c1,c4],direction,price)
-            if direction=="BUY":
-                valid=[float(x) for x in raw_targets if float(x)>price and (float(x)-price)/risk>=SIGNALS_MIN_RR]
-            else:
-                valid=[float(x) for x in raw_targets if float(x)<price and (price-float(x))/risk>=SIGNALS_MIN_RR]
-            targets=valid[:3]
-            if targets:
-                rr=((targets[0]-price)/risk) if direction=="BUY" else ((price-targets[0])/risk)
-                rr=max(0.0,rr)
-
-    if signal in {"BUY","SELL"} and (not targets or rr<SIGNALS_MIN_RR):
-        signal="WAIT"; wait_code="NO_VALID_LIQUIDITY_TARGET"
-
-    base_ready=bool(signal in {"BUY","SELL"} and score>=SIGNALS_AUTOTRADE_THRESHOLD and rr>=SIGNALS_MIN_RR and interval not in {"1min","1m","m1"})
-    reason=(f"{signal} · score {score}/100 · {pd.get('zone')} · {sweep.get('type')} · RR {rr:.2f}"
-            if signal in {"BUY","SELL"} else f"{wait_code or 'WAIT'} · score {score}/100")
-
-    return {
-        "interval":interval,"signal":signal,"direction_candidate":direction,
-        "confidence":int(score),"score":int(score),"setup":"ADAPTIVE_ICT_TREND" if signal in {"BUY","SELL"} else "WAIT",
-        "entry":round(entry,4) if entry is not None else None,
-        "stop_loss":round(sl,4) if sl is not None else None,
-        "take_profit":[round(x,4) for x in targets[:3]],"risk_reward":round(rr,2),
-        "signal_threshold":SIGNALS_SIGNAL_THRESHOLD,"autotrade_threshold":SIGNALS_AUTOTRADE_THRESHOLD,
-        "min_autotrade_rr":SIGNALS_MIN_RR,"signals_autotrade_eligible":base_ready,
-        "auto_trade_eligible":base_ready,"m1_blocked":interval in {"1min","1m","m1"},
-        "wait_code":wait_code,"premium_discount":pd,
-        "htf":{"h4":h4,"h1":h1,"aligned":h1_ok},
-        "lower_tf":{"m15":b15,"m5":b5,"aligned":mtf_ok},
-        "liquidity":sweep,"mss":{"m5":mss5,"m15":mss15,"m5_level":mss5_level,"m15_level":mss15_level},
-        "structure":{"m5":st5,"m15":st15},"order_block":ob,"order_block_retest":ob_retest,
-        "fvg":fvg,"fvg_retest":fvg_retest,"killzone":kz,"market_regime":regime,
-        "news_filter":news_state,"checks":checks,"reason":reason,
-        "strategy_engine":"XAUUSD Adaptive ICT Trend Strategy 2026","strategy_version":"AIT-2026-V1",
-        "strategy_chain":["H4/H1 Trend","Premium/Discount","Liquidity Sweep","M15/M5 MSS/CHoCH/BOS",
-                          "Order Block + FVG Retest","Session","Macro/News + Volatility",
-                          "AI Validation","RR informational","3-strategy Confirmation","MT5 AutoTrade"],
-        "evaluated_at":datetime.now(timezone.utc).isoformat(),
-    }
-
-async def build_adaptive_ict_trend_signals(symbol: str) -> dict[str, Any]:
-    key=clean_symbol(symbol)
-    intervals=["1min","5min","15min","30min","1h","4h","1day"]
-    loaded: dict[str, tuple[list[dict[str,Any]],str,str|None]]={}
-    async def load(tf:str):
-        try: loaded[tf]=await get_candles(key,tf,260)
-        except Exception as exc: loaded[tf]=([],"error",str(exc))
-    await asyncio.gather(*(load(tf) for tf in intervals))
-    c4=loaded.get("4h",([], "", None))[0]; c1=loaded.get("1h",([], "", None))[0]
-    c15=loaded.get("15min",([], "", None))[0]; c5=loaded.get("5min",([], "", None))[0]
-    news_state=await _gold_strategy_news_guard()
-    out={}
-    for tf in intervals:
-        candles,mode,warning=loaded.get(tf,([],"error",None))
-        try:
-            item=_adaptive_ict_trend_strategy(candles,tf,c4,c1,c15,c5,news_state)
-            item["candle_time"]=candles[-1].get("time") if candles else None
-            item["mode"]=mode; item["warning"]=warning
-            if item.get("signal") in {"BUY","SELL"}:
-                try:
-                    item["ai_validation"]=await ai_validate_module_signal(SIGNALS_AUTOTRADE_SOURCE,key,tf,item.get("candle_time"),item)
-                except Exception as exc:
-                    item["ai_validation"]={"mode":"fallback","signal":item.get("signal"),"confidence":0,"agreement":0,
-                                           "risk_flags":["AI validation exception"],"reasoning":str(exc)[:240]}
-            out[tf]=item
-        except Exception as exc:
-            out[tf]={"interval":tf,"signal":"UNAVAILABLE","confidence":0,"score":0,
-                     "entry":None,"stop_loss":None,"take_profit":[],"risk_reward":0,
-                     "signals_autotrade_eligible":False,"reason":str(exc),"mode":"error","warning":str(exc)}
-    return {"symbol":key,"strategy":"XAUUSD Adaptive ICT Trend Strategy 2026","timeframes":out,
-            "news_filter":news_state,"m1_autotrade_blocked":True,
-            "generated_at":datetime.now(timezone.utc).isoformat()}
-
-
-
-def _ob_zone_freshness(candles: list[dict[str, Any]], zone: dict[str, Any], recent_bars: int = 3) -> dict[str, Any]:
-    if not isinstance(zone, dict) or zone.get("low") is None or zone.get("high") is None or zone.get("index") is None:
-        return {"fresh":False,"retested":False,"prior_mitigations":0,"recent_touches":0,"first_retest":False}
-    lo=float(zone["low"]); hi=float(zone["high"]); idx=int(zone["index"])
-    # Skip the immediate displacement candle after the OB. A genuine mitigation is a later return.
-    start=max(0,idx+2)
-    split=max(start,len(candles)-recent_bars)
-    def touches(c):
-        return float(c["low"]) <= hi and float(c["high"]) >= lo
-    prior=sum(1 for x in candles[start:split] if touches(x))
-    recent=sum(1 for x in candles[split:] if touches(x))
-    retested=recent>0
-    fresh=prior==0
-    return {"fresh":fresh,"retested":retested,"prior_mitigations":prior,
-            "recent_touches":recent,"first_retest":fresh and retested}
-
-def _ob_recent_displacement(candles:list[dict[str,Any]], direction:str, max_bars:int=8) -> dict[str,Any]:
-    if direction not in {"BUY","SELL"}:
-        return {"confirmed":False,"atr_ratio":0.0,"bars_ago":None}
-    start=max(20,len(candles)-max_bars)
-    best=0.0
-    best_ago=None
-    for end in range(len(candles),start,-1):
-        ok,ratio=_ict_displacement(candles[:end],direction)
-        best=max(best,float(ratio or 0))
-        if ok:
-            return {"confirmed":True,"atr_ratio":round(float(ratio or 0),2),"bars_ago":len(candles)-end}
-        if best_ago is None or float(ratio or 0)>=best:
-            best_ago=len(candles)-end
-    return {"confirmed":False,"atr_ratio":round(best,2),"bars_ago":best_ago}
-
-def _ob_fvg_overlap(ob: dict[str, Any], fvg: dict[str, Any]) -> dict[str, Any]:
-    if not isinstance(ob,dict) or not isinstance(fvg,dict) or ob.get("low") is None or fvg.get("low") is None:
-        return {"overlap":False,"low":None,"high":None}
-    lo=max(float(ob["low"]),float(fvg["low"]))
-    hi=min(float(ob["high"]),float(fvg["high"]))
-    return {"overlap":hi>lo,"low":round(lo,4) if hi>lo else None,"high":round(hi,4) if hi>lo else None}
-
-def _order_block_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]],
-                               c15:list[dict[str,Any]], c5:list[dict[str,Any]]) -> dict[str,Any]:
-    """Strong XAUUSD Order Block model.
-
-    HTF bias -> fresh OB -> liquidity sweep -> displacement -> M15/M5 MSS/CHoCH
-    -> FVG/OB overlap -> first retest -> RR. Signal >=80; AutoTrade >=85 + RR informational.
-    """
-    if min(len(c4),len(c1),len(c15),len(c5)) < 60:
-        return {"signal":"WAIT","confidence":0,"score":0,"entry":None,"stop_loss":None,
-                "take_profit":[],"risk_reward":0,"order_block_autotrade_eligible":False,
-                "reason":"INSUFFICIENT_CLOSED_CANDLES","strategy_engine":"Order Block Pro 2026","strategy_version":"OB-2026-V1"}
-
-    h4=_ict_tf_bias(c4); h1=_ict_tf_bias(c1); m15b=_ict_tf_bias(c15); m5b=_ict_tf_bias(c5)
-    htf_aligned=h4.get("bias")==h1.get("bias") and h4.get("bias") in {"BULLISH","BEARISH"}
-    direction="BUY" if htf_aligned and h4.get("bias")=="BULLISH" else "SELL" if htf_aligned and h4.get("bias")=="BEARISH" else "WAIT"
-    desired="BULLISH" if direction=="BUY" else "BEARISH" if direction=="SELL" else "NONE"
-
-    a4=max(atr(c4),float(c4[-1]["close"])*0.0004)
-    a1=max(atr(c1),float(c1[-1]["close"])*0.0003)
-    a15=max(atr(c15),float(c15[-1]["close"])*0.00025)
-    a5=max(atr(c5),float(c5[-1]["close"])*0.0002)
-
-    h4_ob=_ict_order_block(c4,direction,a4) if direction!="WAIT" else {"type":"NONE","low":None,"high":None,"index":None}
-    h1_ob=_ict_order_block(c1,direction,a1) if direction!="WAIT" else {"type":"NONE","low":None,"high":None,"index":None}
-    htf_ob=h1_ob if h1_ob.get("type")==desired else h4_ob if h4_ob.get("type")==desired else {"type":"NONE","low":None,"high":None,"index":None}
-    htf_ob_ok=htf_ob.get("type")==desired
-
-    ob5=_ict_order_block(c5,direction,a5) if direction!="WAIT" else {"type":"NONE","low":None,"high":None,"index":None}
-    ob15=_ict_order_block(c15,direction,a15) if direction!="WAIT" else {"type":"NONE","low":None,"high":None,"index":None}
-    entry_ob=ob5 if ob5.get("type")==desired else ob15 if ob15.get("type")==desired else {"type":"NONE","low":None,"high":None,"index":None}
-    entry_series=c5 if entry_ob is ob5 else c15
-    freshness=_ob_zone_freshness(entry_series,entry_ob,3)
-    fresh_ob_ok=bool(htf_ob_ok and entry_ob.get("type")==desired and freshness.get("fresh"))
-
-    expected_sweep="SSL_SWEEP" if direction=="BUY" else "BSL_SWEEP" if direction=="SELL" else "NONE"
-    sweep5=_ict_recent_liquidity_sweep(c5,5)
-    sweep15=_ict_recent_liquidity_sweep(c15,4)
-    sweep=sweep5 if sweep5.get("type")==expected_sweep else sweep15 if sweep15.get("type")==expected_sweep else {"type":"NONE","level":None,"extreme":None}
-    sweep_ok=direction!="WAIT" and sweep.get("type")==expected_sweep
-
-    disp5=_ob_recent_displacement(c5,direction,8)
-    disp15=_ob_recent_displacement(c15,direction,6)
-    displacement_ok=bool(disp5.get("confirmed") or disp15.get("confirmed"))
-    displacement_ratio=max(float(disp5.get("atr_ratio") or 0),float(disp15.get("atr_ratio") or 0))
-
-    st5=_structure_state(c5[:-1] if len(c5)>2 else c5)
-    st15=_structure_state(c15[:-1] if len(c15)>2 else c15)
-    mss5,mss5_level=_ict_mss(c5,direction) if direction!="WAIT" else (False,None)
-    mss15,mss15_level=_ict_mss(c15,direction) if direction!="WAIT" else (False,None)
-    mss_ok=bool(
-        mss5 or mss15 or
-        st5.get("choch")==desired or st5.get("bos")==desired or
-        st15.get("choch")==desired or st15.get("bos")==desired
-    )
-    ltf_align=(direction=="BUY" and m15b.get("bias")=="BULLISH" and m5b.get("bias")=="BULLISH") or \
-              (direction=="SELL" and m15b.get("bias")=="BEARISH" and m5b.get("bias")=="BEARISH")
-
-    fvg5=_ict_fvg(c5); fvg15=_ict_fvg(c15)
-    if entry_ob is ob5:
-        fvg=fvg5 if fvg5.get("type")==desired else {"type":"NONE","low":None,"high":None,"index":None}
-    else:
-        fvg=fvg15 if fvg15.get("type")==desired else {"type":"NONE","low":None,"high":None,"index":None}
-    overlap=_ob_fvg_overlap(entry_ob,fvg)
-    overlap_zone={"type":desired,"low":overlap.get("low"),"high":overlap.get("high"),"index":max(int(entry_ob.get("index") or 0),int(fvg.get("index") or 0))}
-    overlap_retest=_ict_zone_retest(entry_series,overlap_zone,direction,4) if overlap.get("overlap") else {"retested":False}
-    fvg_overlap_ok=bool(overlap.get("overlap") and overlap_retest.get("retested") and freshness.get("first_retest"))
-
-    pd=_ict_premium_discount(c1)
-    pd_ok=(direction=="BUY" and pd.get("zone")=="DISCOUNT") or (direction=="SELL" and pd.get("zone")=="PREMIUM")
-    kz=_ict_killzone(c5[-1].get("time"))
-    session_ok=bool(kz.get("active"))
-
-    checks=[]; score=0
-    def add(name,pts,ok,detail):
-        nonlocal score
-        if ok: score+=pts
-        checks.append({"name":name,"points":pts if ok else 0,"max_points":pts,
-                       "status":"PASS" if ok else "MISS","detail":detail})
-
-    add("H4/H1 Bias",15,htf_aligned,f"H4={h4.get('bias')} H1={h1.get('bias')}")
-    add("Fresh Order Block",15,fresh_ob_ok,
-        f"HTF={htf_ob.get('type')} LTF={entry_ob.get('type')} prior mitigations={freshness.get('prior_mitigations')}")
-    add("Liquidity Sweep",20,sweep_ok,str(sweep.get("type") or "NONE"))
-    add("Strong Displacement",15,displacement_ok,f"{displacement_ratio:.2f} ATR")
-    add("MSS / CHoCH",15,mss_ok and ltf_align,
-        f"M5 MSS={mss5} CHoCH={st5.get('choch')} | M15 MSS={mss15} CHoCH={st15.get('choch')}")
-    add("FVG + OB Overlap",10,fvg_overlap_ok,
-        f"overlap={overlap.get('overlap')} first_retest={freshness.get('first_retest')}")
-    add("Premium / Discount",5,pd_ok,str(pd.get("zone")))
-    add("London / NY Session",5,session_ok,str(kz.get("name")))
-
-    mandatory_ok=bool(htf_aligned and fresh_ob_ok and sweep_ok and displacement_ok and mss_ok and ltf_align and fvg_overlap_ok and pd_ok)
-    wait_code=None
-    if not htf_aligned: wait_code="HTF_BIAS_CONFLICT"
-    elif not htf_ob_ok: wait_code="NO_HTF_ORDER_BLOCK"
-    elif not fresh_ob_ok: wait_code="ORDER_BLOCK_NOT_FRESH"
-    elif not sweep_ok: wait_code="NO_LIQUIDITY_SWEEP"
-    elif not displacement_ok: wait_code="NO_STRONG_DISPLACEMENT"
-    elif not (mss_ok and ltf_align): wait_code="NO_MSS_CHOCH_OR_M15_M5_ALIGNMENT"
-    elif not overlap.get("overlap"): wait_code="NO_FVG_OB_OVERLAP"
-    elif not overlap_retest.get("retested"): wait_code="NO_OVERLAP_RETEST"
-    elif not freshness.get("first_retest"): wait_code="NOT_FIRST_RETEST"
-    elif not pd_ok: wait_code="PREMIUM_DISCOUNT_MISMATCH"
-    elif score<ORDER_BLOCK_SIGNAL_THRESHOLD: wait_code="LOW_CONFIDENCE"
-
-    signal=direction if mandatory_ok and score>=ORDER_BLOCK_SIGNAL_THRESHOLD else "WAIT"
-    entry=float(c5[-1]["close"]) if direction!="WAIT" else None
-    sl=None; targets=[]; rr=0.0
-    if direction in {"BUY","SELL"} and entry is not None:
-        highs5,lows5=_ict_swings(c5[:-1],2)
-        if direction=="BUY":
-            vals=[x for x in [sweep.get("extreme"),entry_ob.get("low"),overlap.get("low")] if x is not None] + [v for _,v in lows5[-6:]]
-            sl=(min(float(x) for x in vals)-a5*0.10) if vals else entry-a5*1.15
-        else:
-            vals=[x for x in [sweep.get("extreme"),entry_ob.get("high"),overlap.get("high")] if x is not None] + [v for _,v in highs5[-6:]]
-            sl=(max(float(x) for x in vals)+a5*0.10) if vals else entry+a5*1.15
-        risk=abs(entry-sl)
-        raw=_ict_liquidity_targets([c5,c15,c1,c4],direction,entry)
-        if risk>0:
-            if direction=="BUY":
-                targets=[float(x) for x in raw if float(x)>entry and (float(x)-entry)/risk>=ORDER_BLOCK_MIN_RR][:3]
-            else:
-                targets=[float(x) for x in raw if float(x)<entry and (entry-float(x))/risk>=ORDER_BLOCK_MIN_RR][:3]
-            if targets:
-                rr=((targets[0]-entry)/risk) if direction=="BUY" else ((entry-targets[0])/risk)
-                rr=max(0.0,rr)
-
-    if signal in {"BUY","SELL"} and (not targets or rr<ORDER_BLOCK_MIN_RR):
-        signal="WAIT"; wait_code="NO_VALID_LIQUIDITY_TARGET"
-
-    base_ready=bool(signal in {"BUY","SELL"} and score>=ORDER_BLOCK_AUTOTRADE_THRESHOLD and rr>=ORDER_BLOCK_MIN_RR)
-    reason=(f"{signal} · fresh OB + liquidity sweep + displacement + MSS + FVG overlap · score {score}/100 · RR {rr:.2f}"
-            if signal in {"BUY","SELL"} else f"{wait_code or 'WAIT'} · score {score}/100")
-
-    return {
-        "signal":signal,"confidence":int(score),"score":int(score),"setup":"ORDER_BLOCK_PRO" if signal in {"BUY","SELL"} else "WAIT",
-        "entry":round(entry,4) if entry is not None else None,"stop_loss":round(sl,4) if sl is not None else None,
-        "take_profit":[round(x,4) for x in targets[:3]],"risk_reward":round(rr,2),
-        "signal_threshold":ORDER_BLOCK_SIGNAL_THRESHOLD,"autotrade_threshold":ORDER_BLOCK_AUTOTRADE_THRESHOLD,
-        "min_autotrade_rr":ORDER_BLOCK_MIN_RR,"order_block_autotrade_eligible":base_ready,
-        "auto_trade_eligible":base_ready,"execution_timeframe":"5min","m1_blocked":True,
-        "htf":{"h4":h4,"h1":h1,"aligned":htf_aligned,"order_block":htf_ob},
-        "lower_tf":{"m15":m15b,"m5":m5b,"aligned":ltf_align},
-        "liquidity":sweep,"displacement":{"confirmed":displacement_ok,"atr_ratio":round(displacement_ratio,2),
-                                            "m5":disp5,"m15":disp15},
-        "mss":{"m5":mss5,"m15":mss15,"m5_level":mss5_level,"m15_level":mss15_level},
-        "structure":{"m5":st5,"m15":st15},"order_block":entry_ob,"freshness":freshness,
-        "fvg":fvg,"overlap":overlap,"overlap_retest":overlap_retest,
-        "premium_discount":pd,"killzone":kz,"checks":checks,"wait_code":wait_code,"reason":reason,
-        "timeframes":{
-            "4h":{"bias":h4,"order_block":h4_ob},
-            "1h":{"bias":h1,"order_block":h1_ob},
-            "15min":{"bias":m15b,"order_block":ob15,"structure":st15,"mss":mss15,"fvg":fvg15},
-            "5min":{"bias":m5b,"order_block":ob5,"structure":st5,"mss":mss5,"fvg":fvg5},
-        },
-        "strategy_engine":"XAUUSD Order Block Pro 2026","strategy_version":"OB-2026-V1",
-        "strategy_chain":["H4/H1 Bias","HTF Order Block","Liquidity Sweep","Strong Displacement",
-                          "M15/M5 MSS/CHoCH","Fresh OB + FVG Overlap","First Retest",
-                          "RR informational","AI Validation","3-strategy Confirmation","MT5 AutoTrade"],
-        "evaluated_at":datetime.now(timezone.utc).isoformat(),
-    }
-
-async def build_order_block_signals(symbol:str="XAU/USD") -> dict[str,Any]:
-    key=clean_symbol(symbol)
-    try:
-        (c4,m4,w4),(c1,m1,w1),(c15,m15,w15),(c5,m5,w5)=await asyncio.gather(
-            get_candles(key,"4h",260),get_candles(key,"1h",260),
-            get_candles(key,"15min",260),get_candles(key,"5min",260)
-        )
-        item=_order_block_strategy_2026(c4,c1,c15,c5)
-        item["candle_time"]=c5[-1].get("time") if c5 else None
-        try:
-            item["ai_validation"]=await ai_validate_module_signal(ORDER_BLOCK_SOURCE,key,"5min",item.get("candle_time"),item)
-        except Exception as exc:
-            item["ai_validation"]={"mode":"fallback","signal":item.get("signal","WAIT"),"confidence":0,"agreement":0,
-                                   "risk_flags":["AI validation exception"],"reasoning":str(exc)[:240]}
-        return {"ok":True,"symbol":key,"strategy":"XAUUSD Order Block Pro 2026","source":ORDER_BLOCK_SOURCE,
-                "signal":item.get("signal"),"score":item.get("score"),"confidence":item.get("confidence"),
-                "entry":item.get("entry"),"stop_loss":item.get("stop_loss"),"take_profit":item.get("take_profit"),
-                "risk_reward":item.get("risk_reward"),"checks":item.get("checks"),"reason":item.get("reason"),
-                "timeframes":item.get("timeframes"),"order_block":item.get("order_block"),"freshness":item.get("freshness"),
-                "fvg":item.get("fvg"),"overlap":item.get("overlap"),"liquidity":item.get("liquidity"),
-                "displacement":item.get("displacement"),"mss":item.get("mss"),
-                "premium_discount":item.get("premium_discount"),"killzone":item.get("killzone"),
-                "order_block_autotrade_eligible":item.get("order_block_autotrade_eligible"),
-                "m1_blocked":True,"execution_timeframe":"5min","item":item,
-                "generated_at":datetime.now(timezone.utc).isoformat(),
-                "warnings":[x for x in (w4,w1,w15,w5) if x]}
-    except Exception as exc:
-        return {"ok":False,"symbol":key,"strategy":"XAUUSD Order Block Pro 2026","source":ORDER_BLOCK_SOURCE,
-                "signal":"WAIT","score":0,"confidence":0,"entry":None,"stop_loss":None,"take_profit":[],
-                "risk_reward":0,"order_block_autotrade_eligible":False,"m1_blocked":True,
-                "reason":str(exc),"generated_at":datetime.now(timezone.utc).isoformat()}
-
-
-
-def _pro_engine_result(name:str, signal:str, score:int, checks:list[dict[str,Any]],
-                       blocked_reason:str|None=None, **extra:Any) -> dict[str,Any]:
-    sig=str(signal or "WAIT").upper()
-    if sig not in {"BUY","SELL"}:
-        sig="WAIT"
-    return {
-        "engine":name,"signal":sig,"confidence":int(max(0,min(100,score))),"score":int(max(0,min(100,score))),
-        "blockedReason":blocked_reason if sig=="WAIT" else None,"checks":checks,**extra,
-    }
-
-def _pro_structure_direction(candles:list[dict[str,Any]]) -> dict[str,Any]:
-    data=candles[:-1] if len(candles)>2 else candles
-    highs,lows=_ict_swings(data,2)
-    hh=len(highs)>=2 and highs[-1][1]>highs[-2][1]
-    hl=len(lows)>=2 and lows[-1][1]>lows[-2][1]
-    lh=len(highs)>=2 and highs[-1][1]<highs[-2][1]
-    ll=len(lows)>=2 and lows[-1][1]<lows[-2][1]
-    structure="BULLISH" if hh and hl else "BEARISH" if lh and ll else "MIXED"
-    closes=[float(x["close"]) for x in data]
-    e50=_ema(closes[-220:],50)
-    e200=_ema(closes[-260:],200)
-    e50_prev=_ema(closes[-221:-1],50) if len(closes)>55 else e50
-    price=float(data[-1]["close"])
-    ema_dir="BULLISH" if e50>e200 and price>e50 and e50>=e50_prev else "BEARISH" if e50<e200 and price<e50 and e50<=e50_prev else "MIXED"
-    return {"structure":structure,"ema_direction":ema_dir,"ema50":round(e50,4),"ema200":round(e200,4),
-            "ema50_slope":round(e50-e50_prev,6),"price":round(price,4)}
-
-def _pro_trend_engine(c4:list[dict[str,Any]],c1:list[dict[str,Any]],c15:list[dict[str,Any]]) -> dict[str,Any]:
-    h4=_pro_structure_direction(c4); h1=_pro_structure_direction(c1)
-    h4_dir=h4["structure"]; h1_dir=h1["structure"]
-    direction="BUY" if h4_dir=="BULLISH" and h1_dir=="BULLISH" else "SELL" if h4_dir=="BEARISH" and h1_dir=="BEARISH" else "WAIT"
-    desired="BULLISH" if direction=="BUY" else "BEARISH" if direction=="SELL" else "NONE"
-    ema_ok=direction!="WAIT" and h4["ema_direction"]==desired and h1["ema_direction"]==desired
-
-    closed=c15[:-1] if len(c15)>2 else c15
-    closes=[float(x["close"]) for x in closed]
-    e50=_ema(closes[-180:],50); a=max(atr(closed),float(closed[-1]["close"])*0.00025)
-    recent=closed[-8:]
-    if direction=="BUY":
-        pullback=any(float(x["low"])<=e50+a*0.25 for x in recent) and float(closed[-1]["close"])>e50
-    elif direction=="SELL":
-        pullback=any(float(x["high"])>=e50-a*0.25 for x in recent) and float(closed[-1]["close"])<e50
-    else:
-        pullback=False
-    bos,bos_level=_ict_mss(c15,direction) if direction!="WAIT" else (False,None)
-
-    checks=[]; score=0
-    def add(n,p,ok,d):
-        nonlocal score
-        if ok: score+=p
-        checks.append({"name":n,"points":p if ok else 0,"max_points":p,"status":"PASS" if ok else "MISS","detail":d})
-    add("H4 Structure",25,h4_dir==desired,f"H4={h4_dir}")
-    add("H1 Structure",25,h1_dir==desired,f"H1={h1_dir}")
-    add("EMA50/EMA200 Alignment",15,ema_ok,f"H4={h4['ema_direction']} H1={h1['ema_direction']}")
-    add("M15 Corrective Pullback",15,pullback,f"EMA50={e50:.2f}")
-    add("Continuation BOS",20,bos,f"level={bos_level}")
-    signal=direction if direction!="WAIT" and score>=80 else "WAIT"
-    reason=None
-    if direction=="WAIT": reason="H4_H1_STRUCTURE_CONFLICT"
-    elif not ema_ok: reason="EMA_ALIGNMENT_MISSING"
-    elif not pullback: reason="NO_M15_PULLBACK"
-    elif not bos: reason="NO_CONTINUATION_BOS"
-    elif score<80: reason="LOW_CONFIDENCE"
-    return _pro_engine_result("Trend Engine",signal,score,checks,reason,direction_candidate=direction,h4=h4,h1=h1,
-                              m15={"ema50":round(e50,4),"pullback":pullback,"bos":bos,"bos_level":bos_level})
-
-def _pro_snr_breakout_engine(c1:list[dict[str,Any]],c15:list[dict[str,Any]],c5:list[dict[str,Any]]) -> dict[str,Any]:
-    zones=_snr_zone_analysis(c1)
-    sup=zones["support"]; res=zones["resistance"]
-    a15=max(atr(c15),float(c15[-1]["close"])*0.00025)
-    recent_start=max(2,len(c15)-10)
-    breakout=None
-    for i in range(recent_start,len(c15)):
-        cur,prev=c15[i],c15[i-1]
-        body=abs(float(cur["close"])-float(cur["open"]))
-        if float(prev["close"])<=float(res["high"]) and float(cur["close"])>float(res["high"])+a15*0.10:
-            breakout={"direction":"BUY","index":i,"close":float(cur["close"]),"body":body}
-        elif float(prev["close"])>=float(sup["low"]) and float(cur["close"])<float(sup["low"])-a15*0.10:
-            breakout={"direction":"SELL","index":i,"close":float(cur["close"]),"body":body}
-    direction=breakout["direction"] if breakout else "WAIT"
-    zone=res if direction=="BUY" else sup if direction=="SELL" else {}
-    quality_ok=bool(zone and int(zone.get("strength") or 0)>=80)
-    close_ok=bool(breakout)
-    displacement_ok=bool(breakout and float(breakout["body"])>=a15*0.60)
-
-    retest=False
-    if breakout:
-        for x in c15[int(breakout["index"])+1:]:
-            if direction=="BUY" and float(x["low"])<=float(res["high"])+a15*0.18 and float(x["close"])>=float(res["low"]):
-                retest=True
-            if direction=="SELL" and float(x["high"])>=float(sup["low"])-a15*0.18 and float(x["close"])<=float(sup["high"]):
-                retest=True
-    m5c=c5[-1]; m5body=abs(float(m5c["close"])-float(m5c["open"])); m5rng=max(float(m5c["high"])-float(m5c["low"]),1e-9)
-    m5_ok=(direction=="BUY" and float(m5c["close"])>float(m5c["open"]) and m5body/m5rng>=0.45) or \
-          (direction=="SELL" and float(m5c["close"])<float(m5c["open"]) and m5body/m5rng>=0.45)
-    m5_mss,_=_ict_mss(c5,direction) if direction!="WAIT" else (False,None)
-    m5_ok=bool(m5_ok or m5_mss)
-
-    checks=[]; score=0
-    def add(n,p,ok,d):
-        nonlocal score
-        if ok: score+=p
-        checks.append({"name":n,"points":p if ok else 0,"max_points":p,"status":"PASS" if ok else "MISS","detail":d})
-    add("HTF SNR Quality",25,quality_ok,f"strength={zone.get('strength') if zone else 0}")
-    add("Breakout Candle Close",20,close_ok,direction)
-    add("Breakout Displacement",15,displacement_ok,f"body/ATR={(float(breakout['body'])/a15 if breakout else 0):.2f}")
-    add("Clean Retest",25,retest,f"1-8 M15 candles")
-    add("M5 Confirmation",15,m5_ok,f"MSS={m5_mss}")
-    signal=direction if direction!="WAIT" and score>=80 else "WAIT"
-    reason=None
-    if not breakout: reason="NO_CONFIRMED_BREAKOUT"
-    elif not displacement_ok: reason="WEAK_BREAKOUT_DISPLACEMENT"
-    elif not retest: reason="NO_CLEAN_RETEST"
-    elif not m5_ok: reason="NO_M5_CONFIRMATION"
-    elif score<80: reason="LOW_CONFIDENCE"
-    return _pro_engine_result("SNR / Breakout Engine",signal,score,checks,reason,zones=zones,breakout=breakout,retest=retest)
-
-def _pro_liquidity_pool(candles:list[dict[str,Any]],direction:str) -> dict[str,Any]:
-    highs,lows=_ict_swings(candles[:-1],2)
-    pts=lows[-10:] if direction=="BUY" else highs[-10:] if direction=="SELL" else []
-    if len(pts)<2:
-        return {"strong":False,"level":None,"matches":0}
-    a=max(atr(candles),float(candles[-1]["close"])*0.0002)
-    best_level=None; best=0
-    for _,v in pts:
-        matches=sum(1 for _,x in pts if abs(float(x)-float(v))<=a*0.18)
-        if matches>best:
-            best=matches; best_level=float(v)
-    return {"strong":best>=2,"level":round(best_level,4) if best_level is not None else None,"matches":best}
-
-def _pro_ict_liquidity_engine(c4:list[dict[str,Any]],c1:list[dict[str,Any]],c15:list[dict[str,Any]],c5:list[dict[str,Any]]) -> dict[str,Any]:
-    h4=_ict_tf_bias(c4); h1=_ict_tf_bias(c1)
-    htf_ok=h4["bias"]==h1["bias"] and h4["bias"] in {"BULLISH","BEARISH"}
-    direction="BUY" if htf_ok and h4["bias"]=="BULLISH" else "SELL" if htf_ok and h4["bias"]=="BEARISH" else "WAIT"
-    pd=_ict_premium_discount(c1)
-    pd_ok=(direction=="BUY" and pd["zone"]=="DISCOUNT") or (direction=="SELL" and pd["zone"]=="PREMIUM")
-    pool=_pro_liquidity_pool(c15,direction)
-    expected="SSL_SWEEP" if direction=="BUY" else "BSL_SWEEP" if direction=="SELL" else "NONE"
-    s5=_ict_recent_liquidity_sweep(c5,5); s15=_ict_recent_liquidity_sweep(c15,4)
-    sweep=s5 if s5.get("type")==expected else s15 if s15.get("type")==expected else {"type":"NONE"}
-    sweep_ok=sweep.get("type")==expected and direction!="WAIT"
-    mss5,_=_ict_mss(c5,direction) if direction!="WAIT" else (False,None)
-    mss15,_=_ict_mss(c15,direction) if direction!="WAIT" else (False,None)
-    d5=_ob_recent_displacement(c5,direction,8); d15=_ob_recent_displacement(c15,direction,6)
-    mss_disp=bool((mss5 or mss15) and (d5.get("confirmed") or d15.get("confirmed")))
-    kz=_ict_killzone(c5[-1].get("time"))
-
-    checks=[]; score=0
-    def add(n,p,ok,d):
-        nonlocal score
-        if ok: score+=p
-        checks.append({"name":n,"points":p if ok else 0,"max_points":p,"status":"PASS" if ok else "MISS","detail":d})
-    add("HTF Bias",20,htf_ok,f"H4={h4['bias']} H1={h1['bias']}")
-    add("Premium / Discount",10,pd_ok,pd["zone"])
-    add("Strong Liquidity Pool",20,bool(pool.get("strong")),f"matches={pool.get('matches')}")
-    add("Clean Sweep",20,sweep_ok,str(sweep.get("type")))
-    add("MSS + Displacement",25,mss_disp,f"M5 MSS={mss5} M15 MSS={mss15}")
-    add("Session",5,bool(kz.get("active")),str(kz.get("name")))
-    signal=direction if direction!="WAIT" and score>=80 else "WAIT"
-    reason=None
-    if not htf_ok: reason="HTF_BIAS_CONFLICT"
-    elif not pd_ok: reason="PREMIUM_DISCOUNT_MISMATCH"
-    elif not pool.get("strong"): reason="NO_STRONG_LIQUIDITY_POOL"
-    elif not sweep_ok: reason="NO_CLEAN_SWEEP"
-    elif not mss_disp: reason="NO_MSS_DISPLACEMENT"
-    elif score<80: reason="LOW_CONFIDENCE"
-    return _pro_engine_result("ICT Liquidity Engine",signal,score,checks,reason,
-                              htf={"h4":h4,"h1":h1},premium_discount=pd,liquidity_pool=pool,
-                              sweep=sweep,mss={"m5":mss5,"m15":mss15},displacement={"m5":d5,"m15":d15},killzone=kz)
-
-def _pro_ob_fvg_engine(c15:list[dict[str,Any]],c5:list[dict[str,Any]],direction_hint:str) -> dict[str,Any]:
-    direction=direction_hint if direction_hint in {"BUY","SELL"} else "WAIT"
-    desired="BULLISH" if direction=="BUY" else "BEARISH" if direction=="SELL" else "NONE"
-    a5=max(atr(c5),float(c5[-1]["close"])*0.0002); a15=max(atr(c15),float(c15[-1]["close"])*0.00025)
-    ob5=_ict_order_block(c5,direction,a5) if direction!="WAIT" else {"type":"NONE"}
-    ob15=_ict_order_block(c15,direction,a15) if direction!="WAIT" else {"type":"NONE"}
-    ob=ob5 if ob5.get("type")==desired else ob15 if ob15.get("type")==desired else {"type":"NONE","low":None,"high":None,"index":None}
-    series=c5 if ob is ob5 else c15
-    fresh=_ob_zone_freshness(series,ob,3)
-    fvg_raw=_ict_fvg(series)
-    fvg=fvg_raw if fvg_raw.get("type")==desired else {"type":"NONE","low":None,"high":None,"index":None}
-    overlap=_ob_fvg_overlap(ob,fvg)
-    overlap_zone={"type":desired,"low":overlap.get("low"),"high":overlap.get("high"),
-                  "index":max(int(ob.get("index") or 0),int(fvg.get("index") or 0))}
-    reaction=_ict_zone_retest(series,overlap_zone,direction,4) if overlap.get("overlap") else {"retested":False}
-    disp=_ob_recent_displacement(series,direction,8)
-    st=_structure_state(series[:-1] if len(series)>2 else series)
-    structure_break=(st.get("bos")==desired or st.get("choch")==desired)
-    if not structure_break and direction!="WAIT":
-        structure_break,_=_ict_mss(series,direction)
-
-    checks=[]; score=0
-    def add(n,p,ok,d):
-        nonlocal score
-        if ok: score+=p
-        checks.append({"name":n,"points":p if ok else 0,"max_points":p,"status":"PASS" if ok else "MISS","detail":d})
-    add("Structure Break",15,bool(structure_break),f"BOS={st.get('bos')} CHoCH={st.get('choch')}")
-    add("Strong Displacement",20,bool(disp.get("confirmed")),f"{disp.get('atr_ratio')} ATR")
-    add("Fresh OB",20,bool(fresh.get("fresh")),f"prior mitigations={fresh.get('prior_mitigations')}")
-    add("Valid FVG",15,fvg.get("type")==desired,str(fvg.get("type")))
-    add("OB + FVG Overlap",20,bool(overlap.get("overlap")),f"{overlap.get('low')}–{overlap.get('high')}")
-    add("First Retest Reaction",10,bool(reaction.get("retested") and fresh.get("first_retest")),f"retest={reaction.get('retested')}")
-    signal=direction if direction!="WAIT" and score>=80 else "WAIT"
-    reason=None
-    if direction=="WAIT": reason="NO_DIRECTION_HINT"
-    elif not structure_break: reason="NO_STRUCTURE_BREAK"
-    elif not disp.get("confirmed"): reason="NO_STRONG_DISPLACEMENT"
-    elif not fresh.get("fresh"): reason="OB_NOT_FRESH"
-    elif fvg.get("type")!=desired: reason="NO_VALID_FVG"
-    elif not overlap.get("overlap"): reason="NO_OB_FVG_OVERLAP"
-    elif not reaction.get("retested"): reason="NO_FIRST_RETEST_REACTION"
-    elif score<80: reason="LOW_CONFIDENCE"
-
-    entry=float(c5[-1]["close"]) if direction!="WAIT" else None
-    sl=None; targets=[]; rr=0.0
-    if direction in {"BUY","SELL"} and entry is not None and ob.get("low") is not None:
-        a=a5
-        sl=float(ob["low"])-a*0.15 if direction=="BUY" else float(ob["high"])+a*0.15
-        risk=abs(entry-sl)
-        raw=_ict_liquidity_targets([c5,c15],direction,entry)
-        if risk>0:
-            if direction=="BUY":
-                targets=[float(x) for x in raw if float(x)>entry and (float(x)-entry)/risk>=PRO_ENGINE_MIN_RR][:3]
-            else:
-                targets=[float(x) for x in raw if float(x)<entry and (entry-float(x))/risk>=PRO_ENGINE_MIN_RR][:3]
-            if targets:
-                rr=((targets[0]-entry)/risk) if direction=="BUY" else ((entry-targets[0])/risk)
-    if signal in {"BUY","SELL"} and (not targets or rr<PRO_ENGINE_MIN_RR):
-        signal="WAIT"; reason="NO_VALID_TARGET"
-    return _pro_engine_result("Order Block / FVG Engine",signal,score,checks,reason,
-                              entry=round(entry,4) if entry is not None else None,
-                              stop_loss=round(sl,4) if sl is not None else None,
-                              take_profit=[round(x,4) for x in targets],
-                              risk_reward=round(rr,2),order_block=ob,freshness=fresh,fvg=fvg,overlap=overlap,retest=reaction)
-
-def _pro_macd_state(candles:list[dict[str,Any]]) -> dict[str,Any]:
-    closes=[float(x["close"]) for x in candles]
-    def line(vals):
-        return _ema(vals[-180:],12)-_ema(vals[-180:],26)
-    macd=line(closes)
-    history=[]
-    for cut in range(max(30,len(closes)-12),len(closes)+1):
-        vals=closes[:cut]
-        history.append(line(vals))
-    signal=_ema(history,9)
-    hist=macd-signal
-    prev_hist=None
-    if len(closes)>2:
-        prev_vals=closes[:-1]
-        prev_line=line(prev_vals)
-        prev_history=[]
-        for cut in range(max(30,len(prev_vals)-12),len(prev_vals)+1):
-            prev_history.append(line(prev_vals[:cut]))
-        prev_signal=_ema(prev_history,9)
-        prev_hist=prev_line-prev_signal
-    return {"line":macd,"signal":signal,"histogram":hist,"previous_histogram":prev_hist if prev_hist is not None else hist}
-
-def _pro_adx_dmi(candles:list[dict[str,Any]],period:int=14) -> dict[str,Any]:
-    if len(candles)<period*2+3:
-        return {"adx":0.0,"plus_di":0.0,"minus_di":0.0}
-    def window_metrics(end:int):
-        start=max(1,end-period)
-        tr_sum=plus_sum=minus_sum=0.0
-        for i in range(start,end):
-            cur,prev=candles[i],candles[i-1]
-            up=float(cur["high"])-float(prev["high"])
-            down=float(prev["low"])-float(cur["low"])
-            plus=up if up>down and up>0 else 0.0
-            minus=down if down>up and down>0 else 0.0
-            tr=max(float(cur["high"])-float(cur["low"]),
-                   abs(float(cur["high"])-float(prev["close"])),
-                   abs(float(cur["low"])-float(prev["close"])))
-            tr_sum+=tr; plus_sum+=plus; minus_sum+=minus
-        pdi=100*plus_sum/max(tr_sum,1e-9); mdi=100*minus_sum/max(tr_sum,1e-9)
-        dx=100*abs(pdi-mdi)/max(pdi+mdi,1e-9)
-        return pdi,mdi,dx
-    dxs=[]
-    pdi=mdi=0.0
-    for end in range(len(candles)-period+1,len(candles)+1):
-        pdi,mdi,dx=window_metrics(end)
-        dxs.append(dx)
-    return {"adx":sum(dxs)/max(1,len(dxs)),"plus_di":pdi,"minus_di":mdi}
-
-def _pro_momentum_engine(c15:list[dict[str,Any]],direction_hint:str) -> dict[str,Any]:
-    direction=direction_hint if direction_hint in {"BUY","SELL"} else "WAIT"
-    r=float(rsi(c15)); rprev=float(rsi(c15[:-1])) if len(c15)>16 else r
-    macd=_pro_macd_state(c15); dmi=_pro_adx_dmi(c15)
-    a_now=max(atr(c15),1e-9); a_prev=max(atr(c15[:-1]),1e-9)
-    cur=c15[-1]; body=abs(float(cur["close"])-float(cur["open"])); rng=max(float(cur["high"])-float(cur["low"]),1e-9)
-    body_ratio=body/rng
-    close_pos=(float(cur["close"])-float(cur["low"]))/rng
-
-    rsi_ok=(direction=="BUY" and r>52 and r>rprev) or (direction=="SELL" and r<48 and r<rprev)
-    macd_dir=(direction=="BUY" and macd["line"]>macd["signal"]) or (direction=="SELL" and macd["line"]<macd["signal"])
-    hist_expand=(direction=="BUY" and macd["histogram"]>0 and macd["histogram"]>macd["previous_histogram"]) or \
-                (direction=="SELL" and macd["histogram"]<0 and macd["histogram"]<macd["previous_histogram"])
-    dmi_ok=(direction=="BUY" and dmi["adx"]>=23 and dmi["plus_di"]>dmi["minus_di"]) or \
-           (direction=="SELL" and dmi["adx"]>=23 and dmi["minus_di"]>dmi["plus_di"])
-    atr_ok=a_now>=a_prev*1.02
-    candle_ok=(direction=="BUY" and float(cur["close"])>float(cur["open"]) and body_ratio>=0.60 and close_pos>=0.72) or \
-              (direction=="SELL" and float(cur["close"])<float(cur["open"]) and body_ratio>=0.60 and close_pos<=0.28)
-
-    checks=[]; score=0
-    def add(n,p,ok,d):
-        nonlocal score
-        if ok: score+=p
-        checks.append({"name":n,"points":p if ok else 0,"max_points":p,"status":"PASS" if ok else "MISS","detail":d})
-    add("RSI Regime",20,rsi_ok,f"RSI={r:.1f} prev={rprev:.1f}")
-    add("MACD Direction",20,macd_dir,f"line={macd['line']:.5f} signal={macd['signal']:.5f}")
-    add("MACD Histogram Expansion",15,hist_expand,f"hist={macd['histogram']:.5f}")
-    add("ADX / DMI",20,dmi_ok,f"ADX={dmi['adx']:.1f} +DI={dmi['plus_di']:.1f} -DI={dmi['minus_di']:.1f}")
-    add("ATR Regime",10,atr_ok,f"ATR ratio={a_now/max(a_prev,1e-9):.2f}")
-    add("Candle Momentum",15,candle_ok,f"body/range={body_ratio:.2f}")
-    signal=direction if direction!="WAIT" and score>=80 else "WAIT"
-    reason=None
-    if direction=="WAIT": reason="NO_DIRECTION_HINT"
-    elif not rsi_ok: reason="RSI_REGIME_MISSING"
-    elif not macd_dir: reason="MACD_DIRECTION_MISSING"
-    elif not dmi_ok: reason="ADX_DMI_WEAK"
-    elif score<80: reason="LOW_CONFIDENCE"
-    return _pro_engine_result("Technical Momentum Engine",signal,score,checks,reason,
-                              rsi=round(r,2),macd={k:round(float(v),6) for k,v in macd.items()},
-                              adx_dmi={k:round(float(v),2) for k,v in dmi.items()},
-                              atr_ratio=round(a_now/max(a_prev,1e-9),2),candle_body_ratio=round(body_ratio,2))
-
-
-def _pro_engine_execution_geometry(engine_name:str, engine:dict[str,Any],
-                                   c4:list[dict[str,Any]],c1:list[dict[str,Any]],
-                                   c15:list[dict[str,Any]],c5:list[dict[str,Any]]) -> dict[str,Any]:
-    """Give every individual Pro Engine its own structural Entry/SL/TP/RR."""
-    out=dict(engine or {})
-    direction=str(out.get("signal") or "WAIT").upper()
-    out["source"]=engine_name
-    out["execution_timeframe"]="5min"
-    out["m1_blocked"]=True
-    out["signal_threshold"]=PRO_INDIVIDUAL_SIGNAL_THRESHOLD
-    out["autotrade_threshold"]=PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD
-    out["min_rr"]=PRO_INDIVIDUAL_MIN_RR
-    if direction not in {"BUY","SELL"}:
-        out["pro_individual_autotrade_eligible"]=False
-        return out
-
-    # OB/FVG engine already owns a validated structural geometry; preserve it.
-    if engine_name=="Order Block / FVG Engine":
-        rr=float(out.get("risk_reward") or 0)
-        out["pro_individual_autotrade_eligible"]=bool(
-            float(out.get("confidence") or 0)>=PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD
-            and rr>=PRO_INDIVIDUAL_MIN_RR and out.get("entry") is not None
-            and out.get("stop_loss") is not None and bool(out.get("take_profit"))
-        )
-        return out
-
-    entry=float(c5[-1]["close"])
-    a5=max(atr(c5),entry*0.0002)
-    a15=max(atr(c15),entry*0.00025)
-    sl=None
-
-    if engine_name=="Trend Engine":
-        recent=c5[-12:-1] if len(c5)>=12 else c5[:-1]
-        if direction=="BUY":
-            sl=min(float(x["low"]) for x in recent)-a5*0.15
-        else:
-            sl=max(float(x["high"]) for x in recent)+a5*0.15
-
-    elif engine_name=="SNR / Breakout Engine":
-        zones=out.get("zones") or {}
-        zone=(zones.get("resistance") or {}) if direction=="BUY" else (zones.get("support") or {})
-        if direction=="BUY":
-            ref=[float(x["low"]) for x in c5[-8:-1]]
-            if zone.get("low") is not None: ref.append(float(zone["low"]))
-            sl=min(ref)-a5*0.12
-        else:
-            ref=[float(x["high"]) for x in c5[-8:-1]]
-            if zone.get("high") is not None: ref.append(float(zone["high"]))
-            sl=max(ref)+a5*0.12
-
-    elif engine_name=="ICT Liquidity Engine":
-        sweep=out.get("sweep") or {}
-        extreme=sweep.get("extreme")
-        if direction=="BUY":
-            base=float(extreme) if extreme is not None else min(float(x["low"]) for x in c5[-10:-1])
-            sl=base-a5*0.15
-        else:
-            base=float(extreme) if extreme is not None else max(float(x["high"]) for x in c5[-10:-1])
-            sl=base+a5*0.15
-
-    elif engine_name=="Technical Momentum Engine":
-        if direction=="BUY":
-            sl=min(float(x["low"]) for x in c15[-6:-1])-a15*0.10
-        else:
-            sl=max(float(x["high"]) for x in c15[-6:-1])+a15*0.10
-
-    if sl is None:
-        out["pro_individual_autotrade_eligible"]=False
-        out["blockedReason"]=out.get("blockedReason") or "NO_EXECUTION_GEOMETRY"
-        return out
-
-    risk=abs(entry-float(sl))
-    if risk<=0:
-        out["pro_individual_autotrade_eligible"]=False
-        out["blockedReason"]="INVALID_RISK_GEOMETRY"
-        return out
-
-    liquidity=_ict_liquidity_targets([c5,c15,c1],direction,entry)
-    if direction=="BUY":
-        targets=[float(x) for x in liquidity if float(x)>entry and (float(x)-entry)/risk>=PRO_INDIVIDUAL_MIN_RR]
-        fallback=[entry+risk*1.5,entry+risk*2.0,entry+risk*2.5]
-        for x in fallback:
-            if x>entry and all(abs(x-y)>a5*0.10 for y in targets):
-                targets.append(x)
-    else:
-        targets=[float(x) for x in liquidity if float(x)<entry and (entry-float(x))/risk>=PRO_INDIVIDUAL_MIN_RR]
-        fallback=[entry-risk*1.5,entry-risk*2.0,entry-risk*2.5]
-        for x in fallback:
-            if x<entry and all(abs(x-y)>a5*0.10 for y in targets):
-                targets.append(x)
-    targets=targets[:3]
-    rr=((targets[0]-entry)/risk) if direction=="BUY" and targets else ((entry-targets[0])/risk) if targets else 0.0
-
-    out["entry"]=round(entry,4)
-    out["stop_loss"]=round(float(sl),4)
-    out["take_profit"]=[round(float(x),4) for x in targets]
-    out["risk_reward"]=round(float(rr),2)
-    out["pro_individual_autotrade_eligible"]=bool(
-        float(out.get("confidence") or 0)>=PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD
-        and rr>=PRO_INDIVIDUAL_MIN_RR and bool(targets)
-    )
-    if not targets or rr<PRO_INDIVIDUAL_MIN_RR:
-        out["pro_individual_autotrade_eligible"]=False
-        out["blockedReason"]="NO_VALID_TARGET"
-    return out
-
-
-def _build_pro_engine_suite(c4:list[dict[str,Any]],c1:list[dict[str,Any]],
-                            c15:list[dict[str,Any]],c5:list[dict[str,Any]]) -> dict[str,Any]:
-    if min(len(c4),len(c1),len(c15),len(c5))<80:
-        return {"ok":False,"reason":"INSUFFICIENT_CANDLES","engines":{},"final":{
-            "signal":"WAIT","confidence":0,"score":0,"blockedReason":"INSUFFICIENT_CANDLES",
-            "entry":None,"stop_loss":None,"take_profit":[],"risk_reward":0,
-            "pro_engine_autotrade_eligible":False,"m1_blocked":True}}
-    trend=_pro_trend_engine(c4,c1,c15)
-    direction_hint=trend.get("direction_candidate") if trend.get("direction_candidate") in {"BUY","SELL"} else "WAIT"
-    snr=_pro_snr_breakout_engine(c1,c15,c5)
-    ict=_pro_ict_liquidity_engine(c4,c1,c15,c5)
-    ob=_pro_ob_fvg_engine(c15,c5,direction_hint)
-    momentum=_pro_momentum_engine(c15,direction_hint)
-    trend=_pro_engine_execution_geometry("Trend Engine",trend,c4,c1,c15,c5)
-    snr=_pro_engine_execution_geometry("SNR / Breakout Engine",snr,c4,c1,c15,c5)
-    ict=_pro_engine_execution_geometry("ICT Liquidity Engine",ict,c4,c1,c15,c5)
-    ob=_pro_engine_execution_geometry("Order Block / FVG Engine",ob,c4,c1,c15,c5)
-    momentum=_pro_engine_execution_geometry("Technical Momentum Engine",momentum,c4,c1,c15,c5)
-    engines={"trend":trend,"snr_breakout":snr,"ict_liquidity":ict,"ob_fvg":ob,"momentum":momentum}
-    votes={k:str(v.get("signal") or "WAIT") for k,v in engines.items()}
-    buy=[k for k,v in votes.items() if v=="BUY"]; sell=[k for k,v in votes.items() if v=="SELL"]
-    winner="BUY" if len(buy)>=PRO_ENGINE_REQUIRED_CONFIRMATIONS else "SELL" if len(sell)>=PRO_ENGINE_REQUIRED_CONFIRMATIONS else "WAIT"
-    winner_keys=buy if winner=="BUY" else sell if winner=="SELL" else []
-    trend_required=trend.get("signal")==winner and winner!="WAIT"
-    ob_required=ob.get("signal")==winner and winner!="WAIT"
-    confidence=round(sum(float(engines[k].get("confidence") or 0) for k in winner_keys)/max(1,len(winner_keys)),1) if winner_keys else 0.0
-    rr=float(ob.get("risk_reward") or 0)
-    entry=ob.get("entry"); sl=ob.get("stop_loss"); tp=list(ob.get("take_profit") or [])
-    blocked=None
-    if winner=="WAIT": blocked=f"CONSENSUS_BELOW_3_OF_5 BUY={len(buy)} SELL={len(sell)}"
-    elif not trend_required: blocked="TREND_ENGINE_DIRECTION_REQUIRED"
-    elif not ob_required: blocked="OB_FVG_ENTRY_REQUIRED"
-    elif confidence<PRO_ENGINE_SIGNAL_THRESHOLD: blocked="GLOBAL_CONFIDENCE_BELOW_80"
-    elif rr<PRO_ENGINE_MIN_RR: blocked="RR_INFORMATIONAL"
-    signal=winner if blocked is None else "WAIT"
-    base_ready=bool(signal in {"BUY","SELL"} and confidence>=PRO_ENGINE_AUTOTRADE_THRESHOLD and rr>=PRO_ENGINE_MIN_RR)
-    final={
-        "signal":signal,"direction_candidate":winner,"confidence":confidence,"score":confidence,
-        "blockedReason":blocked,"entry":entry if signal!="WAIT" else None,"stop_loss":sl if signal!="WAIT" else None,
-        "take_profit":tp if signal!="WAIT" else [],"risk_reward":round(rr,2),
-        "confirmation_count":len(winner_keys),"required_confirmations":PRO_ENGINE_REQUIRED_CONFIRMATIONS,
-        "confirmed_engines":winner_keys,"votes":votes,"agreement_pct":round(len(winner_keys)/5*100,1),
-        "pro_engine_autotrade_eligible":base_ready,"auto_trade_eligible":base_ready,
-        "signal_threshold":PRO_ENGINE_SIGNAL_THRESHOLD,"autotrade_threshold":PRO_ENGINE_AUTOTRADE_THRESHOLD,
-        "min_rr":PRO_ENGINE_MIN_RR,"execution_timeframe":"5min","m1_blocked":True,
-        "strategy_engine":"XAUUSD 5 Engine Decision Pipeline 2026","strategy_version":"PRO5-2026-V1",
-        "strategy_chain":["Trend Engine","SNR / Breakout Engine","ICT Liquidity Engine","Order Block / FVG Engine",
-                          "Technical Momentum Engine","AI Validation","3/5 Consensus","RR informational","MT5 AutoTrade"],
-        "reason":f"{signal} · votes={votes} · confirmations={len(winner_keys)}/5 · confidence={confidence:.1f}% · RR={rr:.2f}" if signal!="WAIT" else blocked,
-        "candle_time":c5[-1].get("time"),
-    }
-    return {"ok":True,"engines":engines,"final":final,"m1_blocked":True,
-            "generated_at":datetime.now(timezone.utc).isoformat()}
-
-async def build_pro_engine_suite(symbol:str="XAU/USD") -> dict[str,Any]:
-    key=clean_symbol(symbol)
-    try:
-        (c4,m4,w4),(c1,m1,w1),(c15,m15,w15),(c5,m5,w5)=await asyncio.gather(
-            get_candles(key,"4h",260),get_candles(key,"1h",260),get_candles(key,"15min",260),get_candles(key,"5min",260)
-        )
-        suite=_build_pro_engine_suite(c4,c1,c15,c5)
-        suite.update({"symbol":key,"source":PRO_ENGINE_SOURCE,
-                      "warnings":[x for x in (w4,w1,w15,w5) if x]})
-        return suite
-    except Exception as exc:
-        return {"ok":False,"symbol":key,"source":PRO_ENGINE_SOURCE,"reason":str(exc),
-                "engines":{},"final":{"signal":"WAIT","confidence":0,"score":0,"blockedReason":str(exc),
-                                      "entry":None,"stop_loss":None,"take_profit":[],"risk_reward":0,
-                                      "pro_engine_autotrade_eligible":False,"m1_blocked":True},
-                "m1_blocked":True,"generated_at":datetime.now(timezone.utc).isoformat()}
-
-@app.get("/api/v1/pro-engines/{symbol:path}")
-async def pro_engines_endpoint(symbol:str, authorization:str|None=Header(default=None), session:Session=Depends(db)) -> dict[str,Any]:
-    require_admin(authorization,session)
-    return await build_pro_engine_suite(symbol)
-
-
 async def build_advanced_signals(symbol: str, news_blocked: bool=False) -> dict[str, Any]:
-    """Signal Lab = Gold Strategy 2026 across all dashboard timeframes.
-
-    M1 remains visible for analysis but is always AutoTrade-blocked.
-    """
-    key=clean_symbol(symbol)
+    # RealMarketAPI's documented analysis timeframes. M30 is built locally from M15.
     intervals=["1min","5min","15min","30min","1h","4h","1day"]
-    loaded: dict[str, tuple[list[dict[str,Any]],str,str|None]] = {}
-    async def load(tf:str):
-        try: loaded[tf]=await get_candles(key,tf,260)
-        except Exception as exc: loaded[tf]=([],"error",str(exc))
-    await asyncio.gather(*(load(tf) for tf in intervals))
-    news_state=await _gold_strategy_news_guard()
-    if news_blocked:
-        news_state={**news_state,"blocked":True,"reason":news_state.get("reason") or "Manual/news blackout active"}
-
-    c4=loaded.get("4h",([], "", None))[0]
-    c1=loaded.get("1h",([], "", None))[0]
-    c15=loaded.get("15min",([], "", None))[0]
-    c5=loaded.get("5min",([], "", None))[0]
-    out={}
-    for tf in intervals:
-        candles,mode,warning=loaded.get(tf,([],"error",None))
+    async def one(tf: str):
         try:
-            item=_gold_strategy_2026(candles,tf,c4,c1,c15,c5,news_state)
-            candle_time=candles[-1].get("time") if candles else None
-            try:
-                ai=await ai_validate_module_signal(GOLD_STRATEGY_SOURCE,key,tf,candle_time,item)
-            except Exception as exc:
-                ai={"mode":"fallback","signal":item.get("signal","WAIT"),"confidence":0,"agreement":0,
-                    "risk_flags":["AI validation exception"],"reasoning":str(exc)[:240]}
-            item["ai_validation"]=ai
-            item["ai_assisted"]=True
-            item["ai_layer"]="Gold Strategy 2026 AI Validation"
+            candles_data,mode,warning=await get_candles(symbol,tf,260)
+            analysis_candles=candles_data
+            item=build_advanced_signal(analysis_candles,tf,news_blocked=news_blocked)
+            candle_time=analysis_candles[-1].get("time")
+            ai=await ai_validate_module_signal("Signal Lab",symbol,tf,candle_time,item)
+            item=merge_ai_validation(item,ai)
+            # Shared AI validation assists every strategy component, but never gates AutoTrade.
+            for _component in (item.get("components") or {}).values():
+                if isinstance(_component, dict):
+                    _component.setdefault("ai_assisted", True)
+                    _component.setdefault("ai_layer", "Shared AI Validation")
+                    _component.setdefault("ai_advisory_only", True)
+            item["ai_layer"]="Shared AI Validation"
+            item["ai_advisory_only"]=True
             item["candle_time"]=candle_time
-            item["mode"]=mode; item["warning"]=warning
-            out[tf]=item
+            # Every timeframe and signal component is calculated from the same
+            # TradingView OHLC series returned by get_candles(). No secondary
+            # market-data or provider-intelligence result is merged into the signal.
+            return tf,{**item,"mode":mode,"warning":warning}
         except Exception as exc:
-            out[tf]={"interval":tf,"signal":"UNAVAILABLE","entry":None,"stop_loss":None,"take_profit":[],
-                     "confidence":0,"score":0,"setup":"ERROR","components":{},"reason":str(exc),
-                     "mode":"error","warning":str(exc),"signal_lab_autotrade_eligible":False}
-    return {"symbol":key,"strategy":"Gold Strategy 2026","timeframes":out,
-            "news_filter":news_state,"m1_autotrade_blocked":True,
+            return tf,{"interval":tf,"signal":"UNAVAILABLE","entry":None,"stop_loss":None,"take_profit":[],
+                       "confidence":0,"score":0,"setup":"ERROR","components":{},
+                       "reason":str(exc),"mode":"error","warning":str(exc)}
+    pairs=await asyncio.gather(*(one(tf) for tf in intervals))
+    return {"symbol":clean_symbol(symbol),"timeframes":{tf:data for tf,data in pairs},
             "generated_at":datetime.now(timezone.utc).isoformat()}
 
 
@@ -6082,9 +4007,6 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 5
                     final = "CANCELLED"
                     final_price = close
                     final_time = cdt
-                    payload.setdefault("result", {})
-                    payload["result"]["reason"] = "TP_AND_SL_HIT_SAME_CANDLE"
-                    payload["result"]["message"] = "TP va SL bir candle ichida urilgan; ketma-ketlik aniq emas."
                     break
                 if hit2:
                     final = "TP2 HIT"
@@ -6135,7 +4057,6 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 5
                 row.r_multiple = rm
                 timeline["final"] = final_time.isoformat()
                 payload["timeline"] = timeline
-                previous_result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
                 payload["result"] = {
                     "status": final,
                     "price": round(float(final_price), 4) if final_price is not None else None,
@@ -6143,8 +4064,6 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 5
                     "duration_seconds": max(0, int((final_time - created).total_seconds())),
                     "profit_loss": pnl,
                     "r_multiple": rm,
-                    "reason": previous_result.get("reason") if final == "CANCELLED" else None,
-                    "message": previous_result.get("message") if final == "CANCELLED" else None,
                 }
                 row.payload = json.dumps(payload, ensure_ascii=False)
                 row.outcome = final
@@ -6173,7 +4092,7 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 5
     ).all())
 
 
-# ---------------- ICT Signals: H4/H1 -> M15/M5 Smart Money ----------------
+# ---------------- ICT Signals: M30 -> M5 ----------------
 def _ict_swings(candles: list[dict[str, Any]], window: int = 2):
     highs, lows = [], []
     for i in range(window, len(candles)-window):
@@ -6184,11 +4103,11 @@ def _ict_swings(candles: list[dict[str, Any]], window: int = 2):
             lows.append((i,l))
     return highs,lows
 
-def _ict_fvg(candles: list[dict[str, Any]], lookback: int = 40):
+def _ict_fvg(candles: list[dict[str, Any]], lookback: int = 30):
     start=max(2,len(candles)-lookback)
     found=[]
     for i in range(start,len(candles)):
-        a,c=candles[i-2],candles[i]
+        a,b,c=candles[i-2],candles[i-1],candles[i]
         ah,al=float(a["high"]),float(a["low"])
         ch,cl=float(c["high"]),float(c["low"])
         if cl > ah:
@@ -6204,7 +4123,7 @@ def _ict_displacement(candles: list[dict[str, Any]], direction: str, period: int
     body=abs(float(c["close"])-float(c["open"]))
     rng=max(float(c["high"])-float(c["low"]),1e-9)
     directional=(float(c["close"])>float(c["open"])) if direction=="BUY" else (float(c["close"])<float(c["open"]))
-    return directional and body >= a*0.90 and body/rng >= 0.52, body/a
+    return directional and body >= a*1.05 and body/rng >= 0.55, body/a
 
 def _ict_mss(candles: list[dict[str, Any]], direction: str):
     highs,lows=_ict_swings(candles[:-1],2)
@@ -6216,34 +4135,21 @@ def _ict_mss(candles: list[dict[str, Any]], direction: str):
         return float(candles[-1]["close"]) < level, level
     return False,None
 
-def _ict_liquidity_sweep(candles: list[dict[str, Any]], lookback:int=18):
+def _ict_liquidity_sweep(candles: list[dict[str, Any]], lookback:int=12):
     highs,lows=_ict_swings(candles[:-2],2)
     cur=candles[-1]
     hi=float(cur["high"]); lo=float(cur["low"]); close=float(cur["close"])
-    recent_h=[x for x in highs if x[0] >= max(0,len(candles)-lookback-10)]
-    recent_l=[x for x in lows if x[0] >= max(0,len(candles)-lookback-10)]
+    recent_h=[x for x in highs if x[0] >= max(0,len(candles)-lookback-8)]
+    recent_l=[x for x in lows if x[0] >= max(0,len(candles)-lookback-8)]
     if recent_h:
         level=recent_h[-1][1]
         if hi > level and close < level:
-            return {"type":"BSL_SWEEP","level":level,"extreme":hi,"index":len(candles)-1}
+            return {"type":"BSL_SWEEP","level":level,"extreme":hi}
     if recent_l:
         level=recent_l[-1][1]
         if lo < level and close > level:
-            return {"type":"SSL_SWEEP","level":level,"extreme":lo,"index":len(candles)-1}
-    return {"type":"NONE","level":None,"extreme":None,"index":None}
-
-def _ict_recent_liquidity_sweep(candles: list[dict[str, Any]], max_bars: int = 5):
-    if len(candles) < 30:
-        return {"type":"NONE","level":None,"extreme":None,"index":None}
-    start=max(30,len(candles)-max_bars)
-    for end in range(len(candles),start,-1):
-        part=candles[:end]
-        sweep=_ict_liquidity_sweep(part)
-        if sweep.get("type")!="NONE":
-            sweep["index"]=end-1
-            sweep["bars_ago"]=len(candles)-end
-            return sweep
-    return {"type":"NONE","level":None,"extreme":None,"index":None,"bars_ago":None}
+            return {"type":"SSL_SWEEP","level":level,"extreme":lo}
+    return {"type":"NONE","level":None,"extreme":None}
 
 def _ict_premium_discount(candles:list[dict[str,Any]], lookback:int=80):
     data=candles[-lookback:]
@@ -6255,267 +4161,113 @@ def _ict_premium_discount(candles:list[dict[str,Any]], lookback:int=80):
             "position_pct":round((price-lo)/max(hi-lo,1e-9)*100,2)}
 
 def _ict_order_block(candles:list[dict[str,Any]], direction:str, atr_value:float):
-    # Last opposite candle immediately before displacement in the desired direction.
-    for i in range(len(candles)-2,max(-1,len(candles)-35),-1):
+    # Last opposite candle before a strong directional candle.
+    for i in range(len(candles)-2,max(-1,len(candles)-25),-1):
         c,n=candles[i],candles[i+1]
         co,cc=float(c["open"]),float(c["close"])
         no,nc=float(n["open"]),float(n["close"])
         body=abs(nc-no)
-        if direction=="BUY" and cc<co and nc>no and body>=atr_value*0.70:
+        if direction=="BUY" and cc<co and nc>no and body>=atr_value*0.8:
             return {"type":"BULLISH","low":float(c["low"]),"high":float(c["high"]),"index":i}
-        if direction=="SELL" and cc>co and nc<no and body>=atr_value*0.70:
+        if direction=="SELL" and cc>co and nc<no and body>=atr_value*0.8:
             return {"type":"BEARISH","low":float(c["low"]),"high":float(c["high"]),"index":i}
     return {"type":"NONE","low":None,"high":None,"index":None}
 
-def _ict_tf_bias(candles:list[dict[str,Any]]) -> dict[str,Any]:
-    if len(candles)<55:
-        return {"bias":"NEUTRAL","ema20":None,"ema50":None,"structure":"NEUTRAL"}
-    data=candles[:-1] if len(candles)>2 else candles
-    closes=[float(c["close"]) for c in data]
-    price=closes[-1]
-    e20=_ema(closes[-90:],20); e50=_ema(closes[-140:],50)
-    highs,lows=_ict_swings(data,2)
-    hh=len(highs)>=2 and highs[-1][1]>highs[-2][1]
-    hl=len(lows)>=2 and lows[-1][1]>lows[-2][1]
-    lh=len(highs)>=2 and highs[-1][1]<highs[-2][1]
-    ll=len(lows)>=2 and lows[-1][1]<lows[-2][1]
-    structure="BULLISH" if hh and hl else "BEARISH" if lh and ll else "MIXED"
-    if structure=="BULLISH" and e20>e50 and price>e20:
-        bias="BULLISH"
-    elif structure=="BEARISH" and e20<e50 and price<e20:
-        bias="BEARISH"
-    elif e20>e50 and price>e20:
-        bias="BULLISH"
-    elif e20<e50 and price<e20:
-        bias="BEARISH"
-    else:
-        bias="NEUTRAL"
-    return {"bias":bias,"ema20":round(e20,4),"ema50":round(e50,4),"structure":structure,"price":round(price,4)}
-
-def _ict_zone_retest(candles:list[dict[str,Any]], zone:dict[str,Any], direction:str, max_bars:int=5) -> dict[str,Any]:
-    if not zone or zone.get("low") is None or zone.get("high") is None or zone.get("type")=="NONE":
-        return {"retested":False,"index":None,"bars_ago":None}
-    lo=float(zone["low"]); hi=float(zone["high"])
-    start=max(int(zone.get("index") or 0)+1,len(candles)-max_bars)
-    for i in range(len(candles)-1,start-1,-1):
-        c=candles[i]; ch=float(c["high"]); cl=float(c["low"]); close=float(c["close"]); op=float(c["open"])
-        touched=cl<=hi and ch>=lo
-        if not touched:
-            continue
-        directional_close=(close>=op and close>=lo) if direction=="BUY" else (close<=op and close<=hi)
-        if directional_close:
-            return {"retested":True,"index":i,"bars_ago":len(candles)-1-i}
-    return {"retested":False,"index":None,"bars_ago":None}
-
-def _ict_killzone(candle_time:Any) -> dict[str,Any]:
-    try:
-        raw=float(candle_time)
-        dt=datetime.fromtimestamp(raw,timezone.utc).astimezone(ZoneInfo("America/New_York"))
-        minute=dt.hour*60+dt.minute
-        # Common ICT New-York-clock windows: London 02:00–05:00, New York 07:00–10:00.
-        if 120 <= minute < 300:
-            name="LONDON"
-        elif 420 <= minute < 600:
-            name="NEW_YORK"
-        else:
-            name="OFF"
-        return {"active":name!="OFF","name":name,"new_york_time":dt.isoformat()}
-    except Exception:
-        return {"active":False,"name":"OFF","new_york_time":None}
-
-def _ict_liquidity_targets(series:list[list[dict[str,Any]]], direction:str, entry:float) -> list[float]:
-    vals=[]
-    for candles in series:
-        try:
-            highs,lows=_ict_swings(candles[:-1],2)
-            pts=highs if direction=="BUY" else lows
-            vals.extend(v for _,v in pts if (v>entry if direction=="BUY" else v<entry))
-        except Exception:
-            continue
-    unique=sorted({round(float(v),4) for v in vals}, reverse=(direction=="SELL"))
-    return unique[:12]
-
-def build_ict_smart_money(c4:list[dict[str,Any]], c1:list[dict[str,Any]],
-                          c15:list[dict[str,Any]], c5:list[dict[str,Any]]) -> dict[str,Any]:
-    """ICT/Smart-Money model: HTF bias -> liquidity -> MSS/BOS -> FVG/OB -> Killzone -> entry.
-
-    Signal threshold is 80/100. AutoTrade is stricter: >=85 confidence, RR informational,
-    AI/market validation must also pass later in the common worker, and M1 is hard-blocked.
-    """
-    if min(len(c4),len(c1),len(c15),len(c5)) < 60:
-        raise MarketDataError("ICT uchun H4/H1/M15/M5 da kamida 60 candle kerak")
-
-    h4=_ict_tf_bias(c4); h1=_ict_tf_bias(c1); m15_bias=_ict_tf_bias(c15); m5_bias=_ict_tf_bias(c5)
-    htf_match=h4["bias"]==h1["bias"] and h4["bias"] in {"BULLISH","BEARISH"}
-    direction="BUY" if htf_match and h4["bias"]=="BULLISH" else "SELL" if htf_match and h4["bias"]=="BEARISH" else "WAIT"
-
-    p5=float(c5[-1]["close"]); a5=max(atr(c5),p5*0.0002); a15=max(atr(c15),p5*0.0003)
-    sweep5=_ict_recent_liquidity_sweep(c5,5)
-    sweep15=_ict_recent_liquidity_sweep(c15,4)
-    expected_sweep="SSL_SWEEP" if direction=="BUY" else "BSL_SWEEP" if direction=="SELL" else "NONE"
-    sweep=sweep5 if sweep5.get("type")==expected_sweep else sweep15 if sweep15.get("type")==expected_sweep else {"type":"NONE","level":None,"extreme":None,"index":None}
-    sweep_ok=direction!="WAIT" and sweep.get("type")==expected_sweep
-
-    mss5,mss5_level=_ict_mss(c5,direction) if direction!="WAIT" else (False,None)
-    mss15,mss15_level=_ict_mss(c15,direction) if direction!="WAIT" else (False,None)
-    disp5,disp_ratio=_ict_displacement(c5,direction) if direction!="WAIT" else (False,0.0)
-    mss_bos_ok=bool(mss5 or (mss15 and disp5))
-
-    desired_type="BULLISH" if direction=="BUY" else "BEARISH" if direction=="SELL" else "NONE"
-    fvg5=_ict_fvg(c5); fvg15=_ict_fvg(c15)
-    fvg=fvg5 if fvg5.get("type")==desired_type else fvg15 if fvg15.get("type")==desired_type else {"type":"NONE","low":None,"high":None,"index":None}
-    fvg_retest=_ict_zone_retest(c5 if fvg is fvg5 else c15,fvg,direction,5) if direction!="WAIT" else {"retested":False}
-
-    ob5=_ict_order_block(c5,direction,a5) if direction!="WAIT" else {"type":"NONE","low":None,"high":None,"index":None}
-    ob15=_ict_order_block(c15,direction,a15) if direction!="WAIT" else {"type":"NONE","low":None,"high":None,"index":None}
-    ob=ob5 if ob5.get("type")==desired_type else ob15 if ob15.get("type")==desired_type else {"type":"NONE","low":None,"high":None,"index":None}
-    ob_retest=_ict_zone_retest(c5 if ob is ob5 else c15,ob,direction,5) if direction!="WAIT" else {"retested":False}
-
-    m15_align=(m15_bias["bias"]==("BULLISH" if direction=="BUY" else "BEARISH")) or mss15
-    m5_align=(m5_bias["bias"]==("BULLISH" if direction=="BUY" else "BEARISH")) or mss5
-    alignment_ok=direction!="WAIT" and m15_align and m5_align
-    kz=_ict_killzone(c5[-1].get("time"))
-
-    checks=[]; score=0
-    def add(name:str,points:int,ok:bool,detail:str):
-        nonlocal score
-        if ok: score+=points
-        checks.append({"name":name,"points":points if ok else 0,"max_points":points,"status":"PASS" if ok else "MISS","detail":detail})
-
-    add("HTF H4/H1 Bias",20,htf_match,f"H4={h4['bias']} H1={h1['bias']}")
-    add("Liquidity Sweep",20,sweep_ok,str(sweep.get("type") or "NONE"))
-    add("MSS / BOS",20,mss_bos_ok,f"M5 MSS={mss5}; M15 MSS={mss15}; displacement={disp5}")
-    add("FVG Retest",15,bool(fvg_retest.get("retested")),f"{fvg.get('type')} retest={bool(fvg_retest.get('retested'))}")
-    add("Order Block Retest",10,bool(ob_retest.get("retested")),f"{ob.get('type')} retest={bool(ob_retest.get('retested'))}")
-    add("Killzone",5,bool(kz.get("active")),str(kz.get("name")))
-    add("M15/M5 Alignment",10,alignment_ok,f"M15={m15_bias['bias']} M5={m5_bias['bias']}")
-
-    entry_zone=None
-    if fvg_retest.get("retested") and fvg.get("low") is not None:
-        entry_zone={"type":"FVG","low":float(fvg["low"]),"high":float(fvg["high"])}
-    if ob_retest.get("retested") and ob.get("low") is not None:
-        ob_zone={"type":"ORDER_BLOCK","low":float(ob["low"]),"high":float(ob["high"])}
-        if entry_zone is None or abs(((ob_zone["low"]+ob_zone["high"])/2)-p5) < abs(((entry_zone["low"]+entry_zone["high"])/2)-p5):
-            entry_zone=ob_zone
-    entry=p5
-
-    # Stop outside the swept liquidity / order block / latest confirmed M5 swing.
-    highs5,lows5=_ict_swings(c5[:-1],2)
+def _ict_target_liquidity(candles:list[dict[str,Any]], direction:str, entry:float):
+    highs,lows=_ict_swings(candles,2)
     if direction=="BUY":
-        structural_lows=[v for _,v in lows5[-8:]]
-        stop_candidates=[x for x in [sweep.get("extreme"),ob.get("low")] if x is not None] + structural_lows
-        sl=(min(stop_candidates)-a5*0.10) if stop_candidates else entry-a5*1.10
-    elif direction=="SELL":
-        structural_highs=[v for _,v in highs5[-8:]]
-        stop_candidates=[x for x in [sweep.get("extreme"),ob.get("high")] if x is not None] + structural_highs
-        sl=(max(stop_candidates)+a5*0.10) if stop_candidates else entry+a5*1.10
-    else:
-        sl=None
+        vals=[v for _,v in highs if v>entry]
+        return min(vals) if vals else None
+    vals=[v for _,v in lows if v<entry]
+    return max(vals) if vals else None
 
-    tp=[]; rr=0.0
-    if direction in {"BUY","SELL"} and sl is not None:
-        risk=abs(entry-sl)
-        targets=_ict_liquidity_targets([c1,c15,c5],direction,entry)
-        if targets:
-            tp1=targets[0]
-            tp2=targets[1] if len(targets)>1 else None
-            tp=[tp1] + ([tp2] if tp2 is not None else [])
-            rr=((tp1-entry)/risk) if direction=="BUY" else ((entry-tp1)/risk)
-            rr=max(0.0,rr)
-
-    mandatory_ok=htf_match and sweep_ok and mss_bos_ok and alignment_ok and bool(fvg_retest.get("retested") or ob_retest.get("retested"))
-    wait_code=None
-    if not htf_match: wait_code="HTF_BIAS_CONFLICT"
-    elif not sweep_ok: wait_code="NO_LIQUIDITY_SWEEP"
-    elif not mss_bos_ok: wait_code="NO_MSS_BOS"
-    elif not (fvg_retest.get("retested") or ob_retest.get("retested")): wait_code="NO_FVG_OR_OB_RETEST"
-    elif not alignment_ok: wait_code="M15_M5_MISALIGN"
-    elif score < ICT_SIGNAL_THRESHOLD: wait_code="LOW_CONFIDENCE"
-
-    signal=direction if mandatory_ok and score>=ICT_SIGNAL_THRESHOLD and direction!="WAIT" else "WAIT"
-    auto_trade_eligible=bool(signal in {"BUY","SELL"} and score>=ICT_AUTOTRADE_THRESHOLD and rr>=ICT_MIN_AUTOTRADE_RR and tp)
-    auto_trade_reason="READY" if auto_trade_eligible else (
-        "M1_BLOCKED" if False else
-        "SIGNAL_WAIT" if signal=="WAIT" else
-        "CONFIDENCE_BELOW_85" if score<ICT_AUTOTRADE_THRESHOLD else
-        "RR_INFORMATIONAL" if rr<ICT_MIN_AUTOTRADE_RR else
-        "NO_LIQUIDITY_TARGET"
-    )
-
-    pd=_ict_premium_discount(c1)
-    reason_parts=[]
-    if signal!="WAIT":
-        reason_parts.append(f"{signal} ICT setup {score}/100")
-        reason_parts.append(f"H4/H1 {h4['bias']}")
-        reason_parts.append(str(sweep.get("type")))
-        reason_parts.append("MSS/BOS confirmed")
-        if fvg_retest.get("retested"): reason_parts.append("FVG retest")
-        if ob_retest.get("retested"): reason_parts.append("Order Block retest")
-        reason_parts.append(f"Killzone {kz.get('name')}")
-        reason_parts.append(f"RR {rr:.2f}")
-    else:
-        reason_parts.append(wait_code or "WAIT_CONFLUENCE")
-        reason_parts.append(f"score={score}/100")
-
-    return {
-        "signal":signal,"direction_candidate":direction,"confidence":int(score),"score":int(score),
-        "signal_threshold":ICT_SIGNAL_THRESHOLD,"autotrade_threshold":ICT_AUTOTRADE_THRESHOLD,
-        "current_price":round(p5,4),"entry":round(entry,4) if direction!="WAIT" else None,
-        "stop_loss":round(sl,4) if sl is not None else None,
-        "take_profit":[round(x,4) for x in tp[:2]],"risk_reward":round(rr,2),
-        "min_autotrade_rr":ICT_MIN_AUTOTRADE_RR,
-        "ict_autotrade_eligible":auto_trade_eligible,"auto_trade_eligible":auto_trade_eligible,
-        "auto_trade_reason":auto_trade_reason,"execution_timeframe":"5min","m1_blocked":True,
-        "bias":h4["bias"] if htf_match else "NEUTRAL","htf":{"h4":h4,"h1":h1,"aligned":htf_match},
-        "m15":{"bias":m15_bias,"mss":mss15,"mss_level":mss15_level,"fvg":fvg15,"order_block":ob15},
-        "m5":{"bias":m5_bias,"mss":mss5,"mss_level":mss5_level,"displacement":disp5,
-              "displacement_atr":round(disp_ratio,2),"fvg":fvg5,"order_block":ob5,"atr":round(a5,4)},
-        "fvg":fvg,"fvg_retest":fvg_retest,"order_block":ob,"order_block_retest":ob_retest,
-        "liquidity":{"type":sweep.get("type"),"level":round(float(sweep["level"]),4) if sweep.get("level") is not None else None,
-                     "extreme":round(float(sweep["extreme"]),4) if sweep.get("extreme") is not None else None,
-                     "bars_ago":sweep.get("bars_ago")},
-        "killzone":kz,"premium_discount":pd,"entry_zone":entry_zone,
-        "checks":checks,"wait_code":wait_code,
-        "reason":"; ".join(reason_parts),
-        "model":"ICT Smart Money · H4/H1 → Liquidity → M15/M5 MSS/BOS → FVG/OB Retest → Killzone",
-        "strategy_engine":"ICT Smart Money Pro V3","strategy_version":"ICT-SMC-V3",
-        "note":"Confidence is a confluence score, not a guaranteed win probability.",
-        "evaluated_at":datetime.now(timezone.utc).isoformat(),
-    }
-
-# Compatibility wrapper retained for any old internal call; it now delegates to the
-# new model only when full HTF context is explicitly unavailable.
 def build_ict_m30_m5(candles30:list[dict[str,Any]], candles5:list[dict[str,Any]]) -> dict[str,Any]:
-    # Legacy UI/clients should no longer use this path for trading.
-    if len(candles30)<60 or len(candles5)<60:
-        raise MarketDataError("Legacy ICT data insufficient")
-    p=float(candles5[-1]["close"])
-    return {"signal":"WAIT","confidence":0,"score":0,"current_price":round(p,4),
-            "entry":None,"stop_loss":None,"take_profit":[],"risk_reward":0,
-            "ict_autotrade_eligible":False,"auto_trade_eligible":False,
-            "wait_code":"LEGACY_ICT_DISABLED","reason":"Legacy M30→M5 ICT disabled; use H4/H1→M15/M5 Smart Money model.",
-            "model":"LEGACY_DISABLED","m1_blocked":True}
+    if len(candles30)<60 or len(candles5)<80:
+        raise MarketDataError("ICT M30→M5 uchun kamida M30=60 va M5=80 candle kerak")
+    p30=float(candles30[-1]["close"]); p5=float(candles5[-1]["close"])
+    a30=max(atr(candles30),p30*0.0003); a5=max(atr(candles5),p5*0.0002)
+    pd=_ict_premium_discount(candles30)
+    h30,l30=_ict_swings(candles30[:-1],2)
+    # HTF bias: structure plus EMA relationship, without forcing a trade.
+    ema20=_ema([float(c["close"]) for c in candles30[-80:]],20)
+    ema50=_ema([float(c["close"]) for c in candles30[-120:]],50)
+    hvals=[v for _,v in h30[-3:]]; lvals=[v for _,v in l30[-3:]]
+    bull_structure=len(hvals)>=2 and hvals[-1]>hvals[-2] and len(lvals)>=2 and lvals[-1]>lvals[-2]
+    bear_structure=len(hvals)>=2 and hvals[-1]<hvals[-2] and len(lvals)>=2 and lvals[-1]<lvals[-2]
+    bias="BULLISH" if bull_structure or (ema20>ema50 and p30>ema20) else "BEARISH" if bear_structure or (ema20<ema50 and p30<ema20) else "NEUTRAL"
+    sweep=_ict_liquidity_sweep(candles30)
+    fvg30=_ict_fvg(candles30)
+    direction="BUY" if sweep["type"]=="SSL_SWEEP" else "SELL" if sweep["type"]=="BSL_SWEEP" else bias
+    if direction not in ("BUY","SELL"): direction="WAIT"
+    # Require HTF alignment where possible; a sweep can override a neutral bias but not a strong opposite structure.
+    if direction=="BUY" and bias=="BEARISH" and bear_structure: direction="WAIT"
+    if direction=="SELL" and bias=="BULLISH" and bull_structure: direction="WAIT"
+    score=0; checks=[]; reasons=[]
+    def add(name,pts,ok,reason):
+        nonlocal score
+        if ok: score+=pts; checks.append({"name":name,"points":pts,"status":"PASS"}); reasons.append(reason)
+        else: checks.append({"name":name,"points":0,"status":"MISS"})
+    add("M30 Bias",15,(direction=="BUY" and bias=="BULLISH") or (direction=="SELL" and bias=="BEARISH"),f"M30 bias {bias}")
+    add("Liquidity Sweep",20,(direction=="BUY" and sweep["type"]=="SSL_SWEEP") or (direction=="SELL" and sweep["type"]=="BSL_SWEEP"),f"{sweep['type']} detected")
+    add("Premium/Discount",10,(direction=="BUY" and pd["zone"]=="DISCOUNT") or (direction=="SELL" and pd["zone"]=="PREMIUM"),f"Price is in {pd['zone'].lower()} zone")
+    add("M30 FVG",10,(fvg30["type"]==("BULLISH" if direction=="BUY" else "BEARISH")),f"M30 {fvg30['type']} FVG")
+    ob30=_ict_order_block(candles30,"BUY" if direction=="BUY" else "SELL",a30) if direction!="WAIT" else {"type":"NONE"}
+    add("M30 Order Block",10,ob30.get("type")==("BULLISH" if direction=="BUY" else "BEARISH"),f"M30 {ob30.get('type')} order block")
+    disp5,disp_ratio=_ict_displacement(candles5,"BUY" if direction=="BUY" else "SELL") if direction!="WAIT" else (False,0)
+    mss5,mss_level=_ict_mss(candles5,"BUY" if direction=="BUY" else "SELL") if direction!="WAIT" else (False,None)
+    fvg5=_ict_fvg(candles5)
+    add("M5 MSS",15,mss5,f"M5 {'bullish' if direction=='BUY' else 'bearish'} structure shift")
+    add("M5 Displacement",10,disp5,f"M5 displacement ratio {disp_ratio:.2f} ATR")
+    add("M5 FVG",10,fvg5["type"]==("BULLISH" if direction=="BUY" else "BEARISH"),f"M5 {fvg5['type']} FVG")
+    target=_ict_target_liquidity(candles30 if direction!="WAIT" else candles5,direction,p5) if direction!="WAIT" else None
+    # Entry uses the active M5 FVG midpoint when present; otherwise current price.
+    entry=p5
+    if direction!="WAIT" and fvg5["type"]==("BULLISH" if direction=="BUY" else "BEARISH"):
+        entry=(fvg5["low"]+fvg5["high"])/2
+    extreme=sweep["extreme"] if sweep["type"]!="NONE" else (min(float(c["low"]) for c in candles5[-8:]) if direction=="BUY" else max(float(c["high"]) for c in candles5[-8:]))
+    if direction=="BUY":
+        sl=min(extreme,entry-a5*1.1); risk=max(entry-sl,a5*0.7)
+        tp1=target if target and target>entry+risk else entry+risk*1.5
+        tp2=max(entry+risk*2.5,tp1+risk*0.5)
+    elif direction=="SELL":
+        sl=max(extreme,entry+a5*1.1); risk=max(sl-entry,a5*0.7)
+        tp1=target if target and target<entry-risk else entry-risk*1.5
+        tp2=min(entry-risk*2.5,tp1-risk*0.5)
+    else:
+        sl=None;tp1=tp2=None;risk=None
+    confidence=min(99,score)
+    signal=direction if score>=85 and direction!="WAIT" else "WAIT"
+    rr=round(abs((tp1-entry)/(entry-sl)),2) if signal=="BUY" else round(abs((entry-tp1)/(sl-entry)),2) if signal=="SELL" else 0
+    return {
+        "signal":signal,"confidence":confidence,"score":score,"current_price":round(p5,4),
+        "entry":round(entry,4) if direction!="WAIT" else None,
+        "stop_loss":round(sl,4) if sl is not None else None,
+        "take_profit":[round(tp1,4),round(tp2,4)] if tp1 is not None else [],
+        "risk_reward":rr,"bias":bias,"draw_on_liquidity":sweep["type"],
+        "premium_discount":pd,"m30":{"fvg":fvg30,"order_block":ob30,"atr":round(a30,4),"ema20":round(ema20,4),"ema50":round(ema50,4)},
+        "m5":{"mss":mss5,"mss_level":mss_level,"displacement":disp5,"displacement_atr":round(disp_ratio,2),"fvg":fvg5,"atr":round(a5,4)},
+        "liquidity":{"type":sweep["type"],"level":round(sweep["level"],4) if sweep["level"] else None,"extreme":round(sweep["extreme"],4) if sweep["extreme"] else None},
+        "checks":checks,"reason":"; ".join(dict.fromkeys(reasons)) if reasons else "No ICT confluence",
+        "model":"ICT M30 → M5","note":"85% is a confluence score, not a guaranteed win probability.",
+        "evaluated_at":datetime.now(timezone.utc).isoformat()
+    }
 
 @app.get("/api/v1/ict-signals/{symbol:path}")
 async def get_ict_signals(symbol: str) -> dict[str, Any]:
     symbol=clean_symbol(symbol)
     try:
-        (c4,mode4,w4),(c1,mode1,w1),(c15,mode15,w15),(c5,mode5,w5)=await asyncio.gather(
-            get_candles(symbol,"4h",260),get_candles(symbol,"1h",260),
-            get_candles(symbol,"15min",260),get_candles(symbol,"5min",260)
-        )
-        result=build_ict_smart_money(c4,c1,c15,c5)
-        candle_time=c5[-1].get("time")
-        result["ai_validation"] = await _module_ai_advisory("ICT Signals", symbol, "5min", candle_time, result)
+        c30,mode30,w30=await get_candles(symbol,"30min",260)
+        c5,mode5,w5=await get_candles(symbol,"5min",260)
+        result=build_ict_m30_m5(c30,c5)
+        candle_time=c5[-2].get("time") if len(c5)>1 else c5[-1].get("time")
+        result["ai_validation"] = await _module_ai_advisory("ICT Signals", symbol, "30min", candle_time, result)
         result["candle_time"]=candle_time
         return {"ok":True,"symbol":symbol,"mode":"live","source":"TradingView/OANDA canonical candle series",
-                "h4_candles":len(c4),"h1_candles":len(c1),"m15_candles":len(c15),"m5_candles":len(c5),
-                "warnings":[x for x in (w4,w1,w15,w5) if x],
+                "m30_candles":len(c30),"m5_candles":len(c5),"warnings":[x for x in (w30,w5) if x],
                 "ict":result,"generated_at":datetime.now(timezone.utc).isoformat()}
     except Exception as exc:
         return {"ok":False,"symbol":symbol,"mode":"error","error":str(exc),
-                "ict":{"signal":"WAIT","confidence":0,"score":0,"reason":str(exc),
-                       "ict_autotrade_eligible":False,"m1_blocked":True}}
+                "ict":{"signal":"WAIT","confidence":0,"score":0,"reason":str(exc)}}
 
 
 @app.get("/api/v1/signals/advanced/{symbol:path}")
@@ -6685,22 +4437,15 @@ def _execution_gate(item: dict[str, Any], direction: str, candles: list[dict[str
         return {"ok":False,"state":"TARGET_REACHED","reason":"TARGET_REACHED",
                 "entry":entry2,"sl":sl2,"tp":[],"repaired":repaired,"r_multiple":None}
 
-    # Hard level-distance safety gate. RR never blocks AutoTrade.
-    # Only reject structurally absurd SL/TP distances: greater of 8x recent average
-    # candle range or 2% of entry by default (both values are environment-configurable).
+    # Risk gate uses the exact SL/TP that will be sent to MT5.
     avg_range=sum(abs(float(c["high"])-float(c["low"])) for c in candles[-20:])/max(1,min(20,len(candles)))
     atr_now=max(avg_range,entry2*0.00015)
     risk=abs(entry2-sl2)
-    tp_distance=max((abs(float(v)-entry2) for v in tp), default=0.0)
-    max_level_distance=max(
-        atr_now*AUTOTRADE_MAX_LEVEL_DISTANCE_ATR,
-        entry2*AUTOTRADE_MAX_LEVEL_DISTANCE_PCT,
-    )
-    if risk<=0 or risk>max_level_distance or tp_distance<=0 or tp_distance>max_level_distance:
-        return {"ok":False,"state":"CANCELLED","reason":"LEVEL_DISTANCE_TOO_LARGE",
+    max_risk=max(atr_now*2.5,entry2*0.0015)
+    if risk<=0 or risk>max_risk:
+        return {"ok":False,"state":"CANCELLED","reason":"RISK_CHECK_FAILED",
                 "entry":entry2,"sl":sl2,"tp":tp,"repaired":repaired,"r_multiple":None,
-                "risk":risk,"tp_distance":tp_distance,"max_risk":max_level_distance,
-                "max_level_distance":max_level_distance}
+                "risk":risk,"max_risk":max_risk}
     if direction=="BUY":
         rr=(tp[0]-entry2)/risk
     else:
@@ -6994,16 +4739,13 @@ def _strategic_pro_for_timeframe(interval: str, candles_by_tf: dict[str, list[di
             "session_filter":session_ok,"volatility_ratio":round(vol_ratio,2)}
 
 def _autotrade_source_excluded(source: str) -> bool:
-    if _signal_source_blocked(source):
-        return True
     normalized = re.sub(r"[\s_\-/]+", " ", str(source or "").strip().lower()).strip()
     return normalized in {"book + openai", "book openai", "book/openai", "book-openai"} or ("book" in normalized and "openai" in normalized)
 
 
 def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction: str,
                            entry: float, sl: float, tp: list[float], volume: float,
-                           confidence: float | None, candle_time: str,
-                           risk_reward: float | None = None) -> dict[str, Any] | None:
+                           confidence: float | None, candle_time: str) -> dict[str, Any] | None:
     """Put one eligible signal into the in-memory MT5 queue exactly once.
 
     The queue key is symbol/source/timeframe/live-candle/direction. Book + OpenAI is
@@ -7011,135 +4753,13 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     """
     if not MT5_AUTO_TRADING or _autotrade_source_excluded(source):
         return None
-    normalized_source = _normalize_history_source(source)
-    if normalized_source not in ({CONSENSUS_AUTOTRADE_SOURCE, AI_SMART_AUTOTRADE_SOURCE, ICT_AUTOTRADE_SOURCE, GOLD_STRATEGY_SOURCE, SIGNALS_AUTOTRADE_SOURCE, ORDER_BLOCK_SOURCE, PRO_ENGINE_SOURCE, FIBONACCI_SOURCE} | set(PRO_INDIVIDUAL_ENGINE_SOURCES) | set(CONSENSUS_AUTOTRADE_SOURCES)):
-        print(f"[AUTO TRADE QUEUE] AUTOTRADE SOURCE BLOCKED source={source} market={symbol} tf={interval} dir={direction}")
-        return None
-    source = normalized_source
     # M1 is analysis/history-only. Never allow 1-minute signals into AutoTrade.
     if str(interval).strip().lower() in {"1min", "1m", "m1"}:
         print(f"[AUTO TRADE QUEUE] M1 BLOCKED market={symbol} source={source} tf={interval}")
         return None
-
-    # Global proportional Multi-Timeframe safety gate.
-    # Every AutoTrade source must agree with weighted H1/M30/M15/M5 direction,
-    # with H1 as primary direction and M5 as the final execution trigger.
-    mtf_gate=_mtf_autotrade_gate(symbol,direction,source)
-    if not mtf_gate.get("ok"):
-        print(f"[AUTO TRADE QUEUE] WEIGHTED MTF BLOCKED market={symbol} source={source} tf={interval} dir={direction} reason={mtf_gate.get('reason')} allowed={mtf_gate.get('direction')} BUY={mtf_gate.get('buy_weight')} SELL={mtf_gate.get('sell_weight')} context={mtf_gate.get('context')}")
-        return None
-    if source == AI_SMART_AUTOTRADE_SOURCE:
-        try:
-            ai_smart_conf = float(confidence or 0)
-        except Exception:
-            ai_smart_conf = 0.0
-        if ai_smart_conf < AI_SMART_AUTOTRADE_THRESHOLD:
-            print(f"[AUTO TRADE QUEUE] AI SMART CONFIDENCE BLOCKED tf={interval} conf={ai_smart_conf:.1f} required={AI_SMART_AUTOTRADE_THRESHOLD}")
-            return None
-    if source == ICT_AUTOTRADE_SOURCE:
-        try:
-            ict_conf = float(confidence or 0)
-            ict_rr = float(risk_reward or 0)
-        except Exception:
-            ict_conf, ict_rr = 0.0, 0.0
-        if ict_conf < ICT_AUTOTRADE_THRESHOLD:
-            print(f"[AUTO TRADE QUEUE] ICT CONFIDENCE BLOCKED tf={interval} conf={ict_conf:.1f} required={ICT_AUTOTRADE_THRESHOLD}")
-            return None
-        if ict_rr < ICT_MIN_AUTOTRADE_RR:
-            print(f"[AUTO TRADE QUEUE] ICT RR BLOCKED tf={interval} rr={ict_rr:.2f} required={ICT_MIN_AUTOTRADE_RR:.2f}")
-            return None
-    if source == GOLD_STRATEGY_SOURCE:
-        try:
-            gold_conf = float(confidence or 0)
-            gold_rr = float(risk_reward or 0)
-        except Exception:
-            gold_conf, gold_rr = 0.0, 0.0
-        if gold_conf < GOLD_STRATEGY_AUTOTRADE_THRESHOLD:
-            print(f"[AUTO TRADE QUEUE] GOLD STRATEGY CONFIDENCE BLOCKED tf={interval} conf={gold_conf:.1f} required={GOLD_STRATEGY_AUTOTRADE_THRESHOLD}")
-            return None
-        if gold_rr < GOLD_STRATEGY_MIN_RR:
-            print(f"[AUTO TRADE QUEUE] GOLD STRATEGY RR BLOCKED tf={interval} rr={gold_rr:.2f} required={GOLD_STRATEGY_MIN_RR:.2f}")
-            return None
-    if source == SIGNALS_AUTOTRADE_SOURCE:
-        try:
-            signals_conf = float(confidence or 0)
-            signals_rr = float(risk_reward or 0)
-        except Exception:
-            signals_conf, signals_rr = 0.0, 0.0
-        if signals_conf < SIGNALS_AUTOTRADE_THRESHOLD:
-            print(f"[AUTO TRADE QUEUE] SIGNALS CONFIDENCE BLOCKED tf={interval} conf={signals_conf:.1f} required={SIGNALS_AUTOTRADE_THRESHOLD}")
-            return None
-        if signals_rr < SIGNALS_MIN_RR:
-            print(f"[AUTO TRADE QUEUE] SIGNALS RR BLOCKED tf={interval} rr={signals_rr:.2f} required={SIGNALS_MIN_RR:.2f}")
-            return None
-    if source == ORDER_BLOCK_SOURCE:
-        try:
-            ob_conf = float(confidence or 0)
-            ob_rr = float(risk_reward or 0)
-        except Exception:
-            ob_conf, ob_rr = 0.0, 0.0
-        if ob_conf < ORDER_BLOCK_AUTOTRADE_THRESHOLD:
-            print(f"[AUTO TRADE QUEUE] ORDER BLOCK CONFIDENCE BLOCKED tf={interval} conf={ob_conf:.1f} required={ORDER_BLOCK_AUTOTRADE_THRESHOLD}")
-            return None
-        if ob_rr < ORDER_BLOCK_MIN_RR:
-            print(f"[AUTO TRADE QUEUE] ORDER BLOCK RR BLOCKED tf={interval} rr={ob_rr:.2f} required={ORDER_BLOCK_MIN_RR:.2f}")
-            return None
-    if source == PRO_ENGINE_SOURCE:
-        try:
-            pro_conf = float(confidence or 0)
-            pro_rr = float(risk_reward or 0)
-        except Exception:
-            pro_conf, pro_rr = 0.0, 0.0
-        if pro_conf < PRO_ENGINE_AUTOTRADE_THRESHOLD:
-            print(f"[AUTO TRADE QUEUE] 5 ENGINE CONFIDENCE BLOCKED tf={interval} conf={pro_conf:.1f} required={PRO_ENGINE_AUTOTRADE_THRESHOLD}")
-            return None
-        if pro_rr < PRO_ENGINE_MIN_RR:
-            print(f"[AUTO TRADE QUEUE] 5 ENGINE RR BLOCKED tf={interval} rr={pro_rr:.2f} required={PRO_ENGINE_MIN_RR:.2f}")
-            return None
-    if source in PRO_INDIVIDUAL_ENGINE_SOURCES:
-        try:
-            eng_conf = float(confidence or 0)
-            eng_rr = float(risk_reward or 0)
-        except Exception:
-            eng_conf, eng_rr = 0.0, 0.0
-        if eng_conf < PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD:
-            print(f"[AUTO TRADE QUEUE] INDIVIDUAL ENGINE CONFIDENCE BLOCKED source={source} tf={interval} conf={eng_conf:.1f} required={PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD}")
-            return None
-        if eng_rr < PRO_INDIVIDUAL_MIN_RR:
-            print(f"[AUTO TRADE QUEUE] INDIVIDUAL ENGINE RR BLOCKED source={source} tf={interval} rr={eng_rr:.2f} required={PRO_INDIVIDUAL_MIN_RR:.2f}")
-            return None
-    if source == FIBONACCI_SOURCE:
-        try:
-            fib_conf = float(confidence or 0)
-            fib_rr = float(risk_reward or 0)
-        except Exception:
-            fib_conf, fib_rr = 0.0, 0.0
-        if fib_conf < FIBONACCI_AUTOTRADE_THRESHOLD:
-            print(f"[AUTO TRADE QUEUE] FIBONACCI CONFIDENCE BLOCKED tf={interval} conf={fib_conf:.1f} required={FIBONACCI_AUTOTRADE_THRESHOLD}")
-            return None
-        if fib_rr < FIBONACCI_MIN_RR:
-            print(f"[AUTO TRADE QUEUE] FIBONACCI RR BLOCKED tf={interval} rr={fib_rr:.2f} required={FIBONACCI_MIN_RR:.2f}")
-            return None
     market = _mt5_market_key(symbol)
     if market != "XAU/USD":
         return None
-    signal_key = _autotrade_signal_fingerprint(market, interval, str(candle_time), direction, entry, sl, tp)
-    if signal_key in MT5_EXECUTED_SIGNAL_KEYS:
-        print(f"[AUTO TRADE QUEUE] GLOBAL DUPLICATE EXECUTED BLOCKED market={market} source={source} tf={interval} candle={candle_time} dir={direction} entry={entry} sl={sl} tp={tp}")
-        return None
-    for q in MT5_ORDER_QUEUE:
-        try:
-            q_signal_key = _autotrade_signal_fingerprint(
-                q.get("symbol") or q.get("market"), q.get("interval") or "",
-                q.get("candle_time") or "", q.get("direction") or "",
-                float(q.get("entry")), float(q.get("sl")), list(q.get("tp") or [])
-            )
-        except Exception:
-            q_signal_key = None
-        if q_signal_key == signal_key:
-            print(f"[AUTO TRADE QUEUE] GLOBAL DUPLICATE QUEUED BLOCKED market={market} source={source} existing_source={q.get('source')} tf={interval} candle={candle_time} dir={direction}")
-            return q
-
     key = (market, source.strip(), interval, str(candle_time), direction.upper())
     # Once an order for this exact market/source/timeframe/candle/direction is reported
     # successful, do not open the same signal again during the same process lifetime.
@@ -7172,14 +4792,11 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
         "volume": float(volume or MT5_LOT_SIZE),
         "source": source.strip(),
         "confidence": float(confidence or 0),
-        "risk_reward": float(risk_reward or 0) if risk_reward is not None else None,
         "candle_time": str(candle_time),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "claimed": False,
         "status": "QUEUED",
         "queue_key": [market, source.strip(), interval, str(candle_time), direction.upper()],
-        "signal_fingerprint": list(signal_key),
-        "weighted_mtf": mtf_gate,
     }
     MT5_ORDER_ATTEMPTS[order_id] = 0
     MT5_ORDER_QUEUE.append(order)
@@ -7208,13 +4825,6 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
     created_history = []
     queued = []
     module_signal_count = 0
-    ict_autotrade_count = 0
-    signal_lab_autotrade_count = 0
-    signals_autotrade_count = 0
-    order_block_autotrade_count = 0
-    pro_engine_autotrade_count = 0
-    fibonacci_autotrade_count = 0
-    individual_engine_autotrade_count = 0
     seen_queue_keys = set()
 
     async def load_symbol_candidates(key: str) -> tuple[list[dict[str, Any]], dict[str, tuple[list[dict[str, Any]], str, str | None]]]:
@@ -7230,54 +4840,49 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 live_by_tf[tf]=([],"error",None)
         await asyncio.gather(*(load_tf(tf) for tf in intervals))
 
-        # Global weighted MTF direction filter for every AutoTrade source.
-        # H1=40%, M30=25%, M15=20%, M5=15%; M1 never participates.
+        # Signal Lab + Signals are the master strategy output for every timeframe.
+        advanced=await build_advanced_signals(key, news_blocked=False)
+        for tf in intervals:
+            item=(advanced.get("timeframes") or {}).get(tf) or {}
+            if item.get("signal") in {"BUY","SELL"}:
+                candidates.append({"source":"Signal Lab","interval":tf,"item":item,"response":advanced})
+                candidates.append({"source":"Signals","interval":tf,"item":item,"response":advanced})
+
+        # AlgoTrade is an additive strategy family.  It uses the same live candle
+        # pipeline but remains isolated from the existing modules.  When its full
+        # MTF gate is confirmed, its per-timeframe execution candidates are added
+        # to the same consensus/History/AutoTrade pipeline. M1 is intentionally
+        # absent from AlgoTrade and is also blocked by _queue_autotrade_order().
         try:
-            mtf_frames={}
-            for mtf_tf in MTF_AUTOTRADE_WEIGHTS:
-                mtf_candles=live_by_tf.get(mtf_tf,([],"",None))[0]
-                if len(mtf_candles)>=2:
-                    mtf_frames[mtf_tf]=timeframe_trend(mtf_candles)
-            regime=_market_regime_filter(
-                live_by_tf.get("1h",([],"",None))[0],
-                live_by_tf.get("30min",([],"",None))[0],
-                live_by_tf.get("15min",([],"",None))[0],
-                live_by_tf.get("5min",([],"",None))[0],
-            )
-            mtf_decision=_update_mtf_autotrade_state(key,mtf_frames,regime)
-            print(f"[MARKET REGIME] market={key} regime={regime.get('regime')} conf={regime.get('confidence')} flat={regime.get('flat_score')}/5 trend={regime.get('trend_score')}/5 metrics={regime.get('metrics')}")
-            print(f"[WEIGHTED MTF] market={key} BUY={mtf_decision.get('buy_weight')} SELL={mtf_decision.get('sell_weight')} score={mtf_decision.get('signed_score')} class={mtf_decision.get('classification')} autotrade={mtf_decision.get('autotrade_direction')} context={mtf_decision.get('context')} blocked={mtf_decision.get('blocked_reason')}")
+            from algotrade_strategy import build_algotrade
+            algo = await build_algotrade(key)
+            for tf, item in (algo.get("execution_candidates") or {}).items():
+                if tf not in intervals:
+                    continue
+                if str(item.get("signal") or "WAIT").upper() not in {"BUY", "SELL"}:
+                    continue
+                candidates.append({
+                    "source": "AlgoTrade",
+                    "interval": tf,
+                    "item": item,
+                    "response": {
+                        "strategy": algo.get("strategy"),
+                        "version": algo.get("version"),
+                        "score": algo.get("score"),
+                        "checks": algo.get("checks"),
+                        "reason": algo.get("reason"),
+                        "candle_time": item.get("candle_time"),
+                    },
+                })
         except Exception as exc:
-            MTF_AUTOTRADE_STATE.pop(key,None)
-            print(f"[WEIGHTED MTF] market={key} ERROR {type(exc).__name__}: {exc}")
+            print(f"[ALGOTRADE] candidate build error market={key}: {type(exc).__name__}: {exc}")
 
-        # Signal Lab, Signals, Order Block and Fibonacci are independent live strategies.
-        gold_news=await _gold_strategy_news_guard()
-        c4_ctx=live_by_tf.get("4h",([],"",None))[0]
-        c1_ctx=live_by_tf.get("1h",([],"",None))[0]
-        c15_ctx=live_by_tf.get("15min",([],"",None))[0]
-        c5_ctx=live_by_tf.get("5min",([],"",None))[0]
-
-        # All active modules are evaluated on their live timeframe candles.
+        # All remaining modules are also evaluated on ALL seven timeframes.
         for tf in intervals:
             candles, mode, warning = live_by_tf.get(tf,([],"error",None))
             if len(candles)<40:
                 continue
             ct=candles[-1].get("time")
-            try:
-                adaptive=_adaptive_ict_trend_strategy(candles,tf,c4_ctx,c1_ctx,c15_ctx,c5_ctx,gold_news)
-                adaptive["strategy_chain"]=["H4/H1 Trend","Premium/Discount","Liquidity Sweep","M15/M5 MSS/CHoCH/BOS","OB + FVG Retest","Session","Macro/News","AI Validation","RR informational","3-strategy AutoTrade"]
-                candidates.append({"source":SIGNALS_AUTOTRADE_SOURCE,"interval":tf,"item":adaptive,
-                                   "response":{"mode":mode,"warning":warning,"candle_time":ct,"news_filter":gold_news}})
-            except Exception as exc:
-                print(f"[ADAPTIVE ICT TREND] candidate error tf={tf} error={type(exc).__name__}: {exc}")
-            try:
-                gold=_gold_strategy_2026(candles,tf,c4_ctx,c1_ctx,c15_ctx,c5_ctx,gold_news)
-                gold["strategy_chain"]=["H4/H1 Trend","SNR Pullback/Breakout","M15/M5 Confirmation","RSI/MACD","Price Action","Volatility/News","AI Validation","RR informational","3-confirmation AutoTrade"]
-                candidates.append({"source":GOLD_STRATEGY_SOURCE,"interval":tf,"item":gold,
-                                   "response":{"mode":mode,"warning":warning,"candle_time":ct,"news_filter":gold_news}})
-            except Exception as exc:
-                print(f"[GOLD STRATEGY 2026] candidate error tf={tf} error={type(exc).__name__}: {exc}")
             try:
                 ref=candles[-2] if len(candles)>1 else candles[-1]
                 price=float(candles[-1]["close"])
@@ -7305,178 +4910,114 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 candidates.append({"source":"Auto Trend Line","interval":tf,"item":trend,"response":{"mode":mode,"warning":warning,"candle_time":ct,"fibonacci":fib}})
             except Exception:
                 pass
+            # ICT uses its dedicated M30→M5 structure. For every TF, expose the same
+            # canonical ICT result in that TF's chain so AutoTrade can receive any TF.
+            try:
+                c30=live_by_tf.get("30min",([],"",None))[0]; c5=live_by_tf.get("5min",([],"",None))[0]
+                if len(c30)>=40 and len(c5)>=40:
+                    ict=build_ict_m30_m5(c30,c5); ict["interval"]=tf; ict["strategy_engine"]="ICT M30→M5 V2"; ict["strategy_version"]="V2"; ict["strategy_chain"]=_strategy_chain(tf)
+                    candidates.append({"source":"ICT Signals","interval":tf,"item":ict,"response":{"mode":"tradingview","candle_time":ct}})
+            except Exception:
+                pass
             # AI Smart Analysis remains chained to the same TF's technical result plus MTF context.
             try:
                 mtf=await multi_timeframe(key)
                 smart={"signal":technical.get("signal","WAIT"),"confidence":technical.get("confidence",0),"entry":technical.get("entry"),"stop_loss":technical.get("stop_loss"),"take_profit":technical.get("take_profit",[]),"reason":f"Technical V2 + MTF {mtf.get('overall','MIXED')}","strategy_engine":"Multi-scenario AI Decision V2","strategy_version":"V2","strategy_chain":_strategy_chain(tf),"interval":tf}
                 if smart["signal"] in {"BUY","SELL"}:
-                    candidates.append({"source":AI_SMART_AUTOTRADE_SOURCE,"interval":tf,"item":smart,"response":{"mode":"direct-autotrade","multi_timeframe":mtf,"candle_time":ct}})
+                    candidates.append({"source":"AI Smart Analysis","interval":tf,"item":smart,"response":{"mode":"confirmation-only","multi_timeframe":mtf,"candle_time":ct}})
             except Exception:
                 pass
-        # ICT Smart Money is one execution model, not six duplicated timeframe orders.
-        # H4/H1 establish bias; M15/M5 confirm entry; execution timeframe is M5.
-        try:
-            c4=live_by_tf.get("4h",([],"",None))[0]
-            c1=live_by_tf.get("1h",([],"",None))[0]
-            c15=live_by_tf.get("15min",([],"",None))[0]
-            c5=live_by_tf.get("5min",([],"",None))[0]
-            if min(len(c4),len(c1),len(c15),len(c5))>=60:
-                ict=build_ict_smart_money(c4,c1,c15,c5)
-                ict["interval"]="5min"
-                ict["strategy_chain"]=["H4/H1 Bias","Liquidity Sweep","M15/M5 MSS/BOS","FVG/OB Retest","Killzone","AI Validation","RR Gate","MT5 AutoTrade"]
-                candidates.append({"source":ICT_AUTOTRADE_SOURCE,"interval":"5min","item":ict,
-                                   "response":{"mode":"tradingview","candle_time":c5[-1].get("time")}})
-        except Exception as exc:
-            print(f"[ICT SMART MONEY] candidate error={type(exc).__name__}: {exc}")
-        try:
-            c4=live_by_tf.get("4h",([],"",None))[0]
-            c1=live_by_tf.get("1h",([],"",None))[0]
-            c15=live_by_tf.get("15min",([],"",None))[0]
-            c5=live_by_tf.get("5min",([],"",None))[0]
-            if min(len(c4),len(c1),len(c15),len(c5))>=60:
-                ob=_order_block_strategy_2026(c4,c1,c15,c5)
-                ob["interval"]="5min"
-                ob["strategy_chain"]=["H4/H1 Bias","HTF Order Block","Liquidity Sweep","Strong Displacement",
-                                      "M15/M5 MSS/CHoCH","Fresh OB + FVG Overlap","First Retest",
-                                      "AI Validation","RR informational","3-strategy AutoTrade"]
-                candidates.append({"source":ORDER_BLOCK_SOURCE,"interval":"5min","item":ob,
-                                   "response":{"mode":"tradingview","candle_time":c5[-1].get("time")}})
-        except Exception as exc:
-            print(f"[ORDER BLOCK PRO] candidate error={type(exc).__name__}: {exc}")
-        try:
-            c4=live_by_tf.get("4h",([],"",None))[0]
-            c1=live_by_tf.get("1h",([],"",None))[0]
-            c30=live_by_tf.get("30min",([],"",None))[0]
-            c15=live_by_tf.get("15min",([],"",None))[0]
-            c5=live_by_tf.get("5min",([],"",None))[0]
-            if min(len(c4),len(c1),len(c30),len(c15),len(c5))>=60:
-                fib_item=_fibonacci_strategy_2026(c4,c1,c30,c15,c5)
-                fib_item["interval"]="5min"
-                if fib_item.get("signal") in {"BUY","SELL"}:
-                    candidates.append({"source":FIBONACCI_SOURCE,"interval":"5min","item":fib_item,
-                                       "response":{"mode":"tradingview","candle_time":c5[-1].get("time")}})
-                print(f"[FIBONACCI ENGINE] market={key} signal={fib_item.get('signal')} score={fib_item.get('score')} rr={fib_item.get('risk_reward')} blocked={fib_item.get('blockedReason')}")
-        except Exception as exc:
-            print(f"[FIBONACCI ENGINE] candidate error={type(exc).__name__}: {exc}")
-        try:
-            c4=live_by_tf.get("4h",([],"",None))[0]
-            c1=live_by_tf.get("1h",([],"",None))[0]
-            c15=live_by_tf.get("15min",([],"",None))[0]
-            c5=live_by_tf.get("5min",([],"",None))[0]
-            if min(len(c4),len(c1),len(c15),len(c5))>=80:
-                suite=_build_pro_engine_suite(c4,c1,c15,c5)
-                final=dict(suite.get("final") or {})
-                final["engines"]=suite.get("engines") or {}
-                final["interval"]="5min"
-                engine_source_map={
-                    "trend":"Trend Engine",
-                    "snr_breakout":"SNR / Breakout Engine",
-                    "ict_liquidity":"ICT Liquidity Engine",
-                    "ob_fvg":"Order Block / FVG Engine",
-                    "momentum":"Technical Momentum Engine",
-                }
-                for engine_key,engine_source in engine_source_map.items():
-                    eng=dict((suite.get("engines") or {}).get(engine_key) or {})
-                    eng["interval"]="5min"
-                    if eng.get("signal") in {"BUY","SELL"}:
-                        candidates.append({"source":engine_source,"interval":"5min","item":eng,
-                                           "response":{"mode":"tradingview","candle_time":c5[-1].get("time"),
-                                                       "individual_engine":engine_key}})
-                        print(f"[INDIVIDUAL ENGINE] market={key} source={engine_source} signal={eng.get('signal')} conf={float(eng.get('confidence') or 0):.1f} rr={float(eng.get('risk_reward') or 0):.2f}")
-                print(f"[5 ENGINE PIPELINE] market={key} signal={final.get('signal')} votes={final.get('votes')} confirmations={final.get('confirmation_count')}/5 conf={float(final.get('confidence') or 0):.1f} rr={float(final.get('risk_reward') or 0):.2f} blocked={final.get('blockedReason')}")
-                if final.get("signal") in {"BUY","SELL"}:
-                    candidates.append({"source":PRO_ENGINE_SOURCE,"interval":"5min","item":final,
-                                       "response":{"mode":"tradingview","candle_time":c5[-1].get("time"),
-                                                   "engine_suite":suite.get("engines")}})
-            else:
-                print(f"[5 ENGINE PIPELINE] market={key} WAIT insufficient bars H4={len(c4)} H1={len(c1)} M15={len(c15)} M5={len(c5)}")
-        except Exception as exc:
-            print(f"[5 ENGINE PIPELINE] candidate error={type(exc).__name__}: {exc}")
         return candidates, live_by_tf
 
-    def _build_consensus(validated: list[dict[str, Any]], interval: str, candle_time: str) -> dict[str, Any]:
-        """Final AutoTrade gate: at least 3 of 4 core modules must agree.
+    def _build_consensus(candidates: list[dict[str, Any]], interval: str, candle_time: str) -> dict[str, Any] | None:
+        """Collapse all module outputs into ONE directional decision per XAU timeframe/candle.
 
-        Only candidates that already passed their module logic, AI/market validation,
-        and execution geometry/risk checks reach this function. Missing/WAIT/failed
-        modules count as WAIT and do not contribute to either side.
+        Signal Lab and Signals are aliases of the same master output and therefore count as
+        one strategy family. A trade is emitted only when independent families agree; ties,
+        conflicts and weak consensus become WAIT. This is the final AutoTrade gate.
         """
-        core_sources = tuple(sorted(CONSENSUS_AUTOTRADE_SOURCES))
-        relevant = [
-            x for x in validated
-            if str(x.get("interval") or "") == interval
-            and str(x.get("candle_time") or "") == str(candle_time)
-            and str(x.get("source") or "") in CONSENSUS_AUTOTRADE_SOURCES
-            and str(x.get("direction") or "").upper() in {"BUY", "SELL"}
-        ]
+        weights = {
+            "Signal Engine": 1.00,
+            "Technical Analysis": 1.00,
+            "Classic Trade": 1.00,
+            "SNR": 1.20,
+            "Auto Trend Line": 1.10,
+            "ICT Signals": 1.40,
+            "AI Smart Analysis": 0.80,
+        }
+        families: dict[str, dict[str, Any]] = {}
+        aliases = {"signal lab": "Signal Engine", "signals": "Signal Engine"}
+        for c in candidates:
+            if str(c.get("interval")) != interval:
+                continue
+            item = c.get("item") or {}
+            direction = str(item.get("signal") or item.get("direction") or "WAIT").upper()
+            if direction not in {"BUY", "SELL"}:
+                continue
+            source = str(c.get("source") or "").strip()
+            family = aliases.get(source.lower(), source)
+            if family not in weights:
+                continue
+            confidence = max(0.0, min(100.0, float(item.get("confidence") or item.get("trend_power") or 0)))
+            # Confidence contributes gradually; no single module can dominate the ensemble.
+            score = weights[family] * (0.55 + 0.45 * confidence / 100.0)
+            bucket = families.setdefault(family, {"BUY": 0.0, "SELL": 0.0, "items": []})
+            bucket[direction] += score
+            bucket["items"].append((direction, item, source, confidence))
 
-        # Defensive de-duplication: one vote per source/timeframe/candle.
-        best_by_source: dict[str, dict[str, Any]] = {}
-        for x in relevant:
-            source = str(x["source"])
-            quality = float(x.get("smart_score") or 0) + float(x.get("confidence") or 0)
-            prev = best_by_source.get(source)
-            prev_quality = (float(prev.get("smart_score") or 0) + float(prev.get("confidence") or 0)) if prev else -1
-            if prev is None or quality > prev_quality:
-                best_by_source[source] = x
-
-        votes = {source: "WAIT" for source in core_sources}
-        for source, x in best_by_source.items():
-            votes[source] = str(x.get("direction") or "WAIT").upper()
-
-        buy_sources = [s for s,d in votes.items() if d == "BUY"]
-        sell_sources = [s for s,d in votes.items() if d == "SELL"]
-        if len(buy_sources) >= CONSENSUS_REQUIRED_CONFIRMATIONS:
-            winner, winner_sources = "BUY", buy_sources
-        elif len(sell_sources) >= CONSENSUS_REQUIRED_CONFIRMATIONS:
-            winner, winner_sources = "SELL", sell_sources
-        else:
-            return {
-                "passed": False, "signal": "WAIT", "votes": votes,
-                "buy_count": len(buy_sources), "sell_count": len(sell_sources),
-                "required": CONSENSUS_REQUIRED_CONFIRMATIONS,
-                "reason": f"GLOBAL_CONSENSUS_BLOCKED: BUY={len(buy_sources)}/4 SELL={len(sell_sources)}/4; required 3/4.",
-            }
-
-        agreeing = [best_by_source[s] for s in winner_sources if s in best_by_source]
-        agreeing.sort(
-            key=lambda x: (float(x.get("smart_score") or 0), float(x.get("confidence") or 0)),
-            reverse=True
-        )
-        representative = agreeing[0]
-        avg_conf = round(sum(float(x.get("confidence") or 0) for x in agreeing) / max(1, len(agreeing)), 1)
-        avg_smart = round(sum(float(x.get("smart_score") or 0) for x in agreeing) / max(1, len(agreeing)), 1)
+        if not families:
+            return None
+        totals = {d: 0.0 for d in ("BUY", "SELL")}
+        for f in families.values():
+            totals["BUY"] += f["BUY"]
+            totals["SELL"] += f["SELL"]
+        winner = "BUY" if totals["BUY"] > totals["SELL"] else "SELL" if totals["SELL"] > totals["BUY"] else "WAIT"
+        if winner == "WAIT":
+            return None
+        loser = "SELL" if winner == "BUY" else "BUY"
+        active_total = totals[winner] + totals[loser]
+        agreement = (totals[winner] / active_total) if active_total else 0.0
+        distinct_winner = sum(1 for f in families.values() if f[winner] > 0)
+        min_families = 2  # tradable timeframes: require two independent strategy families
+        # Hard conflict protection: if the opposing side is materially represented, wait.
+        if distinct_winner < min_families or agreement < 0.60 or (active_total and totals[loser] / active_total > 0.35):
+            return None
+        # Choose the strongest representative setup on the winning side for levels.
+        reps=[]
+        for f in families.values():
+            for d,item,source,conf in f["items"]:
+                if d == winner:
+                    reps.append((weights.get(aliases.get(source.lower(), source),1.0) * (0.55+0.45*conf/100), item, source, conf))
+        reps.sort(key=lambda x:x[0], reverse=True)
+        _, representative, rep_source, rep_conf = reps[0]
         return {
-            "passed": True,
             "signal": winner,
-            "votes": votes,
-            "buy_count": len(buy_sources),
-            "sell_count": len(sell_sources),
-            "required": CONSENSUS_REQUIRED_CONFIRMATIONS,
-            "confirmed_sources": winner_sources,
-            "confirmation_count": len(winner_sources),
-            "agreement_pct": round(len(winner_sources) / 4 * 100, 1),
-            "confidence": avg_conf,
-            "smart_score": avg_smart,
-            "representative": representative,
-            "reason": f"GLOBAL CONSENSUS {winner}: {len(winner_sources)}/4 core modules agreed ({', '.join(winner_sources)}).",
+            "confidence": round(min(99.0, max(0.0, 50.0 + 50.0 * agreement)), 1),
+            "entry": representative.get("entry"),
+            "stop_loss": representative.get("stop_loss"),
+            "take_profit": representative.get("take_profit") or [],
+            "reason": f"Consensus {winner}: {distinct_winner} independent strategy families agreed; agreement {agreement*100:.1f}%.",
+            "consensus_agreement": round(agreement*100, 1),
+            "consensus_families": sorted(families.keys()),
+            "consensus_votes": {f:{"BUY":round(v["BUY"],3),"SELL":round(v["SELL"],3)} for f,v in families.items()},
+            "consensus_source": rep_source,
+            "consensus_source_confidence": rep_conf,
+            "candle_time": candle_time,
+            "strategy_engine": "SignalX Consensus Engine V3",
+            "strategy_version": "V3",
+            "decision_state": "CONFIRMED",
+            "strategy_chain": _strategy_chain(interval),
         }
 
     async def process_symbol(key: str):
-        nonlocal created_history, queued, module_signal_count, ict_autotrade_count, signal_lab_autotrade_count, signals_autotrade_count, order_block_autotrade_count, pro_engine_autotrade_count, fibonacci_autotrade_count, individual_engine_autotrade_count
+        nonlocal created_history, queued, module_signal_count
         candidates, live_by_tf = await load_symbol_candidates(key)
         print(f"[SIGNAL FLOW] candidates={len(candidates)} market={key}")
-        consensus_ready: list[dict[str, Any]] = []
-        signal_lab_ready: list[dict[str, Any]] = []
-        signals_ready: list[dict[str, Any]] = []
-        order_block_ready: list[dict[str, Any]] = []
-        fibonacci_ready: list[dict[str, Any]] = []
 
-        # Persist each module independently in History. MT5 execution is no longer
-        # performed here; only the 3-of-4 global consensus created after this loop
-        # can enter the MT5 queue.
-        # Core modules keep separate History rows. ICT/AI Smart may remain analytical
-        # History sources, but they never count toward or bypass the 3-of-4 MT5 gate.
+        # Persist AND queue every confirmed module signal independently.
+        # M1 remains excluded; Book + OpenAI is excluded by the common queue guard.
+        # Each module gets its own History row and its own AutoTrade queue key.
+        # This intentionally does NOT collapse module signals into a single consensus order.
         for c in candidates:
             tf = str(c.get("interval") or "").strip().lower()
             item = dict(c.get("item") or {})
@@ -7488,8 +5029,6 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 continue
             candle_time = _normalize_history_candle_time(candles[-1].get("time"))
             source = _normalize_history_source(c.get("source") or "Signals")
-            if _signal_source_blocked(source):
-                continue
             original_direction = direction
             original_item = dict(item)
 
@@ -7590,175 +5129,18 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                              "risk_reward":None,"live_levels_verified":True,"levels_repaired_from_live_chart":repaired})
                 direction_history = "WAIT"
             else:
-                is_core_consensus_source = source in CONSENSUS_AUTOTRADE_SOURCES
-                is_ict_source = source == ICT_AUTOTRADE_SOURCE
-                is_signal_lab_source = source == GOLD_STRATEGY_SOURCE
-                is_signals_source = source == SIGNALS_AUTOTRADE_SOURCE
-                is_order_block_source = source == ORDER_BLOCK_SOURCE
-                is_pro_engine_source = source == PRO_ENGINE_SOURCE
-                is_fibonacci_source = source == FIBONACCI_SOURCE
-                is_individual_engine_source = source in PRO_INDIVIDUAL_ENGINE_SOURCES
-                ict_rr = float(gate.get("r_multiple") or 0)
-                ict_direct_ready = bool(
-                    is_ict_source and tf not in {"1min","1m","m1"}
-                    and bool(original_item.get("ict_autotrade_eligible") or original_item.get("auto_trade_eligible"))
-                    and conf >= ICT_AUTOTRADE_THRESHOLD
-                    and ict_rr >= ICT_MIN_AUTOTRADE_RR
-                )
-                gold_rr = float(gate.get("r_multiple") or 0)
-                gold_base_ready = bool(
-                    is_signal_lab_source and tf not in {"1min","1m","m1"}
-                    and bool(original_item.get("signal_lab_autotrade_eligible") or original_item.get("auto_trade_eligible"))
-                    and conf >= GOLD_STRATEGY_AUTOTRADE_THRESHOLD
-                    and gold_rr >= GOLD_STRATEGY_MIN_RR
-                )
-                signals_rr = float(gate.get("r_multiple") or 0)
-                signals_base_ready = bool(
-                    is_signals_source and tf not in {"1min","1m","m1"}
-                    and bool(original_item.get("signals_autotrade_eligible") or original_item.get("auto_trade_eligible"))
-                    and conf >= SIGNALS_AUTOTRADE_THRESHOLD
-                    and signals_rr >= SIGNALS_MIN_RR
-                )
-                ob_rr = float(gate.get("r_multiple") or 0)
-                ob_ai_conf = float(ai.get("confidence") or 0) if is_order_block_source else 0.0
-                ob_base_ready = bool(
-                    is_order_block_source and tf not in {"1min","1m","m1"}
-                    and bool(original_item.get("order_block_autotrade_eligible") or original_item.get("auto_trade_eligible"))
-                    and conf >= ORDER_BLOCK_AUTOTRADE_THRESHOLD
-                    and ob_ai_conf >= ORDER_BLOCK_AUTOTRADE_THRESHOLD
-                    and ob_rr >= ORDER_BLOCK_MIN_RR
-                )
-                pro_rr = float(gate.get("r_multiple") or 0)
-                pro_ai_conf = float(ai.get("confidence") or 0) if is_pro_engine_source else 0.0
-                pro_direct_ready = bool(
-                    is_pro_engine_source and tf not in {"1min","1m","m1"}
-                    and bool(original_item.get("pro_engine_autotrade_eligible") or original_item.get("auto_trade_eligible"))
-                    and int(original_item.get("confirmation_count") or 0) >= PRO_ENGINE_REQUIRED_CONFIRMATIONS
-                    and conf >= PRO_ENGINE_AUTOTRADE_THRESHOLD
-                    and pro_ai_conf >= PRO_ENGINE_AUTOTRADE_THRESHOLD
-                    and pro_rr >= PRO_ENGINE_MIN_RR
-                )
-                fib_rr = float(gate.get("r_multiple") or 0)
-                fib_ai_conf = float(ai.get("confidence") or 0) if is_fibonacci_source else 0.0
-                fib_base_ready = bool(
-                    is_fibonacci_source and tf not in {"1min","1m","m1"}
-                    and bool(original_item.get("fibonacci_autotrade_eligible") or original_item.get("auto_trade_eligible"))
-                    and conf >= FIBONACCI_AUTOTRADE_THRESHOLD
-                    and fib_ai_conf >= FIBONACCI_AUTOTRADE_THRESHOLD
-                    and fib_rr >= FIBONACCI_MIN_RR
-                )
-                eng_rr = float(gate.get("r_multiple") or 0)
-                eng_ai_conf = float(ai.get("confidence") or 0) if is_individual_engine_source else 0.0
-                eng_direct_ready = bool(
-                    is_individual_engine_source and tf not in {"1min","1m","m1"}
-                    and bool(original_item.get("pro_individual_autotrade_eligible"))
-                    and conf >= PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD
-                    and eng_ai_conf >= PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD
-                    and eng_rr >= PRO_INDIVIDUAL_MIN_RR
-                )
                 item.update({"entry":entry,"stop_loss":sl,"take_profit":tp,"live_levels_verified":True,
-                             "levels_repaired_from_live_chart":repaired,
-                             "auto_trade_eligible":bool(ict_direct_ready),
-                             "ict_autotrade_eligible":bool(ict_direct_ready) if is_ict_source else item.get("ict_autotrade_eligible"),
-                             "signal_lab_base_autotrade_ready":bool(gold_base_ready) if is_signal_lab_source else item.get("signal_lab_base_autotrade_ready"),
-                             "signal_lab_autotrade_eligible":False if is_signal_lab_source else item.get("signal_lab_autotrade_eligible"),
-                             "signals_base_autotrade_ready":bool(signals_base_ready) if is_signals_source else item.get("signals_base_autotrade_ready"),
-                             "signals_autotrade_eligible":False if is_signals_source else item.get("signals_autotrade_eligible"),
-                             "order_block_base_autotrade_ready":bool(ob_base_ready) if is_order_block_source else item.get("order_block_base_autotrade_ready"),
-                             "order_block_autotrade_eligible":False if is_order_block_source else item.get("order_block_autotrade_eligible"),
-                             "pro_engine_autotrade_eligible":bool(pro_direct_ready) if is_pro_engine_source else item.get("pro_engine_autotrade_eligible"),
-                             "fibonacci_base_autotrade_ready":bool(fib_base_ready) if is_fibonacci_source else item.get("fibonacci_base_autotrade_ready"),
-                             "fibonacci_autotrade_eligible":False if is_fibonacci_source else item.get("fibonacci_autotrade_eligible"),
-                             "pro_individual_autotrade_eligible":bool(eng_direct_ready) if is_individual_engine_source else item.get("pro_individual_autotrade_eligible"),
-                             "consensus_eligible":bool(is_core_consensus_source),
-                             "consensus_required":CONSENSUS_REQUIRED_CONFIRMATIONS,
-                             "execution_state":"ICT_AUTOTRADE_READY" if ict_direct_ready else
-                                               "ICT_AUTOTRADE_BLOCKED" if is_ict_source else
-                                               "SIGNAL_LAB_CONFIRMATION_WAIT" if gold_base_ready else
-                                               "SIGNAL_LAB_THRESHOLD_BLOCKED" if is_signal_lab_source else
-                                               "SIGNALS_CONFIRMATION_WAIT" if signals_base_ready else
-                                               "SIGNALS_THRESHOLD_BLOCKED" if is_signals_source else
-                                               "ORDER_BLOCK_CONFIRMATION_WAIT" if ob_base_ready else
-                                               "ORDER_BLOCK_THRESHOLD_BLOCKED" if is_order_block_source else
-                                               "PRO_ENGINE_AUTOTRADE_READY" if pro_direct_ready else
-                                               "PRO_ENGINE_THRESHOLD_BLOCKED" if is_pro_engine_source else
-                                               "FIBONACCI_CONFIRMATION_WAIT" if fib_base_ready else
-                                               "FIBONACCI_THRESHOLD_BLOCKED" if is_fibonacci_source else
-                                               "INDIVIDUAL_ENGINE_AUTOTRADE_READY" if eng_direct_ready else
-                                               "INDIVIDUAL_ENGINE_THRESHOLD_BLOCKED" if is_individual_engine_source else
-                                               "CONSENSUS_READY" if is_core_consensus_source else "ANALYSIS_ONLY",
-                             "execution_reason":"ICT_DIRECT_AUTOTRADE_READY" if ict_direct_ready else
-                                                ("ICT_THRESHOLD_OR_RR_BLOCK" if is_ict_source else
-                                                 "WAITING_FOR_2_CORE_CONFIRMATIONS" if gold_base_ready else
-                                                 "SIGNAL_LAB_THRESHOLD_OR_RR_BLOCK" if is_signal_lab_source else
-                                                 "WAITING_FOR_2_CORE_CONFIRMATIONS" if signals_base_ready else
-                                                 "SIGNALS_THRESHOLD_OR_RR_BLOCK" if is_signals_source else
-                                                 "WAITING_FOR_2_CORE_CONFIRMATIONS" if ob_base_ready else
-                                                 "ORDER_BLOCK_THRESHOLD_OR_RR_BLOCK" if is_order_block_source else
-                                                 "5_ENGINE_3_OF_5_AI_RR_PASSED" if pro_direct_ready else
-                                                 "5_ENGINE_THRESHOLD_AI_OR_RR_BLOCK" if is_pro_engine_source else
-                                                 "WAITING_FOR_2_CORE_CONFIRMATIONS" if fib_base_ready else
-                                                 "FIBONACCI_THRESHOLD_AI_OR_RR_BLOCK" if is_fibonacci_source else
-                                                 "INDIVIDUAL_ENGINE_AI_RR_PASSED" if eng_direct_ready else
-                                                 "INDIVIDUAL_ENGINE_THRESHOLD_AI_OR_RR_BLOCK" if is_individual_engine_source else
-                                                 "WAITING_FOR_GLOBAL_3_OF_4_CONSENSUS" if is_core_consensus_source else
-                                                 "SOURCE_NOT_IN_AUTOTRADE_CONSENSUS"),
+                             "levels_repaired_from_live_chart":repaired,"auto_trade_eligible":True,
+                             "execution_state":"READY","execution_reason":"ALL_GATES_PASSED",
                              "risk_reward":gate.get("r_multiple")})
                 direction_history = direction
-                if is_core_consensus_source:
-                    consensus_ready.append({
-                        "source": source, "interval": tf, "candle_time": candle_time,
-                        "direction": direction, "entry": entry, "sl": sl, "tp": tp,
-                        "confidence": conf, "smart_score": float(smart.get("score") or 0),
-                        "item": item,
-                    })
-                if gold_base_ready:
-                    signal_lab_ready.append({
-                        "source": source, "interval": tf, "candle_time": candle_time,
-                        "direction": direction, "entry": entry, "sl": sl, "tp": tp,
-                        "confidence": conf, "smart_score": float(smart.get("score") or 0),
-                        "risk_reward": gold_rr, "item": item,
-                    })
-                if signals_base_ready:
-                    signals_ready.append({
-                        "source": source, "interval": tf, "candle_time": candle_time,
-                        "direction": direction, "entry": entry, "sl": sl, "tp": tp,
-                        "confidence": conf, "smart_score": float(smart.get("score") or 0),
-                        "risk_reward": signals_rr, "item": item,
-                    })
-                if ob_base_ready:
-                    order_block_ready.append({
-                        "source": source, "interval": tf, "candle_time": candle_time,
-                        "direction": direction, "entry": entry, "sl": sl, "tp": tp,
-                        "confidence": conf, "smart_score": float(smart.get("score") or 0),
-                        "risk_reward": ob_rr, "item": item,
-                    })
-                if fib_base_ready:
-                    fibonacci_ready.append({
-                        "source": source, "interval": tf, "candle_time": candle_time,
-                        "direction": direction, "entry": entry, "sl": sl, "tp": tp,
-                        "confidence": conf, "smart_score": float(smart.get("score") or 0),
-                        "risk_reward": fib_rr, "item": item,
-                    })
 
             payload = {"source":source,"module_signal":item,"symbol":key,"interval":tf,"candle_time":candle_time,
                        "live_generated":True,"execution_gate":{
-                           "state":item.get("execution_state") if not target_reached else gate.get("state"),
-                           "reason":item.get("execution_reason") if not target_reached else gate.get("reason"),
-                           "geometry_checked":True,
-                           "target_checked":True,"risk_checked":not target_reached,
-                           "auto_trade":bool(item.get("ict_autotrade_eligible")) if source == ICT_AUTOTRADE_SOURCE else False,
-                           "signal_lab_base_ready":bool(item.get("signal_lab_base_autotrade_ready")) if source == GOLD_STRATEGY_SOURCE else False,
-                           "signals_base_ready":bool(item.get("signals_base_autotrade_ready")) if source == SIGNALS_AUTOTRADE_SOURCE else False,
-                           "order_block_base_ready":bool(item.get("order_block_base_autotrade_ready")) if source == ORDER_BLOCK_SOURCE else False,
-                           "pro_engine_ready":bool(item.get("pro_engine_autotrade_eligible")) if source == PRO_ENGINE_SOURCE else False,
-                           "fibonacci_base_ready":bool(item.get("fibonacci_base_autotrade_ready")) if source == FIBONACCI_SOURCE else False,
-                           "individual_engine_ready":bool(item.get("pro_individual_autotrade_eligible")) if source in PRO_INDIVIDUAL_ENGINE_SOURCES else False,
+                           "state":gate.get("state"),"reason":gate.get("reason"),"geometry_checked":True,
+                           "target_checked":True,"risk_checked":not target_reached,"auto_trade":bool(gate.get("ok")),
                            "risk_reward":gate.get("r_multiple"),"risk":gate.get("risk"),"max_risk":gate.get("max_risk"),
-                           "levels_repaired":repaired},
-                       "consensus":{"required":CONSENSUS_REQUIRED_CONFIRMATIONS,"core_sources":sorted(CONSENSUS_AUTOTRADE_SOURCES),
-                                    "eligible":bool(source in CONSENSUS_AUTOTRADE_SOURCES)},
-                       "auto_trade":{"queued":False,"mode":"GLOBAL_CONSENSUS_3_OF_4"}}
+                           "levels_repaired":repaired},"auto_trade":{"queued":False}}
             recent = session.scalars(select(SignalHistory).where(
                 SignalHistory.user_id == user.id, SignalHistory.symbol == key,
                 SignalHistory.interval == tf, SignalHistory.candle_time == candle_time,
@@ -7777,9 +5159,8 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 session.add(history_row)
                 created_history.append({"source":source,"symbol":key,"interval":tf,"direction":direction_history,
                                         "confidence":conf,"module_history":True,
-                                        "auto_trade_eligible":False,
-                                        "consensus_eligible":bool(source in CONSENSUS_AUTOTRADE_SOURCES),
-                                        "execution_state":item.get("execution_state"),"risk_reward":gate.get("r_multiple")})
+                                        "auto_trade_eligible":bool(gate.get("ok")),
+                                        "execution_state":gate.get("state"),"risk_reward":gate.get("r_multiple")})
                 print(f"[SIGNAL HISTORY] MODULE RECORDED source={source} market={key} tf={tf} dir={direction_history} state={gate.get('state')}")
             elif str(recent.status or "ACTIVE").upper() in {"ACTIVE","TP1 HIT","OPEN"} and str(recent.outcome or "OPEN").upper() in {"OPEN","TP1 HIT"}:
                 recent.direction = direction_history
@@ -7788,545 +5169,36 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 recent.payload = json.dumps(payload, ensure_ascii=False, default=str)
                 _history_sync_row(recent, payload)
 
-            # AI Smart Analysis may AutoTrade directly at >=84% confidence.
-            # Cross-source signal fingerprinting below guarantees that if Technical
-            # Analysis or any other module has identical Entry/SL/TP, only one order wins.
-            if source == AI_SMART_AUTOTRADE_SOURCE and direction in {"BUY","SELL"} and tp and conf >= AI_SMART_AUTOTRADE_THRESHOLD:
-                existing_queue_ids = {str(q.get("id")) for q in MT5_ORDER_QUEUE}
+            order = None
+            if direction in {"BUY", "SELL"} and tp:
                 order = _queue_autotrade_order(
-                    symbol=key, source=AI_SMART_AUTOTRADE_SOURCE, interval=tf, direction=direction,
+                    symbol=key, source=source, interval=tf, direction=direction,
                     entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
-                    confidence=conf, candle_time=candle_time, risk_reward=float(gate.get("r_multiple") or 0),
+                    confidence=conf, candle_time=candle_time,
                 )
-                is_new_ai_smart = order is not None and str(order.get("id")) not in existing_queue_ids
-                if order is not None:
-                    payload["auto_trade"]["queued"] = True
-                    payload["auto_trade"]["mode"] = "AI_SMART_DIRECT"
-                    payload["auto_trade"]["order_id"] = order.get("id")
-                    target_row = recent if recent is not None else history_row
-                    if target_row is not None:
-                        target_row.payload = json.dumps(payload, ensure_ascii=False, default=str)
-                        _history_sync_row(target_row, payload)
-                if is_new_ai_smart:
-                    queued.append(order)
-                    print(f"[AI SMART AUTOTRADE] QUEUED market={key} tf={tf} dir={direction} conf={conf:.1f}")
-
-            # ICT Signals is a direct AutoTrade exception.
-            # It must pass its 85% + RR informational gate and the common AI/market/risk gates.
-            if source == ICT_AUTOTRADE_SOURCE and bool(item.get("ict_autotrade_eligible")) and direction in {"BUY","SELL"} and tp:
-                existing_queue_ids = {str(q.get("id")) for q in MT5_ORDER_QUEUE}
-                order = _queue_autotrade_order(
-                    symbol=key, source=ICT_AUTOTRADE_SOURCE, interval=tf, direction=direction,
-                    entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
-                    confidence=conf, candle_time=candle_time, risk_reward=float(gate.get("r_multiple") or 0),
-                )
-                is_new_ict = order is not None and str(order.get("id")) not in existing_queue_ids
-                if order is not None:
-                    payload["auto_trade"]["queued"] = True
-                    payload["auto_trade"]["mode"] = "ICT_DIRECT_SMART_MONEY"
-                    payload["auto_trade"]["order_id"] = order.get("id")
-                    target_row = recent if recent is not None else history_row
-                    if target_row is not None:
-                        target_row.payload = json.dumps(payload, ensure_ascii=False, default=str)
-                        _history_sync_row(target_row, payload)
-                if is_new_ict:
-                    queued.append(order)
-                    ict_autotrade_count += 1
-                    print(f"[ICT AUTOTRADE] QUEUED market={key} tf={tf} dir={direction} conf={conf:.1f} rr={float(gate.get('r_multiple') or 0):.2f}")
-
-            if source == PRO_ENGINE_SOURCE and bool(item.get("pro_engine_autotrade_eligible")) and direction in {"BUY","SELL"} and tp:
-                existing_queue_ids = {str(q.get("id")) for q in MT5_ORDER_QUEUE}
-                order = _queue_autotrade_order(
-                    symbol=key, source=PRO_ENGINE_SOURCE, interval=tf, direction=direction,
-                    entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
-                    confidence=conf, candle_time=candle_time, risk_reward=float(gate.get("r_multiple") or 0),
-                )
-                is_new_pro = order is not None and str(order.get("id")) not in existing_queue_ids
-                if order is not None:
-                    payload["auto_trade"]["queued"] = True
-                    payload["auto_trade"]["mode"] = "5_ENGINE_3_OF_5_DIRECT"
-                    payload["auto_trade"]["order_id"] = order.get("id")
-                    target_row = recent if recent is not None else history_row
-                    if target_row is not None:
-                        target_row.payload = json.dumps(payload, ensure_ascii=False, default=str)
-                        _history_sync_row(target_row, payload)
-                if is_new_pro:
-                    queued.append(order)
-                    pro_engine_autotrade_count += 1
-                    print(f"[5 ENGINE AUTOTRADE] QUEUED market={key} tf={tf} dir={direction} conf={conf:.1f} rr={float(gate.get('r_multiple') or 0):.2f}")
-
-            if source in PRO_INDIVIDUAL_ENGINE_SOURCES and bool(item.get("pro_individual_autotrade_eligible")) and direction in {"BUY","SELL"} and tp:
-                existing_queue_ids={str(q.get("id")) for q in MT5_ORDER_QUEUE}
-                order=_queue_autotrade_order(
-                    symbol=key,source=source,interval=tf,direction=direction,
-                    entry=entry,sl=sl,tp=tp,volume=MT5_LOT_SIZE,
-                    confidence=conf,candle_time=candle_time,risk_reward=float(gate.get("r_multiple") or 0),
-                )
-                is_new_individual=order is not None and str(order.get("id")) not in existing_queue_ids
-                if order is not None:
-                    payload["auto_trade"]["queued"]=True
-                    payload["auto_trade"]["mode"]="INDIVIDUAL_ENGINE_DIRECT"
-                    payload["auto_trade"]["order_id"]=order.get("id")
-                    target_row=recent if recent is not None else history_row
-                    if target_row is not None:
-                        target_row.payload=json.dumps(payload,ensure_ascii=False,default=str)
-                        _history_sync_row(target_row,payload)
-                if is_new_individual:
-                    queued.append(order)
-                    individual_engine_autotrade_count += 1
-                    print(f"[INDIVIDUAL ENGINE AUTOTRADE] QUEUED market={key} source={source} tf={tf} dir={direction} conf={conf:.1f} ai={float(ai.get('confidence') or 0):.1f} rr={float(gate.get('r_multiple') or 0):.2f}")
-
-            # Core consensus modules still use the server-created 3-of-4 Consensus path below.
-            # the server-created 3-of-4 Consensus row/order below.
-
-        # Fibonacci AutoTrade:
-        # Fibonacci itself + at least two validated core modules in the same M5 direction = 3 confirmations.
-        for fibrow in fibonacci_ready:
-            tf=str(fibrow.get("interval") or "")
-            candle_time=str(fibrow.get("candle_time") or "")
-            direction=str(fibrow.get("direction") or "").upper()
-            matching={}
-            for x in consensus_ready:
-                if str(x.get("interval") or "")!=tf or str(x.get("candle_time") or "")!=candle_time:
-                    continue
-                if str(x.get("direction") or "").upper()!=direction:
-                    continue
-                src=str(x.get("source") or "")
-                if src in CONSENSUS_AUTOTRADE_SOURCES:
-                    matching[src]=x
-            total_confirmations=1+len(matching)
-            passed=total_confirmations>=FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS
-            row=session.scalar(select(SignalHistory).where(
-                SignalHistory.user_id==user.id, SignalHistory.symbol==key,
-                SignalHistory.interval==tf, SignalHistory.candle_time==candle_time,
-                SignalHistory.source==FIBONACCI_SOURCE,
-            ).order_by(SignalHistory.id.desc()))
-            if row is not None:
-                try: row_payload=json.loads(row.payload or "{}")
-                except Exception: row_payload={}
-                module_payload=row_payload.get("module_signal") if isinstance(row_payload.get("module_signal"),dict) else {}
-                module_payload["fibonacci_consensus_passed"]=passed
-                module_payload["fibonacci_autotrade_eligible"]=passed
-                module_payload["fibonacci_confirmation_count"]=total_confirmations
-                module_payload["fibonacci_confirming_sources"]=sorted(matching.keys())
-                module_payload["execution_state"]="FIBONACCI_AUTOTRADE_READY" if passed else "FIBONACCI_CONFIRMATION_BLOCKED"
-                module_payload["execution_reason"]="3_CONFIRMATIONS_PASSED" if passed else f"ONLY_{total_confirmations}_OF_3_CONFIRMATIONS"
-                row_payload["module_signal"]=module_payload
-                row_payload["fibonacci_consensus"]={
-                    "passed":passed,"required":FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS,
-                    "total_confirmations":total_confirmations,"direction":direction,
-                    "confirming_core_sources":sorted(matching.keys()),
-                }
-                row_payload.setdefault("auto_trade",{})["mode"]="FIBONACCI_PRO_3_CONFIRMATIONS"
-                row.payload=json.dumps(row_payload,ensure_ascii=False,default=str)
-                _history_sync_row(row,row_payload)
-            if not passed:
-                print(f"[FIBONACCI ENGINE] AUTOTRADE BLOCKED market={key} tf={tf} dir={direction} confirmations={total_confirmations}/3 core={sorted(matching.keys())}")
-                continue
-            existing_queue_ids={str(q.get("id")) for q in MT5_ORDER_QUEUE}
-            order=_queue_autotrade_order(
-                symbol=key,source=FIBONACCI_SOURCE,interval=tf,direction=direction,
-                entry=float(fibrow.get("entry")),sl=float(fibrow.get("sl")),tp=list(fibrow.get("tp") or []),
-                volume=MT5_LOT_SIZE,confidence=float(fibrow.get("confidence") or 0),
-                candle_time=candle_time,risk_reward=float(fibrow.get("risk_reward") or 0),
-            )
-            is_new=order is not None and str(order.get("id")) not in existing_queue_ids
-            if order is not None and row is not None:
-                try: row_payload=json.loads(row.payload or "{}")
-                except Exception: row_payload={}
-                row_payload.setdefault("auto_trade",{})["queued"]=True
-                row_payload["auto_trade"]["order_id"]=order.get("id")
-                row.payload=json.dumps(row_payload,ensure_ascii=False,default=str)
-                _history_sync_row(row,row_payload)
-            if is_new:
-                queued.append(order)
-                fibonacci_autotrade_count+=1
-                print(f"[FIBONACCI ENGINE] QUEUED market={key} tf={tf} dir={direction} confirmations={total_confirmations}/3 conf={float(fibrow.get('confidence') or 0):.1f} rr={float(fibrow.get('risk_reward') or 0):.2f}")
-
-        # Order Block AutoTrade:
-        # Order Block itself + at least two validated core modules in the same M5 direction = 3 confirmations.
-        for obrow in order_block_ready:
-            tf=str(obrow.get("interval") or "")
-            candle_time=str(obrow.get("candle_time") or "")
-            direction=str(obrow.get("direction") or "").upper()
-            matching={}
-            for x in consensus_ready:
-                if str(x.get("interval") or "")!=tf or str(x.get("candle_time") or "")!=candle_time:
-                    continue
-                if str(x.get("direction") or "").upper()!=direction:
-                    continue
-                src=str(x.get("source") or "")
-                if src in CONSENSUS_AUTOTRADE_SOURCES:
-                    matching[src]=x
-            total_confirmations=1+len(matching)
-            passed=total_confirmations>=ORDER_BLOCK_REQUIRED_TOTAL_CONFIRMATIONS
-            row=session.scalar(select(SignalHistory).where(
-                SignalHistory.user_id==user.id, SignalHistory.symbol==key,
-                SignalHistory.interval==tf, SignalHistory.candle_time==candle_time,
-                SignalHistory.source==ORDER_BLOCK_SOURCE,
-            ).order_by(SignalHistory.id.desc()))
-            if row is not None:
-                try: row_payload=json.loads(row.payload or "{}")
-                except Exception: row_payload={}
-                module_payload=row_payload.get("module_signal") if isinstance(row_payload.get("module_signal"),dict) else {}
-                module_payload["order_block_consensus_passed"]=passed
-                module_payload["order_block_autotrade_eligible"]=passed
-                module_payload["order_block_confirmation_count"]=total_confirmations
-                module_payload["order_block_confirming_sources"]=sorted(matching.keys())
-                module_payload["execution_state"]="ORDER_BLOCK_AUTOTRADE_READY" if passed else "ORDER_BLOCK_CONFIRMATION_BLOCKED"
-                module_payload["execution_reason"]="3_CONFIRMATIONS_PASSED" if passed else f"ONLY_{total_confirmations}_OF_3_CONFIRMATIONS"
-                row_payload["module_signal"]=module_payload
-                row_payload["order_block_consensus"]={
-                    "passed":passed,"required":ORDER_BLOCK_REQUIRED_TOTAL_CONFIRMATIONS,
-                    "total_confirmations":total_confirmations,"direction":direction,
-                    "confirming_core_sources":sorted(matching.keys()),
-                }
-                row_payload.setdefault("auto_trade",{})["mode"]="ORDER_BLOCK_PRO_3_CONFIRMATIONS"
-                row.payload=json.dumps(row_payload,ensure_ascii=False,default=str)
-                _history_sync_row(row,row_payload)
-            if not passed:
-                print(f"[ORDER BLOCK PRO] AUTOTRADE BLOCKED market={key} tf={tf} dir={direction} confirmations={total_confirmations}/3 core={sorted(matching.keys())}")
-                continue
-            existing_queue_ids={str(q.get("id")) for q in MT5_ORDER_QUEUE}
-            order=_queue_autotrade_order(
-                symbol=key,source=ORDER_BLOCK_SOURCE,interval=tf,direction=direction,
-                entry=float(obrow.get("entry")),sl=float(obrow.get("sl")),tp=list(obrow.get("tp") or []),
-                volume=MT5_LOT_SIZE,confidence=float(obrow.get("confidence") or 0),
-                candle_time=candle_time,risk_reward=float(obrow.get("risk_reward") or 0),
-            )
-            is_new=order is not None and str(order.get("id")) not in existing_queue_ids
-            if order is not None and row is not None:
-                try: row_payload=json.loads(row.payload or "{}")
-                except Exception: row_payload={}
-                row_payload.setdefault("auto_trade",{})["queued"]=True
-                row_payload["auto_trade"]["order_id"]=order.get("id")
-                row.payload=json.dumps(row_payload,ensure_ascii=False,default=str)
-                _history_sync_row(row,row_payload)
-            if is_new:
-                queued.append(order)
-                order_block_autotrade_count+=1
-                print(f"[ORDER BLOCK PRO] QUEUED market={key} tf={tf} dir={direction} confirmations={total_confirmations}/3 conf={float(obrow.get('confidence') or 0):.1f} rr={float(obrow.get('risk_reward') or 0):.2f}")
-
-        # Signals / XAUUSD Adaptive ICT Trend AutoTrade:
-        # Signals itself + at least two validated core modules in the same direction = 3 confirmations.
-        for sigrow in signals_ready:
-            tf=str(sigrow.get("interval") or "")
-            candle_time=str(sigrow.get("candle_time") or "")
-            direction=str(sigrow.get("direction") or "").upper()
-            matching={}
-            for x in consensus_ready:
-                if str(x.get("interval") or "")!=tf or str(x.get("candle_time") or "")!=candle_time:
-                    continue
-                if str(x.get("direction") or "").upper()!=direction:
-                    continue
-                src=str(x.get("source") or "")
-                if src in CONSENSUS_AUTOTRADE_SOURCES:
-                    matching[src]=x
-            total_confirmations=1+len(matching)
-            passed=total_confirmations>=SIGNALS_REQUIRED_TOTAL_CONFIRMATIONS
-            row=session.scalar(select(SignalHistory).where(
-                SignalHistory.user_id==user.id, SignalHistory.symbol==key,
-                SignalHistory.interval==tf, SignalHistory.candle_time==candle_time,
-                SignalHistory.source==SIGNALS_AUTOTRADE_SOURCE,
-            ).order_by(SignalHistory.id.desc()))
-            if row is not None:
-                try: row_payload=json.loads(row.payload or "{}")
-                except Exception: row_payload={}
-                module_payload=row_payload.get("module_signal") if isinstance(row_payload.get("module_signal"),dict) else {}
-                module_payload["signals_consensus_passed"]=passed
-                module_payload["signals_autotrade_eligible"]=passed
-                module_payload["signals_confirmation_count"]=total_confirmations
-                module_payload["signals_confirming_sources"]=sorted(matching.keys())
-                module_payload["execution_state"]="SIGNALS_AUTOTRADE_READY" if passed else "SIGNALS_CONFIRMATION_BLOCKED"
-                module_payload["execution_reason"]="3_CONFIRMATIONS_PASSED" if passed else f"ONLY_{total_confirmations}_OF_3_CONFIRMATIONS"
-                row_payload["module_signal"]=module_payload
-                row_payload["signals_consensus"]={
-                    "passed":passed,"required":SIGNALS_REQUIRED_TOTAL_CONFIRMATIONS,
-                    "total_confirmations":total_confirmations,"signals_direction":direction,
-                    "confirming_core_sources":sorted(matching.keys()),
-                }
-                row_payload.setdefault("auto_trade",{})["mode"]="ADAPTIVE_ICT_TREND_3_CONFIRMATIONS"
-                row.payload=json.dumps(row_payload,ensure_ascii=False,default=str)
-                _history_sync_row(row,row_payload)
-            if not passed:
-                print(f"[ADAPTIVE ICT TREND] AUTOTRADE BLOCKED market={key} tf={tf} dir={direction} confirmations={total_confirmations}/3 core={sorted(matching.keys())}")
-                continue
-            existing_queue_ids={str(q.get("id")) for q in MT5_ORDER_QUEUE}
-            order=_queue_autotrade_order(
-                symbol=key,source=SIGNALS_AUTOTRADE_SOURCE,interval=tf,direction=direction,
-                entry=float(sigrow.get("entry")),sl=float(sigrow.get("sl")),tp=list(sigrow.get("tp") or []),
-                volume=MT5_LOT_SIZE,confidence=float(sigrow.get("confidence") or 0),
-                candle_time=candle_time,risk_reward=float(sigrow.get("risk_reward") or 0),
-            )
-            is_new=order is not None and str(order.get("id")) not in existing_queue_ids
-            if order is not None and row is not None:
-                try: row_payload=json.loads(row.payload or "{}")
-                except Exception: row_payload={}
-                row_payload.setdefault("auto_trade",{})["queued"]=True
-                row_payload["auto_trade"]["order_id"]=order.get("id")
-                row.payload=json.dumps(row_payload,ensure_ascii=False,default=str)
-                _history_sync_row(row,row_payload)
-            if is_new:
-                queued.append(order)
-                signals_autotrade_count+=1
-                print(f"[ADAPTIVE ICT TREND] QUEUED market={key} tf={tf} dir={direction} confirmations={total_confirmations}/3 conf={float(sigrow.get('confidence') or 0):.1f} rr={float(sigrow.get('risk_reward') or 0):.2f}")
-
-        # Signal Lab / Gold Strategy 2026 AutoTrade:
-        # Signal Lab itself + at least two validated core modules in the same direction
-        # = three independent confirmations. M1 is hard-blocked at the queue layer.
-        for gold in signal_lab_ready:
-            tf=str(gold.get("interval") or "")
-            candle_time=str(gold.get("candle_time") or "")
-            direction=str(gold.get("direction") or "").upper()
-            matching={}
-            for x in consensus_ready:
-                if str(x.get("interval") or "")!=tf or str(x.get("candle_time") or "")!=candle_time:
-                    continue
-                if str(x.get("direction") or "").upper()!=direction:
-                    continue
-                src=str(x.get("source") or "")
-                if src in CONSENSUS_AUTOTRADE_SOURCES:
-                    matching[src]=x
-            total_confirmations=1+len(matching)
-            passed=total_confirmations>=GOLD_STRATEGY_REQUIRED_TOTAL_CONFIRMATIONS
-            row=session.scalar(select(SignalHistory).where(
-                SignalHistory.user_id==user.id,
-                SignalHistory.symbol==key,
-                SignalHistory.interval==tf,
-                SignalHistory.candle_time==candle_time,
-                SignalHistory.source==GOLD_STRATEGY_SOURCE,
-            ).order_by(SignalHistory.id.desc()))
-            if row is not None:
-                try: row_payload=json.loads(row.payload or "{}")
-                except Exception: row_payload={}
-                module_payload=row_payload.get("module_signal") if isinstance(row_payload.get("module_signal"),dict) else {}
-                module_payload["signal_lab_consensus_passed"]=passed
-                module_payload["signal_lab_autotrade_eligible"]=passed
-                module_payload["signal_lab_confirmation_count"]=total_confirmations
-                module_payload["signal_lab_confirming_sources"]=sorted(matching.keys())
-                module_payload["execution_state"]="SIGNAL_LAB_AUTOTRADE_READY" if passed else "SIGNAL_LAB_CONFIRMATION_BLOCKED"
-                module_payload["execution_reason"]="3_CONFIRMATIONS_PASSED" if passed else f"ONLY_{total_confirmations}_OF_3_CONFIRMATIONS"
-                row_payload["module_signal"]=module_payload
-                row_payload["signal_lab_consensus"]={
-                    "passed":passed,"required":GOLD_STRATEGY_REQUIRED_TOTAL_CONFIRMATIONS,
-                    "total_confirmations":total_confirmations,"signal_lab":direction,
-                    "confirming_core_sources":sorted(matching.keys()),
-                }
-                row_payload.setdefault("auto_trade",{})["mode"]="GOLD_STRATEGY_2026_3_CONFIRMATIONS"
-                row.payload=json.dumps(row_payload,ensure_ascii=False,default=str)
-                _history_sync_row(row,row_payload)
-            if not passed:
-                print(f"[GOLD STRATEGY 2026] AUTOTRADE BLOCKED market={key} tf={tf} dir={direction} confirmations={total_confirmations}/3 core={sorted(matching.keys())}")
-                continue
-            existing_queue_ids={str(q.get("id")) for q in MT5_ORDER_QUEUE}
-            order=_queue_autotrade_order(
-                symbol=key,source=GOLD_STRATEGY_SOURCE,interval=tf,direction=direction,
-                entry=float(gold.get("entry")),sl=float(gold.get("sl")),tp=list(gold.get("tp") or []),
-                volume=MT5_LOT_SIZE,confidence=float(gold.get("confidence") or 0),
-                candle_time=candle_time,risk_reward=float(gold.get("risk_reward") or 0),
-            )
-            is_new=order is not None and str(order.get("id")) not in existing_queue_ids
-            if order is not None and row is not None:
-                try: row_payload=json.loads(row.payload or "{}")
-                except Exception: row_payload={}
-                row_payload.setdefault("auto_trade",{})["queued"]=True
-                row_payload["auto_trade"]["order_id"]=order.get("id")
-                row.payload=json.dumps(row_payload,ensure_ascii=False,default=str)
-                _history_sync_row(row,row_payload)
-            if is_new:
-                queued.append(order)
-                signal_lab_autotrade_count+=1
-                print(f"[GOLD STRATEGY 2026] QUEUED market={key} tf={tf} dir={direction} confirmations={total_confirmations}/3 conf={float(gold.get('confidence') or 0):.1f} rr={float(gold.get('risk_reward') or 0):.2f}")
-
-        # Evaluate one global 3-of-4 decision per timeframe/current candle.
-        for tf in ("5min", "15min", "30min", "1h", "4h", "1day"):
-            candles = live_by_tf.get(tf, ([], "error", None))[0]
-            if len(candles) < 40:
-                continue
-            candle_time = _normalize_history_candle_time(candles[-1].get("time"))
-            consensus = _build_consensus(consensus_ready, tf, candle_time)
-            if not consensus.get("passed"):
-                print(f"[GLOBAL CONSENSUS] BLOCKED market={key} tf={tf} candle={candle_time} votes={consensus.get('votes')} reason={consensus.get('reason')}")
-                continue
-
-            winner = str(consensus["signal"]).upper()
-            rep = dict(consensus["representative"])
-            consensus_item = dict(rep.get("item") or {})
-            consensus_item.update({
-                "signal": winner,
-                "entry": rep.get("entry"),
-                "stop_loss": rep.get("sl"),
-                "take_profit": list(rep.get("tp") or []),
-                "confidence": consensus.get("confidence"),
-                "consensus_votes": consensus.get("votes"),
-                "consensus_sources": consensus.get("confirmed_sources"),
-                "consensus_count": consensus.get("confirmation_count"),
-                "consensus_required": CONSENSUS_REQUIRED_CONFIRMATIONS,
-                "consensus_agreement_pct": consensus.get("agreement_pct"),
-                "strategy_engine": "SignalX Global Consensus 3-of-4",
-                "strategy_version": "GC-3OF4-V1",
-                "reason": consensus.get("reason"),
-            })
-            final_gate = _execution_gate(consensus_item, winner, candles)
-            if not final_gate.get("ok"):
-                print(f"[GLOBAL CONSENSUS] EXECUTION BLOCKED market={key} tf={tf} dir={winner} reason={final_gate.get('reason')}")
-                continue
-
-            entry = final_gate.get("entry")
-            sl = final_gate.get("sl")
-            tp = list(final_gate.get("tp") or [])
-            consensus_conf = float(consensus.get("confidence") or 0)
-            consensus_payload = {
-                "source": CONSENSUS_AUTOTRADE_SOURCE,
-                "symbol": key, "interval": tf, "candle_time": candle_time,
-                "live_generated": True,
-                "signal": {"direction": winner, "confidence": consensus_conf},
-                "setup": {"entry": entry, "stop_loss": sl, "take_profit": tp},
-                "consensus": {
-                    "mode": "GLOBAL_3_OF_4",
-                    "required": CONSENSUS_REQUIRED_CONFIRMATIONS,
-                    "core_sources": sorted(CONSENSUS_AUTOTRADE_SOURCES),
-                    "votes": consensus.get("votes"),
-                    "confirmed_sources": consensus.get("confirmed_sources"),
-                    "confirmation_count": consensus.get("confirmation_count"),
-                    "agreement_pct": consensus.get("agreement_pct"),
-                    "representative_source": rep.get("source"),
-                    "average_ai_market_score": consensus.get("smart_score"),
-                    "reason": consensus.get("reason"),
-                },
-                "execution_gate": {
-                    "state": final_gate.get("state"), "reason": final_gate.get("reason"),
-                    "geometry_checked": True, "target_checked": True, "risk_checked": True,
-                    "auto_trade": True, "risk_reward": final_gate.get("r_multiple"),
-                    "risk": final_gate.get("risk"), "max_risk": final_gate.get("max_risk"),
-                },
-                "auto_trade": {"queued": False, "mode": "GLOBAL_CONSENSUS_3_OF_4"},
-            }
-
-            q = select(SignalHistory).where(
-                SignalHistory.user_id == user.id,
-                SignalHistory.symbol == key,
-                SignalHistory.interval == tf,
-                SignalHistory.candle_time == candle_time,
-                SignalHistory.source == CONSENSUS_AUTOTRADE_SOURCE,
-            ).order_by(SignalHistory.id.desc())
-            consensus_row = session.scalar(q)
-            if consensus_row is None:
-                consensus_row = SignalHistory(
-                    user_id=user.id, symbol=key, interval=tf, direction=winner,
-                    headline=f"Consensus {winner} · {consensus.get('confirmation_count')}/4 · {consensus_conf:.1f}%",
-                    price=float(entry or 0), payload=json.dumps(consensus_payload, ensure_ascii=False, default=str),
-                    outcome="OPEN", status="ACTIVE", created_at=now,
-                    source=CONSENSUS_AUTOTRADE_SOURCE, candle_time=candle_time,
-                )
-                _history_sync_row(consensus_row, consensus_payload)
-                session.add(consensus_row)
-                created_history.append({
-                    "source": CONSENSUS_AUTOTRADE_SOURCE, "symbol": key, "interval": tf,
-                    "direction": winner, "confidence": consensus_conf,
-                    "consensus": True, "confirmation_count": consensus.get("confirmation_count"),
-                    "confirmed_sources": consensus.get("confirmed_sources"),
-                    "auto_trade_eligible": True, "execution_state": "CONSENSUS_READY",
-                    "risk_reward": final_gate.get("r_multiple"),
-                })
-            elif str(consensus_row.status or "ACTIVE").upper() in {"ACTIVE", "TP1 HIT", "OPEN"}:
-                consensus_row.direction = winner
-                consensus_row.price = float(entry or 0)
-                consensus_row.headline = f"Consensus {winner} · {consensus.get('confirmation_count')}/4 · {consensus_conf:.1f}%"
-                consensus_row.payload = json.dumps(consensus_payload, ensure_ascii=False, default=str)
-                _history_sync_row(consensus_row, consensus_payload)
-
-            existing_queue_ids = {str(q.get("id")) for q in MT5_ORDER_QUEUE}
-            order = _queue_autotrade_order(
-                symbol=key, source=CONSENSUS_AUTOTRADE_SOURCE, interval=tf, direction=winner,
-                entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
-                confidence=consensus_conf, candle_time=candle_time,
-            )
-            is_new_order = order is not None and str(order.get("id")) not in existing_queue_ids
             if order is not None:
-                consensus_payload["auto_trade"]["queued"] = True
-                consensus_payload["auto_trade"]["order_id"] = order.get("id")
-                consensus_row.payload = json.dumps(consensus_payload, ensure_ascii=False, default=str)
-                _history_sync_row(consensus_row, consensus_payload)
-            if is_new_order:
+                payload["auto_trade"]["queued"] = True
+                target_row = recent if recent is not None else history_row
+                if target_row is not None:
+                    target_row.payload = json.dumps(payload, ensure_ascii=False, default=str)
                 queued.append(order)
                 module_signal_count += 1
-                print(f"[GLOBAL CONSENSUS] QUEUED market={key} tf={tf} dir={winner} confirmations={consensus.get('confirmation_count')}/4 sources={consensus.get('confirmed_sources')}")
+                print(f"[AUTO TRADE QUEUE] MODULE QUEUED source={source} market={key} tf={tf} dir={direction} candle={candle_time}")
 
     await asyncio.gather(*(process_symbol(k) for k in symbols))
-    # Suppress exact duplicate History rows across all modules before they can
-    # affect UI counts/statistics. The first created setup is kept.
-    duplicate_history_removed = _dedupe_signal_history_rows(session, user.id)
-    session.commit()
+    if created_history:
+        session.commit()
     rows = await refresh_signal_outcomes(session, user.id, limit=80)
     return {
         "enabled": True,
         "symbols": symbols,
         "count": len(created_history),
         "queued": len(queued),
-        "module_autotrade_queued": 0,
-        "consensus_autotrade_queued": module_signal_count,
-        "ict_autotrade_queued": ict_autotrade_count,
-        "signal_lab_autotrade_queued": signal_lab_autotrade_count,
-        "signals_autotrade_queued": signals_autotrade_count,
-        "order_block_autotrade_queued": order_block_autotrade_count,
-        "pro_engine_autotrade_queued": pro_engine_autotrade_count,
-        "fibonacci_autotrade_queued": fibonacci_autotrade_count,
-        "individual_engine_autotrade_queued": individual_engine_autotrade_count,
+        "module_autotrade_queued": module_signal_count,
         "history_count": len(rows),
-        "duplicate_history_blocked": duplicate_history_removed,
         "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
-        "forward_mode": "CORE 3-of-4; ICT direct; Signal Lab +2 core; Signals +2 core; Order Block +2 core; 5 Engine Consensus internal 3-of-5 direct; all AutoTrade >=85% AI/RR gates; M1 blocked",
-        "consensus_sources": sorted(CONSENSUS_AUTOTRADE_SOURCES),
-        "signals_autotrade": {"enabled": True, "source": SIGNALS_AUTOTRADE_SOURCE,
-                              "strategy": "XAUUSD Adaptive ICT Trend Strategy 2026",
-                              "signal_threshold": SIGNALS_SIGNAL_THRESHOLD,
-                              "autotrade_threshold": SIGNALS_AUTOTRADE_THRESHOLD,
-                              "min_rr": SIGNALS_MIN_RR,
-                              "required_total_confirmations": SIGNALS_REQUIRED_TOTAL_CONFIRMATIONS,
-                              "m1_blocked": True},
-        "order_block_autotrade": {"enabled": True, "source": ORDER_BLOCK_SOURCE,
-                                  "strategy": "XAUUSD Order Block Pro 2026",
-                                  "signal_threshold": ORDER_BLOCK_SIGNAL_THRESHOLD,
-                                  "autotrade_threshold": ORDER_BLOCK_AUTOTRADE_THRESHOLD,
-                                  "min_rr": ORDER_BLOCK_MIN_RR,
-                                  "required_total_confirmations": ORDER_BLOCK_REQUIRED_TOTAL_CONFIRMATIONS,
-                                  "execution_timeframe":"5min","m1_blocked": True},
-        "pro_engine_autotrade": {"enabled": True, "source": PRO_ENGINE_SOURCE,
-                                 "strategy": "XAUUSD 5 Engine Decision Pipeline 2026",
-                                 "signal_threshold": PRO_ENGINE_SIGNAL_THRESHOLD,
-                                 "autotrade_threshold": PRO_ENGINE_AUTOTRADE_THRESHOLD,
-                                 "min_rr": PRO_ENGINE_MIN_RR,
-                                 "required_confirmations": PRO_ENGINE_REQUIRED_CONFIRMATIONS,
-                                 "engine_count":5,"execution_timeframe":"5min","m1_blocked":True},
-        "individual_engine_autotrade": {"enabled": True,
-                                        "sources": sorted(PRO_INDIVIDUAL_ENGINE_SOURCES),
-                                        "signal_threshold": PRO_INDIVIDUAL_SIGNAL_THRESHOLD,
-                                        "autotrade_threshold": PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD,
-                                        "ai_threshold": PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD,
-                                        "min_rr": PRO_INDIVIDUAL_MIN_RR,
-                                        "execution_timeframe":"5min","m1_blocked":True,
-                                        "requires_3_of_5":False,
-                                        "market_regime_and_weighted_mtf_required":True},
-        "fibonacci_autotrade": {"enabled": True, "source": FIBONACCI_SOURCE,
-                                "strategy": "XAUUSD Fibonacci Confluence Pro 2026",
-                                "signal_threshold": FIBONACCI_SIGNAL_THRESHOLD,
-                                "autotrade_threshold": FIBONACCI_AUTOTRADE_THRESHOLD,
-                                "min_rr": FIBONACCI_MIN_RR,
-                                "required_total_confirmations": FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS,
-                                "execution_timeframe":"5min","m1_blocked":True,
-                                "flat_blocked":True,"transition_blocked":True},
-        "signal_lab_autotrade": {"enabled": True, "source": GOLD_STRATEGY_SOURCE,
-                                 "signal_threshold": GOLD_STRATEGY_SIGNAL_THRESHOLD,
-                                 "autotrade_threshold": GOLD_STRATEGY_AUTOTRADE_THRESHOLD,
-                                 "min_rr": GOLD_STRATEGY_MIN_RR,
-                                 "required_total_confirmations": GOLD_STRATEGY_REQUIRED_TOTAL_CONFIRMATIONS,
-                                 "m1_blocked": True},
-        "ict_autotrade": {"enabled": True, "source": ICT_AUTOTRADE_SOURCE, "signal_threshold": ICT_SIGNAL_THRESHOLD,
-                          "autotrade_threshold": ICT_AUTOTRADE_THRESHOLD, "min_rr": ICT_MIN_AUTOTRADE_RR,
-                          "execution_timeframe": "5min", "m1_blocked": True},
-        "consensus_required": CONSENSUS_REQUIRED_CONFIRMATIONS,
-        "excluded_sources": ["unconfirmed individual module MT5", "M1 / 1min / 1m"],
+        "forward_mode": "EVERY CONFIRMED MODULE SIGNAL EXCEPT M1 AND BOOK + OPENAI",
+        "excluded_sources": ["Book + OpenAI", "M1 / 1min / 1m"],
         "items": created_history,
         "user_id": int(user.id),
     }
@@ -8466,7 +5338,9 @@ async def trend_lines(symbol: str, interval: str = DEFAULT_INTERVAL) -> dict[str
 @app.get("/api/v1/signals/live/{symbol:path}")
 async def live_signals(symbol: str, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
     require_admin(authorization, session)
-    result = await build_adaptive_ict_trend_signals(clean_symbol(symbol))
+    # Every request recomputes signals from the current live candle feed.
+    # No demo/static signal data is used.
+    result = await build_advanced_signals(clean_symbol(symbol), news_blocked=False)
     return {**result, "mode": "live", "source": f"TradingView {tv_symbol_for(symbol)} chart series"}
 
 
@@ -8490,43 +5364,30 @@ async def ai_signals_live(symbol: str, interval: str = DEFAULT_INTERVAL, authori
     return {"symbol":key,"interval":interval,"signal":item,"ai_validation":ai,"mode":"live","source":f"TradingView {tv_symbol_for(key)} live candle","generated_at":datetime.now(timezone.utc).isoformat()}
 
 @app.post("/api/v1/signals/save-advanced")
-async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = DEFAULT_SYMBOL,
-                               authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
-    """Manual journal save for the current Gold Strategy 2026 Signal Lab result.
-
-    This endpoint never bypasses the server-side AutoTrade confirmation gate.
-    """
-    user=current_user(authorization,session)
-    interval=validate_interval(interval)
-    result=await build_advanced_signals(clean_symbol(symbol),news_blocked=False)
-    item=dict((result.get("timeframes") or {}).get(interval) or {})
+async def save_advanced_signal(interval: str = DEFAULT_INTERVAL, symbol: str = DEFAULT_SYMBOL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
+    user = current_user(authorization, session)
+    interval = validate_interval(interval)
+    candles_data, mode, warning = await get_candles(clean_symbol(symbol), interval, 260)
+    item = {**build_advanced_signal(candles_data, interval, news_blocked=False), "mode":mode, "warning":warning}
     if not item or item.get("signal") not in ("BUY","SELL"):
-        raise HTTPException(status_code=400,detail="Bu timeframe uchun tasdiqlangan Gold Strategy 2026 BUY/SELL signal mavjud emas.")
-    live_ct=_normalize_history_candle_time(item.get("candle_time"))
-    q=select(SignalHistory).where(
-        SignalHistory.user_id==user.id,SignalHistory.symbol==clean_symbol(symbol),
-        SignalHistory.interval==interval,SignalHistory.source==GOLD_STRATEGY_SOURCE,
-        SignalHistory.candle_time==live_ct
-    ).order_by(SignalHistory.id.desc())
-    existing=session.scalar(q)
-    payload={"module_signal":item,"advanced":item,
-             "setup":{"entry":item.get("entry"),"stop_loss":item.get("stop_loss"),"take_profit":item.get("take_profit",[])},
-             "symbol":clean_symbol(symbol),"interval":interval,"source":GOLD_STRATEGY_SOURCE,
-             "candle_time":live_ct,"live_generated":True,
-             "auto_trade":{"queued":False,"mode":"SERVER_CONFIRMATION_REQUIRED"}}
+        raise HTTPException(status_code=400, detail="Bu timeframe uchun tasdiqlangan BUY/SELL signal mavjud emas.")
+    live_ct = _normalize_history_candle_time(candles_data[-1].get("time"))
+    existing = session.scalar(select(SignalHistory).where(
+        SignalHistory.user_id == user.id, SignalHistory.symbol == clean_symbol(symbol), SignalHistory.interval == interval,
+        SignalHistory.source == "Signal Lab", SignalHistory.candle_time == live_ct
+    ).order_by(SignalHistory.id.desc()))
+    payload = {"advanced":item,"setup":{"entry":item.get("entry"),"stop_loss":item.get("stop_loss"),"take_profit":item.get("take_profit",[])},"symbol":clean_symbol(symbol),"interval":interval,"source":"Signal Lab","candle_time":live_ct,"live_generated":True}
     if existing is not None:
-        existing.direction=item["signal"]; existing.headline=f'Gold Strategy 2026 · {item["signal"]} · {item.get("confidence",0)}%'[:255]
-        existing.price=float(item["entry"]); existing.payload=json.dumps(payload,ensure_ascii=False,default=str)
-        existing.outcome="OPEN"; existing.status="ACTIVE"; existing.closed_at=None; existing.result=None; existing.profit_loss=None; existing.r_multiple=None
+        existing.direction = item["signal"]
+        existing.headline = f'{item["signal"]} • {item["setup"]}'[:255]
+        existing.price = float(item["entry"])
+        existing.payload = json.dumps(payload, ensure_ascii=False, default=str)
+        existing.outcome = "OPEN"; existing.status = "ACTIVE"; existing.closed_at = None; existing.result = None; existing.profit_loss = None; existing.r_multiple = None
         _history_sync_row(existing,payload); session.commit()
-        return {"saved":False,"updated":True,"id":existing.id,"signal":item,"queued":False}
-    row=SignalHistory(user_id=user.id,symbol=clean_symbol(symbol),interval=interval,direction=item["signal"],
-                      headline=f'Gold Strategy 2026 · {item["signal"]} · {item.get("confidence",0)}%'[:255],
-                      price=float(item["entry"]),payload=json.dumps(payload,ensure_ascii=False,default=str),
-                      outcome="OPEN",status="ACTIVE",created_at=datetime.now(timezone.utc),
-                      source=GOLD_STRATEGY_SOURCE,candle_time=live_ct)
+        return {"saved":False,"updated":True,"id":existing.id,"signal":item}
+    row = SignalHistory(user_id=user.id, symbol=clean_symbol(symbol), interval=interval, direction=item["signal"], headline=f'{item["signal"]} • {item["setup"]}', price=float(item["entry"]), payload=json.dumps(payload,ensure_ascii=False), outcome="OPEN", status="ACTIVE", created_at=datetime.now(timezone.utc), source="Signal Lab", candle_time=live_ct)
     _history_sync_row(row,payload); session.add(row); session.commit(); session.refresh(row)
-    return {"saved":True,"id":row.id,"signal":item,"queued":False}
+    return {"saved":True,"id":row.id,"signal":item}
 
 
 def _setup_strength_from_payload(payload: dict[str, Any], confidence: float | None = None) -> tuple[float, str, bool]:
@@ -8611,10 +5472,6 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
     user = current_user(authorization, session)
     direction = str(body.direction or "WAIT").upper()
     source = _normalize_history_source(body.source or "Signals")
-    if source == CONSENSUS_AUTOTRADE_SOURCE:
-        return {"saved": False, "blocked": True, "reason": "CONSENSUS_SERVER_ONLY", "source": source}
-    if _signal_source_blocked(source):
-        return {"saved": False, "blocked": True, "reason": "SOURCE_BLOCKED", "source": source}
     interval = validate_interval(body.interval)
     symbol = clean_symbol(body.symbol)
     if direction not in {"BUY", "SELL"}:
@@ -8650,10 +5507,6 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         "target_state": "TARGET_REACHED" if target_reached else "ACTIVE", "candle_time": live_candle_time,
         "live_levels_verified": True, "levels_repaired_from_live_chart": bool(repaired),
         "setup_strength": setup_strength, "setup_grade": setup_grade, "strong_setup": strong_setup,
-        "consensus_required": CONSENSUS_REQUIRED_CONFIRMATIONS,
-        "consensus_eligible": bool(source in CONSENSUS_AUTOTRADE_SOURCES),
-        "auto_trade": {"queued": False, "mode": "GLOBAL_CONSENSUS_3_OF_4",
-                       "reason": "WAITING_FOR_GLOBAL_CONSENSUS" if source in CONSENSUS_AUTOTRADE_SOURCES else "SOURCE_NOT_IN_AUTOTRADE_CONSENSUS"},
     })
     snapshot=_history_snapshot_payload(payload,source,symbol,interval,direction,body.confidence,entry,sl,tp,live_candle_time)
     payload["history_snapshot"]=snapshot
@@ -8683,8 +5536,13 @@ async def record_module_signal(body: ModuleSignalBody, authorization: str | None
         _history_sync_row(existing, payload)
         session.commit()
 
-    # Client/module History writes are never allowed to bypass the global 3-of-4 gate.
     order = None
+    if direction in {"BUY", "SELL"} and tp and not target_reached:
+        order = _queue_autotrade_order(
+            symbol=symbol, source=source, interval=interval, direction=direction,
+            entry=entry, sl=sl, tp=tp, volume=MT5_LOT_SIZE,
+            confidence=body.confidence, candle_time=live_candle_time,
+        )
     if existing is not None:
         return {"saved": False, "updated": str(existing.status or "ACTIVE").upper() in {"ACTIVE", "TP1 HIT", "OPEN"}, "duplicate": True, "id": existing.id, "queued": bool(order),
                 "source": source, "symbol": symbol, "entry": existing.price, "stop_loss": existing.stop_loss,
@@ -8805,87 +5663,12 @@ def _history_score_strength(payload: dict[str, Any]) -> tuple[float | None, str 
 def _history_sync_row(row: SignalHistory, payload: dict[str, Any]) -> None:
     entry, sl, tp1, tp2 = _history_numeric_levels(payload, row)
     score, strength, rr = _history_score_strength(payload)
-    # RR is display/analytics only. If the module omitted it, derive planned RR
-    # from Entry/SL and the furthest available TP so History never shows a false dash.
-    if rr is None and entry is not None and sl is not None:
-        risk = abs(float(entry) - float(sl))
-        target = tp2 if tp2 is not None else tp1
-        if risk > 0 and target is not None:
-            reward = abs(float(target) - float(entry))
-            rr = round(reward / risk, 4) if reward >= 0 else None
     row.entry_price, row.stop_loss, row.take_profit_1, row.take_profit_2 = entry, sl, tp1, tp2
     row.signal_score, row.signal_strength, row.risk_reward = score, strength, rr
     row.status = row.status or ("ACTIVE" if row.outcome in {None, "OPEN"} else row.outcome)
     row.result = row.result or (row.outcome if row.outcome not in {None, "OPEN", "AMBIGUOUS"} else None)
     if not row.signal_uid:
         row.signal_uid = "SIG-" + secrets.token_hex(10).upper()
-
-def _history_cancel_reason(payload: dict[str, Any]) -> tuple[str | None, str | None]:
-    """Return the most specific machine reason and optional user-facing message."""
-    if not isinstance(payload, dict):
-        return None, None
-    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
-    gate = payload.get("execution_gate") if isinstance(payload.get("execution_gate"), dict) else {}
-    module = payload.get("module_signal") if isinstance(payload.get("module_signal"), dict) else {}
-    reason = (
-        result.get("reason")
-        or gate.get("reason")
-        or module.get("execution_reason")
-        or module.get("blockedReason")
-        or payload.get("execution_reason")
-        or payload.get("blockedReason")
-    )
-    message = result.get("message") or module.get("reason") or payload.get("reason")
-    return (str(reason)[:240] if reason else None, str(message)[:500] if message else None)
-
-def _history_signal_fingerprint(row: SignalHistory, payload: dict[str, Any]) -> tuple[Any, ...] | None:
-    """Source-independent History fingerprint for exact duplicate suppression."""
-    try:
-        entry, sl, tp1, tp2 = _history_numeric_levels(payload, row)
-        if entry is None or sl is None or tp1 is None:
-            return None
-        return (
-            clean_symbol(row.symbol or ""),
-            str(row.interval or "").strip().lower(),
-            _normalize_history_candle_time(row.candle_time),
-            str(row.direction or "").strip().upper(),
-            round(float(entry), 4),
-            round(float(sl), 4),
-            round(float(tp1), 4),
-            round(float(tp2), 4) if tp2 is not None else None,
-        )
-    except Exception:
-        return None
-
-def _dedupe_signal_history_rows(session: Session, user_id: int, limit: int = 5000) -> int:
-    """Keep only the first exact signal setup across all modules/sources."""
-    rows = list(session.scalars(
-        select(SignalHistory)
-        .where(SignalHistory.user_id == user_id)
-        .order_by(SignalHistory.created_at.asc(), SignalHistory.id.asc())
-        .limit(limit)
-    ).all())
-    seen: dict[tuple[Any, ...], SignalHistory] = {}
-    removed = 0
-    for row in rows:
-        try:
-            payload = json.loads(row.payload or "{}")
-        except Exception:
-            payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
-        fp = _history_signal_fingerprint(row, payload)
-        if fp is None:
-            continue
-        if fp not in seen:
-            seen[fp] = row
-            continue
-        # Exact same symbol/TF/candle/direction/levels from another module is a duplicate.
-        session.delete(row)
-        removed += 1
-    if removed:
-        print(f"[SIGNAL HISTORY] GLOBAL DUPLICATES REMOVED user={user_id} count={removed}")
-    return removed
 
 def _history_result_metrics(row: SignalHistory, status: str, result_price: float | None) -> tuple[float | None, float | None]:
     entry, sl = row.entry_price, row.stop_loss
@@ -8957,16 +5740,7 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
         await _maybe_refresh_history_v2(session, user.id)
     except Exception as exc:
         print(f"[HISTORY V2] outcome refresh skipped: {type(exc).__name__}: {exc}")
-    # Remove exact cross-source duplicates before History is counted/rendered.
-    try:
-        removed = _dedupe_signal_history_rows(session, user.id)
-        if removed:
-            session.commit()
-    except Exception as exc:
-        session.rollback()
-        print(f"[SIGNAL HISTORY] dedupe warning={type(exc).__name__}: {exc}")
-    visible_user_ids = _history_visible_user_ids(user, session)
-    q = select(SignalHistory).where(SignalHistory.user_id.in_(visible_user_ids))
+    q = select(SignalHistory).where(SignalHistory.user_id == user.id)
     if symbol:
         q = q.where(SignalHistory.symbol == clean_symbol(symbol))
     if direction and direction.upper() in {"BUY", "SELL"}:
@@ -9000,11 +5774,8 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
         items.append({"id":r.id,"signal_id":r.signal_uid,"symbol":r.symbol,"direction":r.direction,"score":r.signal_score,"strength":r.signal_strength,
                       "entry":entry,"sl":sl,"tp1":tp1,"tp2":tp2,"rr":r.risk_reward,"created_at":dt.isoformat(),"closed_at":closed.isoformat() if closed else None,
                       "duration_minutes":duration,"status":status,"result":r.result or (status if status in {"TP2 HIT","SL HIT"} else None),
-                      "profit_loss":r.profit_loss,"r_multiple":(r.r_multiple if r.r_multiple is not None else (r.risk_reward if status in {"ACTIVE","TP1 HIT"} else None)),"result_price":(payload.get("result", {}).get("price") if isinstance(payload.get("result"), dict) else None),"source":r.source or "Signals","interval":r.interval,"candle_time":r.candle_time,
-                      "auto_entry":bool(payload.get("auto_entry")),
-                      "cancel_reason":_history_cancel_reason(payload)[0] if status=="CANCELLED" else None,
-                      "cancel_message":_history_cancel_reason(payload)[1] if status=="CANCELLED" else None,
-                      "snapshot":snap})
+                      "profit_loss":r.profit_loss,"r_multiple":r.r_multiple,"result_price":(payload.get("result", {}).get("price") if isinstance(payload.get("result"), dict) else None),"source":r.source or "Signals","interval":r.interval,"candle_time":r.candle_time,
+                      "auto_entry":bool(payload.get("auto_entry")),"snapshot":snap})
     return {"ok":True,"timezone":"Asia/Tashkent","items":items,"count":len(items),"total_count":total_count,"offset":offset,"limit":limit}
 
 @app.post("/api/v2/signal-history/refresh")
@@ -9038,16 +5809,7 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
         await _maybe_refresh_history_v2(session, user.id)
     except Exception as exc:
         print(f"[HISTORY V2 STATS] outcome refresh skipped: {type(exc).__name__}: {exc}")
-    try:
-        removed = _dedupe_signal_history_rows(session, user.id)
-        if removed:
-            session.commit()
-    except Exception as exc:
-        session.rollback()
-        print(f"[SIGNAL HISTORY STATS] dedupe warning={type(exc).__name__}: {exc}")
-    visible_user_ids=_history_visible_user_ids(user,session)
-    # Remove exact cross-source duplicates before History is counted/rendered.
-    q=select(SignalHistory).where(SignalHistory.user_id.in_(visible_user_ids))
+    q=select(SignalHistory).where(SignalHistory.user_id==user.id)
     if symbol: q=q.where(SignalHistory.symbol==clean_symbol(symbol))
     if direction.upper() in {"BUY","SELL"}: q=q.where(SignalHistory.direction==direction.upper())
     if module: q=q.where(SignalHistory.source==module)
@@ -9092,150 +5854,6 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
         b["avg_rr"]=round(b["avg_rr"]/b["signals"],2) if b["signals"] else 0.0
         b["total_r"]=round(b["total_r"],2); b["total_profit"]=round(b["total_profit"],2)
     return {"ok":True,"timezone":"Asia/Tashkent","overall":overall,"by_module":by_module,"by_day":dict(sorted(by_day.items(),reverse=True)),"by_symbol":by_symbol,"by_direction":by_direction}
-
-
-@app.get("/api/v1/strategy-performance")
-async def strategy_performance(start_date: str | None = Query(None), end_date: str | None = Query(None),
-                               symbol: str = Query("XAU/USD"),
-                               authorization: str | None = Header(default=None),
-                               session: Session = Depends(db)) -> dict[str, Any]:
-    """Performance dashboard derived only from persisted Signal History rows."""
-    user=current_user(authorization,session)
-    try:
-        await _maybe_refresh_history_v2(session,user.id)
-    except Exception as exc:
-        print(f"[STRATEGY PERFORMANCE] outcome refresh skipped: {type(exc).__name__}: {exc}")
-
-    visible_user_ids=_history_visible_user_ids(user,session)
-    q=select(SignalHistory).where(SignalHistory.user_id.in_(visible_user_ids))
-    if symbol:
-        q=q.where(SignalHistory.symbol==clean_symbol(symbol))
-    rows=list(session.scalars(q.order_by(SignalHistory.created_at.desc())).all())
-
-    def date_ok(r):
-        dt=r.created_at
-        if dt is None: return False
-        if dt.tzinfo is None: dt=dt.replace(tzinfo=timezone.utc)
-        local_date=dt.astimezone(HISTORY_LOCAL_TZ).date()
-        try:
-            if start_date and local_date<datetime.strptime(start_date,"%Y-%m-%d").date(): return False
-            if end_date and local_date>datetime.strptime(end_date,"%Y-%m-%d").date(): return False
-        except ValueError:
-            return False
-        return True
-    rows=[r for r in rows if date_ok(r)]
-
-    autotrade_sources=set({
-        CONSENSUS_AUTOTRADE_SOURCE,ICT_AUTOTRADE_SOURCE,GOLD_STRATEGY_SOURCE,
-        SIGNALS_AUTOTRADE_SOURCE,ORDER_BLOCK_SOURCE,PRO_ENGINE_SOURCE,FIBONACCI_SOURCE
-    }) | set(PRO_INDIVIDUAL_ENGINE_SOURCES)
-
-    def is_blocked(r,payload):
-        st=_history_status(r)
-        if st in {"CANCELLED","EXPIRED"}:
-            return True
-        module=payload.get("module_signal") if isinstance(payload.get("module_signal"),dict) else payload
-        states=[
-            module.get("execution_state"),module.get("execution_reason"),
-            (payload.get("execution_gate") or {}).get("state") if isinstance(payload.get("execution_gate"),dict) else None,
-            (payload.get("execution_gate") or {}).get("reason") if isinstance(payload.get("execution_gate"),dict) else None,
-        ]
-        return any("BLOCK" in str(x or "").upper() or "FAILED" in str(x or "").upper() for x in states)
-
-    def blank():
-        return {
-            "signals":0,"completed":0,"wins":0,"losses":0,"active":0,"blocked":0,
-            "rr_sum":0.0,"rr_count":0,"r_sum":0.0,"r_count":0,
-            "winrate":0.0,"avg_rr":0.0,"avg_r":0.0,"total_r":0.0,
-            "best_timeframe":None,"timeframes":{}
-        }
-
-    modules={}
-    for r in rows:
-        source=_normalize_history_source(r.source or "Signals")
-        b=modules.setdefault(source,blank())
-        b["signals"]+=1
-        status=_history_status(r)
-        if status=="TP2 HIT":
-            b["wins"]+=1; b["completed"]+=1
-        elif status=="SL HIT":
-            b["losses"]+=1; b["completed"]+=1
-        elif status in {"ACTIVE","TP1 HIT"}:
-            b["active"]+=1
-        try:
-            payload=json.loads(r.payload or "{}")
-        except Exception:
-            payload={}
-        if is_blocked(r,payload):
-            b["blocked"]+=1
-        if r.risk_reward is not None:
-            try:
-                rr=float(r.risk_reward)
-                if rr>0: b["rr_sum"]+=rr; b["rr_count"]+=1
-            except Exception: pass
-        if r.r_multiple is not None:
-            try:
-                rv=float(r.r_multiple)
-                b["r_sum"]+=rv; b["r_count"]+=1
-            except Exception: pass
-
-        tf=str(r.interval or "UNKNOWN")
-        t=b["timeframes"].setdefault(tf,{"signals":0,"completed":0,"wins":0,"losses":0,"total_r":0.0,"winrate":0.0})
-        t["signals"]+=1
-        if status=="TP2 HIT":
-            t["wins"]+=1; t["completed"]+=1
-        elif status=="SL HIT":
-            t["losses"]+=1; t["completed"]+=1
-        if r.r_multiple is not None:
-            try: t["total_r"]+=float(r.r_multiple)
-            except Exception: pass
-
-    for source,b in modules.items():
-        b["winrate"]=round(b["wins"]/b["completed"]*100,2) if b["completed"] else 0.0
-        b["avg_rr"]=round(b["rr_sum"]/b["rr_count"],2) if b["rr_count"] else 0.0
-        b["avg_r"]=round(b["r_sum"]/b["r_count"],2) if b["r_count"] else 0.0
-        b["total_r"]=round(b["r_sum"],2)
-        for tf,t in b["timeframes"].items():
-            t["winrate"]=round(t["wins"]/t["completed"]*100,2) if t["completed"] else 0.0
-            t["total_r"]=round(t["total_r"],2)
-        eligible=[(tf,t) for tf,t in b["timeframes"].items() if t["completed"]>0]
-        if eligible:
-            eligible.sort(key=lambda kv:(kv[1]["winrate"],kv[1]["total_r"],kv[1]["completed"]),reverse=True)
-            tf,t=eligible[0]
-            b["best_timeframe"]={"timeframe":tf,**t}
-        b.pop("rr_sum",None); b.pop("rr_count",None); b.pop("r_sum",None); b.pop("r_count",None)
-
-    ordered=sorted(
-        modules.items(),
-        key=lambda kv:(kv[1]["completed"]>0,kv[1]["winrate"],kv[1]["total_r"],kv[1]["signals"]),
-        reverse=True
-    )
-    autotrade=[{"source":s,**x} for s,x in ordered if s in autotrade_sources]
-    analysis=[{"source":s,**x} for s,x in ordered if s not in autotrade_sources]
-
-    overall=blank()
-    for _,x in ordered:
-        for k in ("signals","completed","wins","losses","active","blocked"):
-            overall[k]+=int(x.get(k) or 0)
-        overall["total_r"]+=float(x.get("total_r") or 0)
-    overall["winrate"]=round(overall["wins"]/overall["completed"]*100,2) if overall["completed"] else 0.0
-    overall["total_r"]=round(overall["total_r"],2)
-    for k in ("rr_sum","rr_count","r_sum","r_count","timeframes","best_timeframe","avg_rr","avg_r"):
-        overall.pop(k,None)
-
-    return {
-        "ok":True,"symbol":clean_symbol(symbol) if symbol else "ALL",
-        "timezone":"Asia/Tashkent","overall":overall,
-        "autotrade_sources":autotrade,"analysis_sources":analysis,
-        "generated_at":datetime.now(timezone.utc).isoformat(),
-        "definitions":{
-            "win":"TP2 HIT","loss":"SL HIT",
-            "completed":"TP2 HIT + SL HIT",
-            "blocked":"CANCELLED/EXPIRED or execution BLOCKED/FAILED",
-            "best_timeframe":"highest completed-trade winrate; ties use total R then completed count"
-        }
-    }
-
 
 @app.post("/api/v1/signals/save")
 async def save_signal(symbol: str, interval: str = DEFAULT_INTERVAL, authorization: str | None = Header(default=None), session: Session = Depends(db)) -> dict[str, Any]:
@@ -9523,15 +6141,6 @@ async def mt5_report(body: MT5ReportBody, token: str = Query(...)) -> dict[str, 
                 qk = item.get("queue_key")
                 if isinstance(qk, list) and len(qk) == 5:
                     MT5_EXECUTED_KEYS.add(tuple(str(x) for x in qk))
-                try:
-                    sk = _autotrade_signal_fingerprint(
-                        item.get("symbol") or item.get("market"), item.get("interval") or "",
-                        item.get("candle_time") or "", item.get("direction") or "",
-                        float(item.get("entry")), float(item.get("sl")), list(item.get("tp") or [])
-                    )
-                    MT5_EXECUTED_SIGNAL_KEYS.add(sk)
-                except Exception:
-                    pass
                 MT5_ORDER_QUEUE.pop(idx)
                 MT5_ORDER_ATTEMPTS.pop(str(body.ticket), None)
             elif status in {"error", "failed", "order_failed"}:
