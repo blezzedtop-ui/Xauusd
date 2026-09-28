@@ -1468,30 +1468,30 @@ CONSENSUS_AUTOTRADE_SOURCES = frozenset({"Classic Trade", "SNR", "Auto Trend Lin
 CONSENSUS_REQUIRED_CONFIRMATIONS = 3
 CONSENSUS_AUTOTRADE_SOURCE = "Consensus"
 CONSENSUS_AUTOTRADE_THRESHOLD = 84
-CONSENSUS_MIN_AUTOTRADE_RR = 1.00
+CONSENSUS_MIN_AUTOTRADE_RR = 0.00
 ICT_AUTOTRADE_SOURCE = "ICT Signals"
 ICT_SIGNAL_THRESHOLD = 80
 ICT_AUTOTRADE_THRESHOLD = 84
-ICT_MIN_AUTOTRADE_RR = 1.00
+ICT_MIN_AUTOTRADE_RR = 0.00
 GOLD_STRATEGY_SOURCE = "Signal Lab"
 GOLD_STRATEGY_SIGNAL_THRESHOLD = 80
 GOLD_STRATEGY_AUTOTRADE_THRESHOLD = 84
-GOLD_STRATEGY_MIN_RR = 1.00
+GOLD_STRATEGY_MIN_RR = 0.00
 GOLD_STRATEGY_REQUIRED_TOTAL_CONFIRMATIONS = 3
 SIGNALS_AUTOTRADE_SOURCE = "Signals"
 SIGNALS_SIGNAL_THRESHOLD = 80
 SIGNALS_AUTOTRADE_THRESHOLD = 84
-SIGNALS_MIN_RR = 1.00
+SIGNALS_MIN_RR = 0.00
 SIGNALS_REQUIRED_TOTAL_CONFIRMATIONS = 3
 ORDER_BLOCK_SOURCE = "Order Block"
 ORDER_BLOCK_SIGNAL_THRESHOLD = 80
 ORDER_BLOCK_AUTOTRADE_THRESHOLD = 84
-ORDER_BLOCK_MIN_RR = 1.00
+ORDER_BLOCK_MIN_RR = 0.00
 ORDER_BLOCK_REQUIRED_TOTAL_CONFIRMATIONS = 3
 PRO_ENGINE_SOURCE = "5 Engine Consensus"
 PRO_ENGINE_SIGNAL_THRESHOLD = 80
 PRO_ENGINE_AUTOTRADE_THRESHOLD = 84
-PRO_ENGINE_MIN_RR = 1.00
+PRO_ENGINE_MIN_RR = 0.00
 PRO_ENGINE_REQUIRED_CONFIRMATIONS = 3
 PRO_INDIVIDUAL_ENGINE_SOURCES = frozenset({
     "Trend Engine","SNR / Breakout Engine","ICT Liquidity Engine",
@@ -1499,12 +1499,14 @@ PRO_INDIVIDUAL_ENGINE_SOURCES = frozenset({
 })
 PRO_INDIVIDUAL_SIGNAL_THRESHOLD = 80
 PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD = 84
-PRO_INDIVIDUAL_MIN_RR = 1.00
+PRO_INDIVIDUAL_MIN_RR = 0.00
 FIBONACCI_SOURCE = "Fibonacci"
 FIBONACCI_SIGNAL_THRESHOLD = 80
 FIBONACCI_AUTOTRADE_THRESHOLD = 84
-FIBONACCI_MIN_RR = 1.00
+FIBONACCI_MIN_RR = 0.00
 FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS = 3
+AUTOTRADE_MAX_LEVEL_DISTANCE_ATR = max(1.0, float(os.getenv("AUTOTRADE_MAX_LEVEL_DISTANCE_ATR", "8.0")))
+AUTOTRADE_MAX_LEVEL_DISTANCE_PCT = max(0.001, float(os.getenv("AUTOTRADE_MAX_LEVEL_DISTANCE_PCT", "0.02")))
 
 def _signal_source_blocked(value: str | None) -> bool:
     return _normalize_history_source(value) in BLOCKED_SIGNAL_SOURCES
@@ -3721,7 +3723,7 @@ def _fibonacci_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]], c30
                 rr=((targets[0]-entry)/risk) if direction=="BUY" else ((entry-targets[0])/risk)
 
     if signal in {"BUY","SELL"} and (not targets or rr<FIBONACCI_MIN_RR):
-        signal="WAIT"; blocked="NO_RR_1_40_TARGET"
+        signal="WAIT"; blocked="NO_VALID_TARGET"
 
     base_ready=bool(signal in {"BUY","SELL"} and score>=FIBONACCI_AUTOTRADE_THRESHOLD and rr>=FIBONACCI_MIN_RR)
     levels=fib.get("levels") or {}
@@ -3763,7 +3765,7 @@ def _fibonacci_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]], c30
         "required_total_confirmations":FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS,
         "strategy_chain":["H4/H1 Trend","Strong Impulse","Auto Swing","Fib 38.2/50/61.8/78.6",
                           "50-61.8 Preferred Zone","SNR Overlap","OB/FVG Overlap","Liquidity Sweep",
-                          "M15/M5 MSS/BOS","Momentum","AI Validation","RR >= 1.00",
+                          "M15/M5 MSS/BOS","Momentum","AI Validation","RR informational",
                           "3-strategy Confirmation","MT5 AutoTrade"],
         "evaluated_at":datetime.now(timezone.utc).isoformat(),
     }
@@ -4328,7 +4330,7 @@ def _gold_strategy_2026(candles: list[dict[str, Any]], interval: str,
 
     H4/H1 establish direction. SNR defines the trade location. M15/M5, RSI/MACD
     and price action confirm the setup. Volatility and USD high-impact news are
-    filters. A market signal needs >=80; AutoTrade needs >=85, RR >= 1.00 and later
+    filters. A market signal needs >=80; AutoTrade needs >=85, RR informational and later
     also passes the common AI/market/execution gates plus the 3-confirmation rule.
     """
     interval=validate_interval(interval)
@@ -4450,7 +4452,7 @@ def _gold_strategy_2026(candles: list[dict[str, Any]], interval: str,
             rr=max(0.0,rr)
 
     if signal in {"BUY","SELL"} and (not targets or rr<GOLD_STRATEGY_MIN_RR):
-        signal="WAIT"; wait_code="NO_RR_1_40_STRUCTURAL_TARGET"
+        signal="WAIT"; wait_code="NO_VALID_STRUCTURAL_TARGET"
 
     base_autotrade=bool(
         signal in {"BUY","SELL"} and score>=GOLD_STRATEGY_AUTOTRADE_THRESHOLD
@@ -4484,7 +4486,7 @@ def _gold_strategy_2026(candles: list[dict[str, Any]], interval: str,
         "reason":reason,
         "strategy_engine":"ThinkMarkets-style Gold Strategy 2026",
         "strategy_version":"GOLD-2026-V1",
-        "strategy_chain":["H4/H1 Trend","SNR Pullback/Breakout","M15/M5 Confirmation","RSI/MACD","Price Action","Volatility/News","AI Validation","RR >= 1.00","3-confirmation AutoTrade"],
+        "strategy_chain":["H4/H1 Trend","SNR Pullback/Breakout","M15/M5 Confirmation","RSI/MACD","Price Action","Volatility/News","AI Validation","RR informational","3-confirmation AutoTrade"],
         "evaluated_at":datetime.now(timezone.utc).isoformat(),
     }
 
@@ -4496,7 +4498,7 @@ def _adaptive_ict_trend_strategy(candles: list[dict[str, Any]], interval: str,
 
     Score: H4 15 + H1 15 + liquidity 15 + MSS/CHoCH 15 + OB 10 + FVG 10
     + M15/M5 alignment 10 + session 5 + macro/news 5 = 100.
-    Signal >=80. AutoTrade candidate >=85 + RR >= 1.00. M1 is analysis-only.
+    Signal >=80. AutoTrade candidate >=85 + RR informational. M1 is analysis-only.
     """
     interval=validate_interval(interval)
     if min(len(candles),len(c4),len(c1),len(c15),len(c5)) < 60:
@@ -4616,7 +4618,7 @@ def _adaptive_ict_trend_strategy(candles: list[dict[str, Any]], interval: str,
                 rr=max(0.0,rr)
 
     if signal in {"BUY","SELL"} and (not targets or rr<SIGNALS_MIN_RR):
-        signal="WAIT"; wait_code="NO_RR_1_40_LIQUIDITY_TARGET"
+        signal="WAIT"; wait_code="NO_VALID_LIQUIDITY_TARGET"
 
     base_ready=bool(signal in {"BUY","SELL"} and score>=SIGNALS_AUTOTRADE_THRESHOLD and rr>=SIGNALS_MIN_RR and interval not in {"1min","1m","m1"})
     reason=(f"{signal} · score {score}/100 · {pd.get('zone')} · {sweep.get('type')} · RR {rr:.2f}"
@@ -4641,7 +4643,7 @@ def _adaptive_ict_trend_strategy(candles: list[dict[str, Any]], interval: str,
         "strategy_engine":"XAUUSD Adaptive ICT Trend Strategy 2026","strategy_version":"AIT-2026-V1",
         "strategy_chain":["H4/H1 Trend","Premium/Discount","Liquidity Sweep","M15/M5 MSS/CHoCH/BOS",
                           "Order Block + FVG Retest","Session","Macro/News + Volatility",
-                          "AI Validation","RR >= 1.00","3-strategy Confirmation","MT5 AutoTrade"],
+                          "AI Validation","RR informational","3-strategy Confirmation","MT5 AutoTrade"],
         "evaluated_at":datetime.now(timezone.utc).isoformat(),
     }
 
@@ -4723,7 +4725,7 @@ def _order_block_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]],
     """Strong XAUUSD Order Block model.
 
     HTF bias -> fresh OB -> liquidity sweep -> displacement -> M15/M5 MSS/CHoCH
-    -> FVG/OB overlap -> first retest -> RR. Signal >=80; AutoTrade >=85 + RR >= 1.00.
+    -> FVG/OB overlap -> first retest -> RR. Signal >=80; AutoTrade >=85 + RR informational.
     """
     if min(len(c4),len(c1),len(c15),len(c5)) < 60:
         return {"signal":"WAIT","confidence":0,"score":0,"entry":None,"stop_loss":None,
@@ -4846,7 +4848,7 @@ def _order_block_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]],
                 rr=max(0.0,rr)
 
     if signal in {"BUY","SELL"} and (not targets or rr<ORDER_BLOCK_MIN_RR):
-        signal="WAIT"; wait_code="NO_RR_1_40_LIQUIDITY_TARGET"
+        signal="WAIT"; wait_code="NO_VALID_LIQUIDITY_TARGET"
 
     base_ready=bool(signal in {"BUY","SELL"} and score>=ORDER_BLOCK_AUTOTRADE_THRESHOLD and rr>=ORDER_BLOCK_MIN_RR)
     reason=(f"{signal} · fresh OB + liquidity sweep + displacement + MSS + FVG overlap · score {score}/100 · RR {rr:.2f}"
@@ -4876,7 +4878,7 @@ def _order_block_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]],
         "strategy_engine":"XAUUSD Order Block Pro 2026","strategy_version":"OB-2026-V1",
         "strategy_chain":["H4/H1 Bias","HTF Order Block","Liquidity Sweep","Strong Displacement",
                           "M15/M5 MSS/CHoCH","Fresh OB + FVG Overlap","First Retest",
-                          "RR >= 1.00","AI Validation","3-strategy Confirmation","MT5 AutoTrade"],
+                          "RR informational","AI Validation","3-strategy Confirmation","MT5 AutoTrade"],
         "evaluated_at":datetime.now(timezone.utc).isoformat(),
     }
 
@@ -5142,7 +5144,7 @@ def _pro_ob_fvg_engine(c15:list[dict[str,Any]],c5:list[dict[str,Any]],direction_
             if targets:
                 rr=((targets[0]-entry)/risk) if direction=="BUY" else ((entry-targets[0])/risk)
     if signal in {"BUY","SELL"} and (not targets or rr<PRO_ENGINE_MIN_RR):
-        signal="WAIT"; reason="RR_BELOW_1_40_OR_NO_TARGET"
+        signal="WAIT"; reason="NO_VALID_TARGET"
     return _pro_engine_result("Order Block / FVG Engine",signal,score,checks,reason,
                               entry=round(entry,4) if entry is not None else None,
                               stop_loss=round(sl,4) if sl is not None else None,
@@ -5343,7 +5345,7 @@ def _pro_engine_execution_geometry(engine_name:str, engine:dict[str,Any],
     )
     if not targets or rr<PRO_INDIVIDUAL_MIN_RR:
         out["pro_individual_autotrade_eligible"]=False
-        out["blockedReason"]="RR_BELOW_1_40_OR_NO_TARGET"
+        out["blockedReason"]="NO_VALID_TARGET"
     return out
 
 
@@ -5380,7 +5382,7 @@ def _build_pro_engine_suite(c4:list[dict[str,Any]],c1:list[dict[str,Any]],
     elif not trend_required: blocked="TREND_ENGINE_DIRECTION_REQUIRED"
     elif not ob_required: blocked="OB_FVG_ENTRY_REQUIRED"
     elif confidence<PRO_ENGINE_SIGNAL_THRESHOLD: blocked="GLOBAL_CONFIDENCE_BELOW_80"
-    elif rr<PRO_ENGINE_MIN_RR: blocked="RR_BELOW_1_40"
+    elif rr<PRO_ENGINE_MIN_RR: blocked="RR_INFORMATIONAL"
     signal=winner if blocked is None else "WAIT"
     base_ready=bool(signal in {"BUY","SELL"} and confidence>=PRO_ENGINE_AUTOTRADE_THRESHOLD and rr>=PRO_ENGINE_MIN_RR)
     final={
@@ -5394,7 +5396,7 @@ def _build_pro_engine_suite(c4:list[dict[str,Any]],c1:list[dict[str,Any]],
         "min_rr":PRO_ENGINE_MIN_RR,"execution_timeframe":"5min","m1_blocked":True,
         "strategy_engine":"XAUUSD 5 Engine Decision Pipeline 2026","strategy_version":"PRO5-2026-V1",
         "strategy_chain":["Trend Engine","SNR / Breakout Engine","ICT Liquidity Engine","Order Block / FVG Engine",
-                          "Technical Momentum Engine","AI Validation","3/5 Consensus","RR >= 1.00","MT5 AutoTrade"],
+                          "Technical Momentum Engine","AI Validation","3/5 Consensus","RR informational","MT5 AutoTrade"],
         "reason":f"{signal} · votes={votes} · confirmations={len(winner_keys)}/5 · confidence={confidence:.1f}% · RR={rr:.2f}" if signal!="WAIT" else blocked,
         "candle_time":c5[-1].get("time"),
     }
@@ -6301,7 +6303,7 @@ def build_ict_smart_money(c4:list[dict[str,Any]], c1:list[dict[str,Any]],
                           c15:list[dict[str,Any]], c5:list[dict[str,Any]]) -> dict[str,Any]:
     """ICT/Smart-Money model: HTF bias -> liquidity -> MSS/BOS -> FVG/OB -> Killzone -> entry.
 
-    Signal threshold is 80/100. AutoTrade is stricter: >=85 confidence, RR >= 1.00,
+    Signal threshold is 80/100. AutoTrade is stricter: >=85 confidence, RR informational,
     AI/market validation must also pass later in the common worker, and M1 is hard-blocked.
     """
     if min(len(c4),len(c1),len(c15),len(c5)) < 60:
@@ -6400,7 +6402,7 @@ def build_ict_smart_money(c4:list[dict[str,Any]], c1:list[dict[str,Any]],
         "M1_BLOCKED" if False else
         "SIGNAL_WAIT" if signal=="WAIT" else
         "CONFIDENCE_BELOW_85" if score<ICT_AUTOTRADE_THRESHOLD else
-        "RR_BELOW_1_40" if rr<ICT_MIN_AUTOTRADE_RR else
+        "RR_INFORMATIONAL" if rr<ICT_MIN_AUTOTRADE_RR else
         "NO_LIQUIDITY_TARGET"
     )
 
@@ -6647,15 +6649,22 @@ def _execution_gate(item: dict[str, Any], direction: str, candles: list[dict[str
         return {"ok":False,"state":"TARGET_REACHED","reason":"TARGET_REACHED",
                 "entry":entry2,"sl":sl2,"tp":[],"repaired":repaired,"r_multiple":None}
 
-    # Risk gate uses the exact SL/TP that will be sent to MT5.
+    # Hard level-distance safety gate. RR never blocks AutoTrade.
+    # Only reject structurally absurd SL/TP distances: greater of 8x recent average
+    # candle range or 2% of entry by default (both values are environment-configurable).
     avg_range=sum(abs(float(c["high"])-float(c["low"])) for c in candles[-20:])/max(1,min(20,len(candles)))
     atr_now=max(avg_range,entry2*0.00015)
     risk=abs(entry2-sl2)
-    max_risk=max(atr_now*2.5,entry2*0.0015)
-    if risk<=0 or risk>max_risk:
-        return {"ok":False,"state":"CANCELLED","reason":"RISK_CHECK_FAILED",
+    tp_distance=max((abs(float(v)-entry2) for v in tp), default=0.0)
+    max_level_distance=max(
+        atr_now*AUTOTRADE_MAX_LEVEL_DISTANCE_ATR,
+        entry2*AUTOTRADE_MAX_LEVEL_DISTANCE_PCT,
+    )
+    if risk<=0 or risk>max_level_distance or tp_distance<=0 or tp_distance>max_level_distance:
+        return {"ok":False,"state":"CANCELLED","reason":"LEVEL_DISTANCE_TOO_LARGE",
                 "entry":entry2,"sl":sl2,"tp":tp,"repaired":repaired,"r_multiple":None,
-                "risk":risk,"max_risk":max_risk}
+                "risk":risk,"tp_distance":tp_distance,"max_risk":max_level_distance,
+                "max_level_distance":max_level_distance}
     if direction=="BUY":
         rr=(tp[0]-entry2)/risk
     else:
@@ -7195,14 +7204,14 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             ct=candles[-1].get("time")
             try:
                 adaptive=_adaptive_ict_trend_strategy(candles,tf,c4_ctx,c1_ctx,c15_ctx,c5_ctx,gold_news)
-                adaptive["strategy_chain"]=["H4/H1 Trend","Premium/Discount","Liquidity Sweep","M15/M5 MSS/CHoCH/BOS","OB + FVG Retest","Session","Macro/News","AI Validation","RR >= 1.00","3-strategy AutoTrade"]
+                adaptive["strategy_chain"]=["H4/H1 Trend","Premium/Discount","Liquidity Sweep","M15/M5 MSS/CHoCH/BOS","OB + FVG Retest","Session","Macro/News","AI Validation","RR informational","3-strategy AutoTrade"]
                 candidates.append({"source":SIGNALS_AUTOTRADE_SOURCE,"interval":tf,"item":adaptive,
                                    "response":{"mode":mode,"warning":warning,"candle_time":ct,"news_filter":gold_news}})
             except Exception as exc:
                 print(f"[ADAPTIVE ICT TREND] candidate error tf={tf} error={type(exc).__name__}: {exc}")
             try:
                 gold=_gold_strategy_2026(candles,tf,c4_ctx,c1_ctx,c15_ctx,c5_ctx,gold_news)
-                gold["strategy_chain"]=["H4/H1 Trend","SNR Pullback/Breakout","M15/M5 Confirmation","RSI/MACD","Price Action","Volatility/News","AI Validation","RR >= 1.00","3-confirmation AutoTrade"]
+                gold["strategy_chain"]=["H4/H1 Trend","SNR Pullback/Breakout","M15/M5 Confirmation","RSI/MACD","Price Action","Volatility/News","AI Validation","RR informational","3-confirmation AutoTrade"]
                 candidates.append({"source":GOLD_STRATEGY_SOURCE,"interval":tf,"item":gold,
                                    "response":{"mode":mode,"warning":warning,"candle_time":ct,"news_filter":gold_news}})
             except Exception as exc:
@@ -7267,7 +7276,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 ob["interval"]="5min"
                 ob["strategy_chain"]=["H4/H1 Bias","HTF Order Block","Liquidity Sweep","Strong Displacement",
                                       "M15/M5 MSS/CHoCH","Fresh OB + FVG Overlap","First Retest",
-                                      "AI Validation","RR >= 1.00","3-strategy AutoTrade"]
+                                      "AI Validation","RR informational","3-strategy AutoTrade"]
                 candidates.append({"source":ORDER_BLOCK_SOURCE,"interval":"5min","item":ob,
                                    "response":{"mode":"tradingview","candle_time":c5[-1].get("time")}})
         except Exception as exc:
@@ -7718,7 +7727,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 _history_sync_row(recent, payload)
 
             # ICT Signals is the one intentional direct AutoTrade exception.
-            # It must pass its 85% + RR >= 1.00 gate and the common AI/market/risk gates.
+            # It must pass its 85% + RR informational gate and the common AI/market/risk gates.
             if source == ICT_AUTOTRADE_SOURCE and bool(item.get("ict_autotrade_eligible")) and direction in {"BUY","SELL"} and tp:
                 existing_queue_ids = {str(q.get("id")) for q in MT5_ORDER_QUEUE}
                 order = _queue_autotrade_order(
@@ -8707,6 +8716,14 @@ def _history_score_strength(payload: dict[str, Any]) -> tuple[float | None, str 
 def _history_sync_row(row: SignalHistory, payload: dict[str, Any]) -> None:
     entry, sl, tp1, tp2 = _history_numeric_levels(payload, row)
     score, strength, rr = _history_score_strength(payload)
+    # RR is display/analytics only. If the module omitted it, derive planned RR
+    # from Entry/SL and the furthest available TP so History never shows a false dash.
+    if rr is None and entry is not None and sl is not None:
+        risk = abs(float(entry) - float(sl))
+        target = tp2 if tp2 is not None else tp1
+        if risk > 0 and target is not None:
+            reward = abs(float(target) - float(entry))
+            rr = round(reward / risk, 4) if reward >= 0 else None
     row.entry_price, row.stop_loss, row.take_profit_1, row.take_profit_2 = entry, sl, tp1, tp2
     row.signal_score, row.signal_strength, row.risk_reward = score, strength, rr
     row.status = row.status or ("ACTIVE" if row.outcome in {None, "OPEN"} else row.outcome)
@@ -8819,7 +8836,7 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
         items.append({"id":r.id,"signal_id":r.signal_uid,"symbol":r.symbol,"direction":r.direction,"score":r.signal_score,"strength":r.signal_strength,
                       "entry":entry,"sl":sl,"tp1":tp1,"tp2":tp2,"rr":r.risk_reward,"created_at":dt.isoformat(),"closed_at":closed.isoformat() if closed else None,
                       "duration_minutes":duration,"status":status,"result":r.result or (status if status in {"TP2 HIT","SL HIT"} else None),
-                      "profit_loss":r.profit_loss,"r_multiple":r.r_multiple,"result_price":(payload.get("result", {}).get("price") if isinstance(payload.get("result"), dict) else None),"source":r.source or "Signals","interval":r.interval,"candle_time":r.candle_time,
+                      "profit_loss":r.profit_loss,"r_multiple":(r.r_multiple if r.r_multiple is not None else (r.risk_reward if status in {"ACTIVE","TP1 HIT"} else None)),"result_price":(payload.get("result", {}).get("price") if isinstance(payload.get("result"), dict) else None),"source":r.source or "Signals","interval":r.interval,"candle_time":r.candle_time,
                       "auto_entry":bool(payload.get("auto_entry")),"snapshot":snap})
     return {"ok":True,"timezone":"Asia/Tashkent","items":items,"count":len(items),"total_count":total_count,"offset":offset,"limit":limit}
 
