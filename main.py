@@ -6082,6 +6082,9 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 5
                     final = "CANCELLED"
                     final_price = close
                     final_time = cdt
+                    payload.setdefault("result", {})
+                    payload["result"]["reason"] = "TP_AND_SL_HIT_SAME_CANDLE"
+                    payload["result"]["message"] = "TP va SL bir candle ichida urilgan; ketma-ketlik aniq emas."
                     break
                 if hit2:
                     final = "TP2 HIT"
@@ -6132,6 +6135,7 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 5
                 row.r_multiple = rm
                 timeline["final"] = final_time.isoformat()
                 payload["timeline"] = timeline
+                previous_result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
                 payload["result"] = {
                     "status": final,
                     "price": round(float(final_price), 4) if final_price is not None else None,
@@ -6139,6 +6143,8 @@ async def refresh_signal_outcomes(session: Session, user_id: int, limit: int = 5
                     "duration_seconds": max(0, int((final_time - created).total_seconds())),
                     "profit_loss": pnl,
                     "r_multiple": rm,
+                    "reason": previous_result.get("reason") if final == "CANCELLED" else None,
+                    "message": previous_result.get("message") if final == "CANCELLED" else None,
                 }
                 row.payload = json.dumps(payload, ensure_ascii=False)
                 row.outcome = final
@@ -8248,6 +8254,9 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 print(f"[GLOBAL CONSENSUS] QUEUED market={key} tf={tf} dir={winner} confirmations={consensus.get('confirmation_count')}/4 sources={consensus.get('confirmed_sources')}")
 
     await asyncio.gather(*(process_symbol(k) for k in symbols))
+    # Suppress exact duplicate History rows across all modules before they can
+    # affect UI counts/statistics. The first created setup is kept.
+    duplicate_history_removed = _dedupe_signal_history_rows(session, user.id)
     session.commit()
     rows = await refresh_signal_outcomes(session, user.id, limit=80)
     return {
@@ -8265,6 +8274,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         "fibonacci_autotrade_queued": fibonacci_autotrade_count,
         "individual_engine_autotrade_queued": individual_engine_autotrade_count,
         "history_count": len(rows),
+        "duplicate_history_blocked": duplicate_history_removed,
         "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
         "forward_mode": "CORE 3-of-4; ICT direct; Signal Lab +2 core; Signals +2 core; Order Block +2 core; 5 Engine Consensus internal 3-of-5 direct; all AutoTrade >=85% AI/RR gates; M1 blocked",
         "consensus_sources": sorted(CONSENSUS_AUTOTRADE_SOURCES),
@@ -8810,6 +8820,73 @@ def _history_sync_row(row: SignalHistory, payload: dict[str, Any]) -> None:
     if not row.signal_uid:
         row.signal_uid = "SIG-" + secrets.token_hex(10).upper()
 
+def _history_cancel_reason(payload: dict[str, Any]) -> tuple[str | None, str | None]:
+    """Return the most specific machine reason and optional user-facing message."""
+    if not isinstance(payload, dict):
+        return None, None
+    result = payload.get("result") if isinstance(payload.get("result"), dict) else {}
+    gate = payload.get("execution_gate") if isinstance(payload.get("execution_gate"), dict) else {}
+    module = payload.get("module_signal") if isinstance(payload.get("module_signal"), dict) else {}
+    reason = (
+        result.get("reason")
+        or gate.get("reason")
+        or module.get("execution_reason")
+        or module.get("blockedReason")
+        or payload.get("execution_reason")
+        or payload.get("blockedReason")
+    )
+    message = result.get("message") or module.get("reason") or payload.get("reason")
+    return (str(reason)[:240] if reason else None, str(message)[:500] if message else None)
+
+def _history_signal_fingerprint(row: SignalHistory, payload: dict[str, Any]) -> tuple[Any, ...] | None:
+    """Source-independent History fingerprint for exact duplicate suppression."""
+    try:
+        entry, sl, tp1, tp2 = _history_numeric_levels(payload, row)
+        if entry is None or sl is None or tp1 is None:
+            return None
+        return (
+            clean_symbol(row.symbol or ""),
+            str(row.interval or "").strip().lower(),
+            _normalize_history_candle_time(row.candle_time),
+            str(row.direction or "").strip().upper(),
+            round(float(entry), 4),
+            round(float(sl), 4),
+            round(float(tp1), 4),
+            round(float(tp2), 4) if tp2 is not None else None,
+        )
+    except Exception:
+        return None
+
+def _dedupe_signal_history_rows(session: Session, user_id: int, limit: int = 5000) -> int:
+    """Keep only the first exact signal setup across all modules/sources."""
+    rows = list(session.scalars(
+        select(SignalHistory)
+        .where(SignalHistory.user_id == user_id)
+        .order_by(SignalHistory.created_at.asc(), SignalHistory.id.asc())
+        .limit(limit)
+    ).all())
+    seen: dict[tuple[Any, ...], SignalHistory] = {}
+    removed = 0
+    for row in rows:
+        try:
+            payload = json.loads(row.payload or "{}")
+        except Exception:
+            payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+        fp = _history_signal_fingerprint(row, payload)
+        if fp is None:
+            continue
+        if fp not in seen:
+            seen[fp] = row
+            continue
+        # Exact same symbol/TF/candle/direction/levels from another module is a duplicate.
+        session.delete(row)
+        removed += 1
+    if removed:
+        print(f"[SIGNAL HISTORY] GLOBAL DUPLICATES REMOVED user={user_id} count={removed}")
+    return removed
+
 def _history_result_metrics(row: SignalHistory, status: str, result_price: float | None) -> tuple[float | None, float | None]:
     entry, sl = row.entry_price, row.stop_loss
     if entry is None or sl is None or entry == sl or result_price is None: return None, None
@@ -8880,6 +8957,14 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
         await _maybe_refresh_history_v2(session, user.id)
     except Exception as exc:
         print(f"[HISTORY V2] outcome refresh skipped: {type(exc).__name__}: {exc}")
+    # Remove exact cross-source duplicates before History is counted/rendered.
+    try:
+        removed = _dedupe_signal_history_rows(session, user.id)
+        if removed:
+            session.commit()
+    except Exception as exc:
+        session.rollback()
+        print(f"[SIGNAL HISTORY] dedupe warning={type(exc).__name__}: {exc}")
     visible_user_ids = _history_visible_user_ids(user, session)
     q = select(SignalHistory).where(SignalHistory.user_id.in_(visible_user_ids))
     if symbol:
@@ -8916,7 +9001,10 @@ async def signal_history_v2(limit: int = Query(100, ge=1, le=500), offset: int =
                       "entry":entry,"sl":sl,"tp1":tp1,"tp2":tp2,"rr":r.risk_reward,"created_at":dt.isoformat(),"closed_at":closed.isoformat() if closed else None,
                       "duration_minutes":duration,"status":status,"result":r.result or (status if status in {"TP2 HIT","SL HIT"} else None),
                       "profit_loss":r.profit_loss,"r_multiple":(r.r_multiple if r.r_multiple is not None else (r.risk_reward if status in {"ACTIVE","TP1 HIT"} else None)),"result_price":(payload.get("result", {}).get("price") if isinstance(payload.get("result"), dict) else None),"source":r.source or "Signals","interval":r.interval,"candle_time":r.candle_time,
-                      "auto_entry":bool(payload.get("auto_entry")),"snapshot":snap})
+                      "auto_entry":bool(payload.get("auto_entry")),
+                      "cancel_reason":_history_cancel_reason(payload)[0] if status=="CANCELLED" else None,
+                      "cancel_message":_history_cancel_reason(payload)[1] if status=="CANCELLED" else None,
+                      "snapshot":snap})
     return {"ok":True,"timezone":"Asia/Tashkent","items":items,"count":len(items),"total_count":total_count,"offset":offset,"limit":limit}
 
 @app.post("/api/v2/signal-history/refresh")
@@ -8950,7 +9038,15 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
         await _maybe_refresh_history_v2(session, user.id)
     except Exception as exc:
         print(f"[HISTORY V2 STATS] outcome refresh skipped: {type(exc).__name__}: {exc}")
+    try:
+        removed = _dedupe_signal_history_rows(session, user.id)
+        if removed:
+            session.commit()
+    except Exception as exc:
+        session.rollback()
+        print(f"[SIGNAL HISTORY STATS] dedupe warning={type(exc).__name__}: {exc}")
     visible_user_ids=_history_visible_user_ids(user,session)
+    # Remove exact cross-source duplicates before History is counted/rendered.
     q=select(SignalHistory).where(SignalHistory.user_id.in_(visible_user_ids))
     if symbol: q=q.where(SignalHistory.symbol==clean_symbol(symbol))
     if direction.upper() in {"BUY","SELL"}: q=q.where(SignalHistory.direction==direction.upper())
