@@ -568,15 +568,7 @@ def _forward_recent_history_to_mt5(session: Session, user_id: int) -> list[dict[
                 continue
             bridge_rr = float(row.risk_reward or module_payload.get("risk_reward") or 0) if (row.risk_reward is not None or module_payload.get("risk_reward") is not None) else None
 
-        if source == AI_SMART_AUTOTRADE_SOURCE:
-        try:
-            ai_smart_conf = float(confidence or 0)
-        except Exception:
-            ai_smart_conf = 0.0
-        if ai_smart_conf < AI_SMART_AUTOTRADE_THRESHOLD:
-            print(f"[AUTO TRADE QUEUE] AI SMART CONFIDENCE BLOCKED tf={interval} conf={ai_smart_conf:.1f} required={AI_SMART_AUTOTRADE_THRESHOLD}")
-            return None
-    if source == ICT_AUTOTRADE_SOURCE:
+        if source == ICT_AUTOTRADE_SOURCE:
             try:
                 ict_conf = float(row.signal_score or module_payload.get("confidence") or payload.get("confidence_at_entry") or 0)
             except Exception:
@@ -7030,6 +7022,14 @@ def _queue_autotrade_order(*, symbol: str, source: str, interval: str, direction
     if not mtf_gate.get("ok"):
         print(f"[AUTO TRADE QUEUE] WEIGHTED MTF BLOCKED market={symbol} source={source} tf={interval} dir={direction} reason={mtf_gate.get('reason')} allowed={mtf_gate.get('direction')} BUY={mtf_gate.get('buy_weight')} SELL={mtf_gate.get('sell_weight')} context={mtf_gate.get('context')}")
         return None
+    if source == AI_SMART_AUTOTRADE_SOURCE:
+        try:
+            ai_smart_conf = float(confidence or 0)
+        except Exception:
+            ai_smart_conf = 0.0
+        if ai_smart_conf < AI_SMART_AUTOTRADE_THRESHOLD:
+            print(f"[AUTO TRADE QUEUE] AI SMART CONFIDENCE BLOCKED tf={interval} conf={ai_smart_conf:.1f} required={AI_SMART_AUTOTRADE_THRESHOLD}")
+            return None
     if source == ICT_AUTOTRADE_SOURCE:
         try:
             ict_conf = float(confidence or 0)
