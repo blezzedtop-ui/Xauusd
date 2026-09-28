@@ -8254,6 +8254,9 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 print(f"[GLOBAL CONSENSUS] QUEUED market={key} tf={tf} dir={winner} confirmations={consensus.get('confirmation_count')}/4 sources={consensus.get('confirmed_sources')}")
 
     await asyncio.gather(*(process_symbol(k) for k in symbols))
+    # Suppress exact duplicate History rows across all modules before they can
+    # affect UI counts/statistics. The first created setup is kept.
+    duplicate_history_removed = _dedupe_signal_history_rows(session, user.id)
     session.commit()
     rows = await refresh_signal_outcomes(session, user.id, limit=80)
     return {
@@ -8271,6 +8274,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
         "fibonacci_autotrade_queued": fibonacci_autotrade_count,
         "individual_engine_autotrade_queued": individual_engine_autotrade_count,
         "history_count": len(rows),
+        "duplicate_history_blocked": duplicate_history_removed,
         "mode": "mt5_demo_queue" if MT5_AUTO_TRADING else "history_only",
         "forward_mode": "CORE 3-of-4; ICT direct; Signal Lab +2 core; Signals +2 core; Order Block +2 core; 5 Engine Consensus internal 3-of-5 direct; all AutoTrade >=85% AI/RR gates; M1 blocked",
         "consensus_sources": sorted(CONSENSUS_AUTOTRADE_SOURCES),
