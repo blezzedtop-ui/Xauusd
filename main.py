@@ -1468,30 +1468,30 @@ CONSENSUS_AUTOTRADE_SOURCES = frozenset({"Classic Trade", "SNR", "Auto Trend Lin
 CONSENSUS_REQUIRED_CONFIRMATIONS = 3
 CONSENSUS_AUTOTRADE_SOURCE = "Consensus"
 CONSENSUS_AUTOTRADE_THRESHOLD = 84
-CONSENSUS_MIN_AUTOTRADE_RR = 1.40
+CONSENSUS_MIN_AUTOTRADE_RR = 1.00
 ICT_AUTOTRADE_SOURCE = "ICT Signals"
 ICT_SIGNAL_THRESHOLD = 80
 ICT_AUTOTRADE_THRESHOLD = 84
-ICT_MIN_AUTOTRADE_RR = 1.40
+ICT_MIN_AUTOTRADE_RR = 1.00
 GOLD_STRATEGY_SOURCE = "Signal Lab"
 GOLD_STRATEGY_SIGNAL_THRESHOLD = 80
 GOLD_STRATEGY_AUTOTRADE_THRESHOLD = 84
-GOLD_STRATEGY_MIN_RR = 1.40
+GOLD_STRATEGY_MIN_RR = 1.00
 GOLD_STRATEGY_REQUIRED_TOTAL_CONFIRMATIONS = 3
 SIGNALS_AUTOTRADE_SOURCE = "Signals"
 SIGNALS_SIGNAL_THRESHOLD = 80
 SIGNALS_AUTOTRADE_THRESHOLD = 84
-SIGNALS_MIN_RR = 1.40
+SIGNALS_MIN_RR = 1.00
 SIGNALS_REQUIRED_TOTAL_CONFIRMATIONS = 3
 ORDER_BLOCK_SOURCE = "Order Block"
 ORDER_BLOCK_SIGNAL_THRESHOLD = 80
 ORDER_BLOCK_AUTOTRADE_THRESHOLD = 84
-ORDER_BLOCK_MIN_RR = 1.40
+ORDER_BLOCK_MIN_RR = 1.00
 ORDER_BLOCK_REQUIRED_TOTAL_CONFIRMATIONS = 3
 PRO_ENGINE_SOURCE = "5 Engine Consensus"
 PRO_ENGINE_SIGNAL_THRESHOLD = 80
 PRO_ENGINE_AUTOTRADE_THRESHOLD = 84
-PRO_ENGINE_MIN_RR = 1.40
+PRO_ENGINE_MIN_RR = 1.00
 PRO_ENGINE_REQUIRED_CONFIRMATIONS = 3
 PRO_INDIVIDUAL_ENGINE_SOURCES = frozenset({
     "Trend Engine","SNR / Breakout Engine","ICT Liquidity Engine",
@@ -1499,11 +1499,11 @@ PRO_INDIVIDUAL_ENGINE_SOURCES = frozenset({
 })
 PRO_INDIVIDUAL_SIGNAL_THRESHOLD = 80
 PRO_INDIVIDUAL_AUTOTRADE_THRESHOLD = 84
-PRO_INDIVIDUAL_MIN_RR = 1.40
+PRO_INDIVIDUAL_MIN_RR = 1.00
 FIBONACCI_SOURCE = "Fibonacci"
 FIBONACCI_SIGNAL_THRESHOLD = 80
 FIBONACCI_AUTOTRADE_THRESHOLD = 84
-FIBONACCI_MIN_RR = 1.40
+FIBONACCI_MIN_RR = 1.00
 FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS = 3
 
 def _signal_source_blocked(value: str | None) -> bool:
@@ -3763,7 +3763,7 @@ def _fibonacci_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]], c30
         "required_total_confirmations":FIBONACCI_REQUIRED_TOTAL_CONFIRMATIONS,
         "strategy_chain":["H4/H1 Trend","Strong Impulse","Auto Swing","Fib 38.2/50/61.8/78.6",
                           "50-61.8 Preferred Zone","SNR Overlap","OB/FVG Overlap","Liquidity Sweep",
-                          "M15/M5 MSS/BOS","Momentum","AI Validation","RR >= 1.40",
+                          "M15/M5 MSS/BOS","Momentum","AI Validation","RR >= 1.00",
                           "3-strategy Confirmation","MT5 AutoTrade"],
         "evaluated_at":datetime.now(timezone.utc).isoformat(),
     }
@@ -4328,7 +4328,7 @@ def _gold_strategy_2026(candles: list[dict[str, Any]], interval: str,
 
     H4/H1 establish direction. SNR defines the trade location. M15/M5, RSI/MACD
     and price action confirm the setup. Volatility and USD high-impact news are
-    filters. A market signal needs >=80; AutoTrade needs >=85, RR>=1.40 and later
+    filters. A market signal needs >=80; AutoTrade needs >=85, RR >= 1.00 and later
     also passes the common AI/market/execution gates plus the 3-confirmation rule.
     """
     interval=validate_interval(interval)
@@ -4484,7 +4484,7 @@ def _gold_strategy_2026(candles: list[dict[str, Any]], interval: str,
         "reason":reason,
         "strategy_engine":"ThinkMarkets-style Gold Strategy 2026",
         "strategy_version":"GOLD-2026-V1",
-        "strategy_chain":["H4/H1 Trend","SNR Pullback/Breakout","M15/M5 Confirmation","RSI/MACD","Price Action","Volatility/News","AI Validation","RR >= 1.40","3-confirmation AutoTrade"],
+        "strategy_chain":["H4/H1 Trend","SNR Pullback/Breakout","M15/M5 Confirmation","RSI/MACD","Price Action","Volatility/News","AI Validation","RR >= 1.00","3-confirmation AutoTrade"],
         "evaluated_at":datetime.now(timezone.utc).isoformat(),
     }
 
@@ -4496,7 +4496,7 @@ def _adaptive_ict_trend_strategy(candles: list[dict[str, Any]], interval: str,
 
     Score: H4 15 + H1 15 + liquidity 15 + MSS/CHoCH 15 + OB 10 + FVG 10
     + M15/M5 alignment 10 + session 5 + macro/news 5 = 100.
-    Signal >=80. AutoTrade candidate >=85 + RR>=1.40. M1 is analysis-only.
+    Signal >=80. AutoTrade candidate >=85 + RR >= 1.00. M1 is analysis-only.
     """
     interval=validate_interval(interval)
     if min(len(candles),len(c4),len(c1),len(c15),len(c5)) < 60:
@@ -4641,7 +4641,7 @@ def _adaptive_ict_trend_strategy(candles: list[dict[str, Any]], interval: str,
         "strategy_engine":"XAUUSD Adaptive ICT Trend Strategy 2026","strategy_version":"AIT-2026-V1",
         "strategy_chain":["H4/H1 Trend","Premium/Discount","Liquidity Sweep","M15/M5 MSS/CHoCH/BOS",
                           "Order Block + FVG Retest","Session","Macro/News + Volatility",
-                          "AI Validation","RR >= 1.40","3-strategy Confirmation","MT5 AutoTrade"],
+                          "AI Validation","RR >= 1.00","3-strategy Confirmation","MT5 AutoTrade"],
         "evaluated_at":datetime.now(timezone.utc).isoformat(),
     }
 
@@ -4723,7 +4723,7 @@ def _order_block_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]],
     """Strong XAUUSD Order Block model.
 
     HTF bias -> fresh OB -> liquidity sweep -> displacement -> M15/M5 MSS/CHoCH
-    -> FVG/OB overlap -> first retest -> RR. Signal >=80; AutoTrade >=85 + RR>=1.40.
+    -> FVG/OB overlap -> first retest -> RR. Signal >=80; AutoTrade >=85 + RR >= 1.00.
     """
     if min(len(c4),len(c1),len(c15),len(c5)) < 60:
         return {"signal":"WAIT","confidence":0,"score":0,"entry":None,"stop_loss":None,
@@ -4876,7 +4876,7 @@ def _order_block_strategy_2026(c4:list[dict[str,Any]], c1:list[dict[str,Any]],
         "strategy_engine":"XAUUSD Order Block Pro 2026","strategy_version":"OB-2026-V1",
         "strategy_chain":["H4/H1 Bias","HTF Order Block","Liquidity Sweep","Strong Displacement",
                           "M15/M5 MSS/CHoCH","Fresh OB + FVG Overlap","First Retest",
-                          "RR >= 1.40","AI Validation","3-strategy Confirmation","MT5 AutoTrade"],
+                          "RR >= 1.00","AI Validation","3-strategy Confirmation","MT5 AutoTrade"],
         "evaluated_at":datetime.now(timezone.utc).isoformat(),
     }
 
@@ -5394,7 +5394,7 @@ def _build_pro_engine_suite(c4:list[dict[str,Any]],c1:list[dict[str,Any]],
         "min_rr":PRO_ENGINE_MIN_RR,"execution_timeframe":"5min","m1_blocked":True,
         "strategy_engine":"XAUUSD 5 Engine Decision Pipeline 2026","strategy_version":"PRO5-2026-V1",
         "strategy_chain":["Trend Engine","SNR / Breakout Engine","ICT Liquidity Engine","Order Block / FVG Engine",
-                          "Technical Momentum Engine","AI Validation","3/5 Consensus","RR >= 1.40","MT5 AutoTrade"],
+                          "Technical Momentum Engine","AI Validation","3/5 Consensus","RR >= 1.00","MT5 AutoTrade"],
         "reason":f"{signal} · votes={votes} · confirmations={len(winner_keys)}/5 · confidence={confidence:.1f}% · RR={rr:.2f}" if signal!="WAIT" else blocked,
         "candle_time":c5[-1].get("time"),
     }
@@ -6301,7 +6301,7 @@ def build_ict_smart_money(c4:list[dict[str,Any]], c1:list[dict[str,Any]],
                           c15:list[dict[str,Any]], c5:list[dict[str,Any]]) -> dict[str,Any]:
     """ICT/Smart-Money model: HTF bias -> liquidity -> MSS/BOS -> FVG/OB -> Killzone -> entry.
 
-    Signal threshold is 80/100. AutoTrade is stricter: >=85 confidence, RR >=1.40,
+    Signal threshold is 80/100. AutoTrade is stricter: >=85 confidence, RR >= 1.00,
     AI/market validation must also pass later in the common worker, and M1 is hard-blocked.
     """
     if min(len(c4),len(c1),len(c15),len(c5)) < 60:
@@ -7195,14 +7195,14 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
             ct=candles[-1].get("time")
             try:
                 adaptive=_adaptive_ict_trend_strategy(candles,tf,c4_ctx,c1_ctx,c15_ctx,c5_ctx,gold_news)
-                adaptive["strategy_chain"]=["H4/H1 Trend","Premium/Discount","Liquidity Sweep","M15/M5 MSS/CHoCH/BOS","OB + FVG Retest","Session","Macro/News","AI Validation","RR >= 1.40","3-strategy AutoTrade"]
+                adaptive["strategy_chain"]=["H4/H1 Trend","Premium/Discount","Liquidity Sweep","M15/M5 MSS/CHoCH/BOS","OB + FVG Retest","Session","Macro/News","AI Validation","RR >= 1.00","3-strategy AutoTrade"]
                 candidates.append({"source":SIGNALS_AUTOTRADE_SOURCE,"interval":tf,"item":adaptive,
                                    "response":{"mode":mode,"warning":warning,"candle_time":ct,"news_filter":gold_news}})
             except Exception as exc:
                 print(f"[ADAPTIVE ICT TREND] candidate error tf={tf} error={type(exc).__name__}: {exc}")
             try:
                 gold=_gold_strategy_2026(candles,tf,c4_ctx,c1_ctx,c15_ctx,c5_ctx,gold_news)
-                gold["strategy_chain"]=["H4/H1 Trend","SNR Pullback/Breakout","M15/M5 Confirmation","RSI/MACD","Price Action","Volatility/News","AI Validation","RR >= 1.40","3-confirmation AutoTrade"]
+                gold["strategy_chain"]=["H4/H1 Trend","SNR Pullback/Breakout","M15/M5 Confirmation","RSI/MACD","Price Action","Volatility/News","AI Validation","RR >= 1.00","3-confirmation AutoTrade"]
                 candidates.append({"source":GOLD_STRATEGY_SOURCE,"interval":tf,"item":gold,
                                    "response":{"mode":mode,"warning":warning,"candle_time":ct,"news_filter":gold_news}})
             except Exception as exc:
@@ -7267,7 +7267,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 ob["interval"]="5min"
                 ob["strategy_chain"]=["H4/H1 Bias","HTF Order Block","Liquidity Sweep","Strong Displacement",
                                       "M15/M5 MSS/CHoCH","Fresh OB + FVG Overlap","First Retest",
-                                      "AI Validation","RR >= 1.40","3-strategy AutoTrade"]
+                                      "AI Validation","RR >= 1.00","3-strategy AutoTrade"]
                 candidates.append({"source":ORDER_BLOCK_SOURCE,"interval":"5min","item":ob,
                                    "response":{"mode":"tradingview","candle_time":c5[-1].get("time")}})
         except Exception as exc:
@@ -7718,7 +7718,7 @@ async def auto_record_signals(symbol: str = DEFAULT_SYMBOL, interval: str = DEFA
                 _history_sync_row(recent, payload)
 
             # ICT Signals is the one intentional direct AutoTrade exception.
-            # It must pass its 85% + RR>=1.40 gate and the common AI/market/risk gates.
+            # It must pass its 85% + RR >= 1.00 gate and the common AI/market/risk gates.
             if source == ICT_AUTOTRADE_SOURCE and bool(item.get("ict_autotrade_eligible")) and direction in {"BUY","SELL"} and tp:
                 existing_queue_ids = {str(q.get("id")) for q in MT5_ORDER_QUEUE}
                 order = _queue_autotrade_order(
