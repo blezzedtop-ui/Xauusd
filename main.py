@@ -9038,6 +9038,13 @@ async def signal_history_stats_v2(start_date: str | None = Query(None), end_date
         await _maybe_refresh_history_v2(session, user.id)
     except Exception as exc:
         print(f"[HISTORY V2 STATS] outcome refresh skipped: {type(exc).__name__}: {exc}")
+    try:
+        removed = _dedupe_signal_history_rows(session, user.id)
+        if removed:
+            session.commit()
+    except Exception as exc:
+        session.rollback()
+        print(f"[SIGNAL HISTORY STATS] dedupe warning={type(exc).__name__}: {exc}")
     visible_user_ids=_history_visible_user_ids(user,session)
     # Remove exact cross-source duplicates before History is counted/rendered.
     q=select(SignalHistory).where(SignalHistory.user_id.in_(visible_user_ids))
